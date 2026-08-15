@@ -22,7 +22,7 @@ import io
 import os
 import sys
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Callable, Iterator
 
 from drivefusion.core.errors import (
     DehydratedFileError,
@@ -364,19 +364,32 @@ def open_read(path: str, *, buffer_size: int = 1 << 20) -> ReadOnlyBinaryFile:
     return ReadOnlyBinaryFile(buffered, path)
 
 
-def walk(root: str, *, follow_reparse_points: bool = False) -> Iterator[Entry]:
+def walk(
+    root: str,
+    *,
+    follow_reparse_points: bool = False,
+    on_error: "Callable[[str, UnreadableError], None] | None" = None,
+) -> Iterator[Entry]:
     """Depth-first iteration over a subtree, yielding files and directories.
 
     A placeholder for the real enumeration backends (docs/PLAN.md §6), present
     at M0 so the no-touch test exercises a genuine end-to-end read of a tree.
     Reparse points are reported but not traversed unless explicitly requested.
+
+    A directory that cannot be listed does not abort the walk — on a real
+    archive volume some paths will always be denied — but it is reported to
+    ``on_error`` rather than silently dropped. Silence would let a scan claim
+    complete coverage of a tree it only partly read, which is how a redundancy
+    count ends up confidently wrong.
     """
     stack = [root]
     while stack:
         current = stack.pop()
         try:
             entries = list(scandir(current))
-        except UnreadableError:
+        except UnreadableError as exc:
+            if on_error is not None:
+                on_error(current, exc)
             continue
         for entry in entries:
             yield entry

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -25,8 +26,39 @@ def test_walk_does_not_traverse_links(sample_tree: Path) -> None:
     paths = [entry.path for entry in fsio.walk(str(sample_tree))]
     assert str(link) in paths, "the link itself should still be reported"
 
-    below_link = [p for p in paths if p.startswith(str(link) + "/")]
+    # os.sep, not "/": on Windows a hardcoded slash would match nothing and
+    # the assertion would pass without testing anything.
+    below_link = [p for p in paths if p.startswith(str(link) + os.sep)]
     assert not below_link, f"walk traversed a link: {below_link[:3]}"
+
+
+def test_walk_reports_unreadable_directories(sample_tree: Path, monkeypatch) -> None:
+    """A skipped directory must be visible, not silent.
+
+    A scan that quietly omits what it could not read would report complete
+    coverage of a tree it only partly saw — and a copy count derived from that
+    is confidently wrong rather than obviously incomplete.
+    """
+    blocked = str(sample_tree / "docs")
+    real_scandir = fsio.scandir
+
+    def failing_scandir(path: str):
+        if path == blocked:
+            raise UnreadableError("access denied (simulated)")
+        return real_scandir(path)
+
+    monkeypatch.setattr(fsio, "scandir", failing_scandir)
+
+    reported: list[tuple[str, str]] = []
+    entries = list(
+        fsio.walk(
+            str(sample_tree),
+            on_error=lambda path, exc: reported.append((path, str(exc))),
+        )
+    )
+
+    assert [path for path, _ in reported] == [blocked]
+    assert not any(e.path.startswith(blocked + os.sep) for e in entries)
 
 
 def test_stat_reports_sizes_and_times(sample_tree: Path) -> None:

@@ -104,8 +104,18 @@ def _noatime_open(path: Path, extra_flags: int = 0) -> int:
     return os.open(path, flags)
 
 
+class EmptySnapshotError(RuntimeError):
+    """Raised when a snapshot finds nothing — the instrument is broken.
+
+    An empty snapshot compares equal to another empty snapshot, which would
+    make every no-touch assertion pass without examining anything. That is the
+    single most dangerous way this test suite could fail, so it is an error
+    rather than a quiet zero.
+    """
+
+
 def _read_bytes_noatime(path: Path) -> bytes:
-    fd = _noatime_open(path)
+    fd = _noatime_open(path, getattr(os, "O_BINARY", 0))
     try:
         chunks = []
         while chunk := os.read(fd, 1 << 20):
@@ -115,33 +125,65 @@ def _read_bytes_noatime(path: Path) -> bytes:
         os.close(fd)
 
 
+def _list_dir(directory: Path) -> list[tuple[str, bool]]:
+    """List one directory as (name, is_dir), preferring not to touch its atime.
+
+    Where the platform supports ``O_NOATIME`` and ``O_DIRECTORY`` (Linux), the
+    listing goes through a descriptor so the directory's access time is left
+    alone. Windows has neither flag — and ``os.open`` on a directory fails
+    there outright — so it lists by path, which is fine because Windows has
+    disabled last-access updates by default since Vista.
+
+    ``is_dir`` is resolved inside the descriptor's lifetime: ``DirEntry`` from
+    an fd-based scan resolves its stat relative to that fd, so it must not
+    outlive it.
+    """
+    noatime = getattr(os, "O_NOATIME", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+
+    if noatime and directory_flag:
+        try:
+            fd = os.open(directory, os.O_RDONLY | directory_flag | noatime)
+        except PermissionError:
+            fd = None  # not the owner; fall back to a by-path listing
+        if fd is not None:
+            try:
+                with os.scandir(fd) as it:
+                    return sorted(
+                        (entry.name, entry.is_dir(follow_symlinks=False))
+                        for entry in it
+                    )
+            finally:
+                os.close(fd)
+
+    with os.scandir(directory) as it:
+        return sorted(
+            (entry.name, entry.is_dir(follow_symlinks=False)) for entry in it
+        )
+
+
 def _iter_paths(root: Path) -> list[Path]:
-    """List every path beneath root without disturbing access times.
+    """Every path beneath root, without disturbing access times where possible.
 
     The snapshot must not perturb what it measures. An ordinary ``os.walk``
     updates each directory's access time as it lists it, which would show up as
     a difference between two snapshots and mask — or fake — a real one. This
     is deliberately a separate implementation from ``drivefusion.core.fsio`` so
     the no-touch test is not validating the gateway against itself.
+
+    Failures are raised, never skipped. A snapshot that quietly omits part of
+    the tree still compares equal to itself, so silence here would disarm the
+    entire no-touch assertion.
     """
     found: list[Path] = []
     stack = [root]
     while stack:
         directory = stack.pop()
-        try:
-            fd = _noatime_open(directory, getattr(os, "O_DIRECTORY", 0))
-        except OSError:
-            continue
-        try:
-            with os.scandir(fd) as it:
-                entries = sorted(it, key=lambda e: e.name)
-                for entry in entries:
-                    full = directory / entry.name
-                    found.append(full)
-                    if entry.is_dir(follow_symlinks=False):
-                        stack.append(full)
-        finally:
-            os.close(fd)
+        for name, is_dir in _list_dir(directory):
+            full = directory / name
+            found.append(full)
+            if is_dir:
+                stack.append(full)
     return found
 
 
@@ -156,6 +198,11 @@ def snapshot(root: Path) -> Snapshot:
     atimes: dict[str, int] = {}
 
     paths = _iter_paths(root)
+    if not paths:
+        raise EmptySnapshotError(
+            f"snapshot of {root} found no entries; an empty snapshot would "
+            "make every no-touch assertion vacuous"
+        )
 
     for full in paths:
         rel = full.relative_to(root).as_posix()

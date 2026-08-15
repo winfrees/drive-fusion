@@ -47,8 +47,81 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     return digests
 
 
+#: Landmarks that must appear in any honest snapshot of the fixture tree.
+#: Named explicitly so a snapshot that silently observes less than the whole
+#: tree cannot masquerade as a passing no-touch assertion.
+LANDMARKS = {
+    "docs/report.txt",
+    "docs/empty.txt",
+    "docs/nested/é中文-ünicode.txt",
+    "media/large.bin",
+    "empty-dir",
+}
+
+
+def test_snapshot_observes_the_whole_tree(sample_tree: Path) -> None:
+    """The instrument must see everything, or every guarantee below is vacuous.
+
+    This is the test that catches a snapshot which quietly observed nothing —
+    two empty snapshots compare equal, so the no-touch assertion would pass
+    while examining no files at all.
+    """
+    snap = tree_fixture.snapshot(sample_tree)
+
+    expected = {
+        path.relative_to(sample_tree).as_posix() for path in sample_tree.rglob("*")
+    }
+    assert set(snap.entries) == expected
+    assert LANDMARKS <= set(snap.entries)
+    assert len(snap.entries) > 20
+
+
+def test_snapshot_works_without_noatime_flags(sample_tree: Path, monkeypatch) -> None:
+    """Simulate Windows, which has neither O_NOATIME nor O_DIRECTORY.
+
+    Regression test for the first Windows CI run: ``os.open`` on a directory
+    fails on Windows, the traversal swallowed the error, and every snapshot
+    came back empty — so the no-touch assertion passed while examining nothing.
+    Running this on any platform keeps that path covered.
+    """
+    monkeypatch.delattr(os, "O_NOATIME", raising=False)
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+
+    snap = tree_fixture.snapshot(sample_tree)
+    assert LANDMARKS <= set(snap.entries)
+
+    expected = {
+        path.relative_to(sample_tree).as_posix() for path in sample_tree.rglob("*")
+    }
+    assert set(snap.entries) == expected
+
+
+def test_snapshot_content_hashes_are_untranslated(sample_tree: Path) -> None:
+    """Binary reads must not be line-ending translated (a Windows default).
+
+    Without O_BINARY, ``os.read`` on Windows strips carriage returns, so the
+    snapshot would fingerprint bytes that are not what is on disk.
+    """
+    target = sample_tree / "docs" / "crlf.bin"
+    target.write_bytes(b"line one\r\nline two\r\n\x00\xff")
+
+    snap = tree_fixture.snapshot(sample_tree)
+    expected = hashlib.sha256(target.read_bytes()).hexdigest()
+    assert snap.entries["docs/crlf.bin"][4] == expected
+
+
+def test_snapshot_refuses_to_be_empty(tmp_path: Path) -> None:
+    """An empty snapshot is a broken instrument, not a valid measurement."""
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    with pytest.raises(tree_fixture.EmptySnapshotError):
+        tree_fixture.snapshot(empty)
+
+
 def test_full_cycle_leaves_the_tree_identical(sample_tree: Path) -> None:
     before = tree_fixture.snapshot(sample_tree)
+
+    assert LANDMARKS <= set(before.entries), "snapshot did not observe the tree"
 
     digests = run_full_cycle(sample_tree)
     assert digests, "the cycle must actually read something for this to mean anything"
