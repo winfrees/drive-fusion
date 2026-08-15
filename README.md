@@ -23,19 +23,27 @@ disclaimer in the plan.
 
 ## Status
 
-**M0 complete — skeleton and guardrails.** The safety mechanisms ship before any code that
-reads user media, so there is never a window in which the tool could grow a write path
-unnoticed.
+**M1 complete — the catalog works end to end.** You can register scan scope, enumerate it,
+rescan incrementally, and search the result.
 
 | Milestone | State |
 |---|---|
 | **M0** Skeleton and guardrails | **done** — gateway, lint, no-touch test, volume fixtures, build |
-| M1 Catalog core | next |
-| M2–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M1** Catalog core | **done** — scope, discovery, walker, interned schema, merge, CLI |
+| M2 Fast enumeration (NTFS USN + exFAT batch walker) | next |
+| M3–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
-What exists today: `drivefusion.core.fsio` (the read-only gateway), `tools/ro_lint.py` (the
-static guard), the no-touch regression test with tamper-detection self-tests, NTFS and exFAT
-VHDX volume fixtures, a CLI skeleton, and a PyInstaller one-folder Windows build in CI.
+```
+drivefusion scope add D:\Research
+drivefusion scope preview 1        # counts what a scan would cover, writes nothing
+drivefusion scan
+drivefusion find "*.psd"
+drivefusion status
+```
+
+Measured at 3M files: **222 bytes per file** (≈10.4 GB projected at 50M), 192k rows/s merge,
+555 MB peak RSS — all inside the [§13 budgets](docs/PLAN.md). Run `python tools/benchmark.py`
+to reproduce.
 
 ## Development
 
@@ -44,6 +52,7 @@ pip install -e ".[dev]"
 
 python tools/ro_lint.py        # the read-only guard; exits non-zero on any finding
 python -m pytest -q            # full suite
+python tools/benchmark.py      # catalog benchmark against the §13 budgets
 python -m drivefusion --help
 
 pyinstaller packaging/drivefusion.spec --noconfirm --clean

@@ -13,13 +13,17 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from drivefusion.core import fsio
 from drivefusion.core.errors import ReadOnlyViolation
+from drivefusion.core.scan import scan_root
+from drivefusion.core.store.catalog import Catalog
 from tests.fixtures import tree as tree_fixture
 
 
@@ -27,9 +31,14 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     """Everything the tool does to a tree, end to end.
 
     M0: enumerate, stat, and hash every readable file through the gateway.
-    M1 adds catalog persistence, M3 hashing tiers and analysis, M7 planning,
-    M8 export — each extending this function rather than testing separately,
-    so the guarantee is asserted over the real pipeline.
+    M1: plus a real catalog scan — scope registration, directory interning,
+    staging, merge, rollups, and search.
+    M3 adds hashing tiers and analysis, M7 planning, M8 export — each extending
+    this function rather than testing separately, so the guarantee is always
+    asserted over the whole pipeline rather than the parts wired up first.
+
+    The catalog is deliberately created outside the tree under test: writing it
+    inside would be a change to the thing being observed.
     """
     digests: dict[str, str] = {}
     for entry in fsio.walk(str(root)):
@@ -44,6 +53,31 @@ def run_full_cycle(root: Path) -> dict[str, str]:
                 digest.update(chunk)
         rel = Path(entry.path).relative_to(root).as_posix()
         digests[rel] = digest.hexdigest()
+
+    workdir = Path(tempfile.mkdtemp(prefix="df-no-touch-"))
+    try:
+        with Catalog(workdir / "catalog.db") as catalog:
+            volume_id = catalog.upsert_volume(volume_guid="no-touch:1")
+            root_id = catalog.add_scope_root(volume_id, str(root))
+            scan_root(
+                catalog,
+                root_path=str(root),
+                root_id=root_id,
+                volume_id=volume_id,
+            )
+            # Scan twice: the merge, tombstoning, and rollup paths all run on
+            # a second pass, and none of them may touch the source either.
+            scan_root(
+                catalog,
+                root_path=str(root),
+                root_id=root_id,
+                volume_id=volume_id,
+            )
+            list(catalog.find("%", limit=100))
+            catalog.counts()
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
     return digests
 
 

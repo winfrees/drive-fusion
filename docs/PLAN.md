@@ -396,11 +396,23 @@ merge folds it into `file`, `dir`, and `content`, followed by `ANALYZE`. Connect
 `cache_size=-262144` (256 MB), `temp_store=MEMORY`, `mmap_size` sized to available RAM,
 batched `executemany` of 10k rows per transaction.
 
-**Benchmark gate at M1:** if a single catalog cannot hold 50M rows within the performance
-budgets (§13), the fallback is per-volume catalog databases plus a central registry, `ATTACH`ed
-for cross-volume queries. Single-database is the default because cross-drive duplicate
-detection is inherently a global query and sharding it is genuinely awkward — but the decision
-is made against measurements at M1, not against my expectations now.
+**Benchmark gate at M1 — measured, decision: single database.** `tools/benchmark.py`
+builds a synthetic catalog through the real loader and checks it against §13. At 3M files:
+
+| Measure | Result | Budget |
+|---|---|---|
+| Bytes per file | **222.6** (218.9 at 200k — essentially flat) | ≤ 250 |
+| Projected catalog at 50M files | **10.4 GB** | ~12 GB |
+| Merge throughput | **192k rows/s** (flat from 200k to 3M) | — |
+| Duplicate scan, projected to 50M | **47 s** | < 300 s |
+| Peak RSS | **555 MB** | < 2 GB |
+
+Both bytes-per-file and merge throughput held flat across a 15× increase, so the linear
+projection is credible and sharding is not needed. One finding worth recording: at
+`mmap_size=1GB`, peak RSS reached 934 MB, because a memory-mapped region counts toward RSS.
+It is file-backed and reclaimable rather than a leak, but it left too little headroom under
+the 2 GB budget, so the map is now 256 MB. **Still to do before this is fully settled: a run
+at `--files 50000000`,** which needs ~11 GB of scratch disk.
 
 ### 7.3 The rest of the model
 

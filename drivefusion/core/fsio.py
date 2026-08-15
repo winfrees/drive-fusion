@@ -62,13 +62,24 @@ def is_reparse_point(attributes: int) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Entry:
-    """One directory entry, captured without following links."""
+    """One directory entry, captured without following links.
+
+    Metadata is carried on the entry rather than fetched again by the caller.
+    The directory listing has already paid for the stat, and at 50 million
+    files a second syscall per entry is a doubling of the metadata cost.
+    """
 
     name: str
     path: str
     is_dir: bool
     is_symlink: bool
     attributes: int
+    size: int = 0
+    mtime_ns: int = 0
+    ctime_ns: int = 0
+    nlink: int = 1
+    file_id: int | None = None
+    stat_failed: bool = False
 
     @property
     def is_reparse_point(self) -> bool:
@@ -227,6 +238,7 @@ def scandir(path: str) -> Iterator[Entry]:
         try:
             with os.scandir(source) as it:
                 for entry in it:
+                    stat_failed = False
                     try:
                         st = entry.stat(follow_symlinks=False)
                         attributes = _attributes_from_stat(st)
@@ -234,8 +246,10 @@ def scandir(path: str) -> Iterator[Entry]:
                     except OSError:
                         # A file that vanished or denied us mid-listing is
                         # data, not a failure: report what we know, move on.
+                        st = None
                         attributes = 0
                         is_dir = False
+                        stat_failed = True
                     yield Entry(
                         name=entry.name,
                         # Built from the caller's path so results never carry
@@ -244,6 +258,12 @@ def scandir(path: str) -> Iterator[Entry]:
                         is_dir=is_dir,
                         is_symlink=entry.is_symlink(),
                         attributes=attributes,
+                        size=st.st_size if st else 0,
+                        mtime_ns=st.st_mtime_ns if st else 0,
+                        ctime_ns=st.st_ctime_ns if st else 0,
+                        nlink=st.st_nlink if st else 1,
+                        file_id=(st.st_ino or None) if st else None,
+                        stat_failed=stat_failed,
                     )
         except OSError as exc:
             raise UnreadableError(f"cannot list {path!r}: {exc}") from exc

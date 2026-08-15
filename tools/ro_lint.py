@@ -42,7 +42,10 @@ PERMITTED_WRITER_PREFIXES = (
 
 #: Modules permitted to call raw Win32 handle APIs. Enumeration backends join
 #: this list at M2; each addition is a deliberate review point.
-RAW_HANDLE_MODULES = ("drivefusion/core/fsio.py",)
+RAW_HANDLE_MODULES = (
+    "drivefusion/core/fsio.py",
+    "drivefusion/core/discovery/windows.py",
+)
 
 #: Win32 access rights that would make a handle capable of writing. Their mere
 #: appearance in a raw-handle module is a finding.
