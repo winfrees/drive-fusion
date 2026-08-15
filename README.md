@@ -21,7 +21,47 @@ neither, layout-ordered hashing, interned paths, and fully virtualized views.
 **Not for identifiable human-subjects data, PHI, or otherwise regulated data.** See the
 disclaimer in the plan.
 
-**Status:** design phase. See [docs/PLAN.md](docs/PLAN.md) for the full build plan —
-read-only guarantees, scan scope, Windows enumeration strategy, data model and performance
-budgets at 50M files, durability scoring, FAIR/NDSA scorecards, the placement planner, and
-milestones M0–M8.
+## Status
+
+**M0 complete — skeleton and guardrails.** The safety mechanisms ship before any code that
+reads user media, so there is never a window in which the tool could grow a write path
+unnoticed.
+
+| Milestone | State |
+|---|---|
+| **M0** Skeleton and guardrails | **done** — gateway, lint, no-touch test, volume fixtures, build |
+| M1 Catalog core | next |
+| M2–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+
+What exists today: `drivefusion.core.fsio` (the read-only gateway), `tools/ro_lint.py` (the
+static guard), the no-touch regression test with tamper-detection self-tests, NTFS and exFAT
+VHDX volume fixtures, a CLI skeleton, and a PyInstaller one-folder Windows build in CI.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+
+python tools/ro_lint.py        # the read-only guard; exits non-zero on any finding
+python -m pytest -q            # full suite
+python -m drivefusion --help
+
+pyinstaller packaging/drivefusion.spec --noconfirm --clean
+```
+
+The VHDX volume tests need Windows and administrator rights (they call `diskpart`) and skip
+everywhere else. CI runs the lint and tests on Windows and Linux, then builds and smoke-tests
+the Windows executable.
+
+### The one rule
+
+Nothing outside `drivefusion/core/store/` and `drivefusion/core/export/` may reference a
+mutating filesystem call. `tools/ro_lint.py` enforces it, the test suite asserts it, and CI
+gates on it. If you find yourself needing to write to a catalogued volume, the answer is that
+the tool does not do that — it emits a plan describing what *you* might do.
+
+## Documentation
+
+[docs/PLAN.md](docs/PLAN.md) — the full build plan: read-only guarantees, scan scope, Windows
+enumeration strategy, data model and performance budgets at 50M files, durability scoring,
+FAIR/NDSA scorecards, the placement planner, and milestones M0–M8.
