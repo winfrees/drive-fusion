@@ -1,20 +1,26 @@
 # drive-fusion
 
-A desktop tool for cataloging every drive you own — internal, external, connected or
-shelved — confirming how many real copies of each file exist, and building reviewable
-plans to consolidate that content into a traceable, FAIR-aligned order.
+A Windows desktop tool for cataloging the drives you point it at — internal, external,
+connected or shelved — confirming how many real copies of each file exist, and building
+reviewable plans to consolidate that content into a traceable, FAIR-aligned order.
 
 > **Drive Fusion never modifies, moves, or deletes your data.** It is a planning and
-> reporting instrument. It reads your drives and writes only to its own catalog and to an
-> export folder you choose. This is enforced structurally — a read-only I/O gateway, a CI
-> lint that bans mutating calls, and a regression test asserting scanned trees are
-> byte-identical before and after a full run — not by policy alone.
+> reporting instrument. It reads the drives you add to its scan scope and writes only to its
+> own catalog and to an export folder you choose. This is enforced structurally — a read-only
+> I/O gateway, read-only volume handles, a CI lint that bans mutating calls, and a regression
+> test asserting scanned trees are byte-identical before and after a full run — not by policy
+> alone.
 
-Python 3.11+ · PySide6 GUI · SQLite catalog · packaged as a standalone executable.
+Python 3.11+ · PySide6 GUI · SQLite catalog · packaged as a signed 64-bit Windows executable.
 
-Aligned with the FAIR Principles, the NIH Data Management and Sharing Policy (including the
-2026 DMS Plan format), and NDSA Levels of Digital Preservation.
+**Designed for:** ~20 drives, 10–50 million files, local drives only, user-defined scan scope.
+Scale drives the design — NTFS MFT/USN bulk enumeration for fast scans and near-instant
+incremental rescans, interned paths, and fully virtualized views.
+
+**Not for identifiable human-subjects data, PHI, or otherwise regulated data.** See the
+disclaimer in the plan.
 
 **Status:** design phase. See [docs/PLAN.md](docs/PLAN.md) for the full build plan —
-read-only guarantees, architecture, data model, durability and risk scoring, FAIR/NDSA
-scorecards, NIH DMS exports, the placement planner, and milestones M0–M7.
+read-only guarantees, scan scope, Windows enumeration strategy, data model and performance
+budgets at 50M files, durability scoring, FAIR/NDSA scorecards, the placement planner, and
+milestones M0–M8.
