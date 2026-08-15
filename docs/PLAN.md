@@ -21,6 +21,8 @@ of these numbers and would be over-built without them.
 | **Files** | **10–50 million** across the collection |
 | **Capacity** | tens of TB total |
 | **Platform** | **Windows only** (64-bit). macOS/Linux are not in scope; the discovery layer keeps a seam for them, but nothing else compromises for portability |
+| **Filesystems** | **~50/50 NTFS and exFAT.** This is a first-order design constraint, not a detail: exFAT has no MFT, no change journal, and no stable file IDs, so roughly half the fleet cannot use the fast path at all (§6) |
+| **Elevation** | **Acceptable.** The privileged fast path is a supported default on NTFS, via a narrow helper binary (§6.5) |
 | **Sources** | **Local drives only.** No cloud, no network shares, no sockets. Possible later, deliberately excluded now |
 | **Scan scope** | **User-defined.** Nothing is catalogued until you explicitly add it (§4) |
 | **Data class** | Non-identifiable data only — see the disclaimer below |
@@ -84,10 +86,10 @@ volume is opened **read-only and nothing else**.
 | Layer | Mechanism |
 |---|---|
 | **Single gateway** | All access to catalogued volumes goes through `core/fsio.py`, whose entire public surface is `scandir()`, `stat()`, and `open_read()`. It opens with `GENERIC_READ` only and `FILE_SHARE_READ \| FILE_SHARE_WRITE \| FILE_SHARE_DELETE`, so the tool can never block or alter another process's file, and returns handles that raise on any write method. There is no `open_write` to call. |
-| **Raw-volume handles are read-only** | The fast enumeration path (§6.2) opens `\\.\X:` with `GENERIC_READ` alone. A volume handle opened without write access cannot write, at the OS level, regardless of what the code above it does. |
+| **Raw-volume handles are read-only** | The fast enumeration path (§6.3) opens `\\.\X:` with `GENERIC_READ` alone. A volume handle opened without write access cannot write, at the OS level, regardless of what the code above it does. |
 | **Build-time lint** | A custom AST checker fails CI if any module outside `core/store/` and `core/export/` references `os.remove`, `os.unlink`, `os.rmdir`, `os.rename`, `os.replace`, `os.truncate`, `shutil.rmtree`, `shutil.move`, `shutil.copy*`, `Path.unlink`, `Path.rename`, `Path.write_*`, `os.chmod`, `os.utime`, or `open()` with any mode but `"rb"`. Required status check on every commit. |
 | **Export-path assertion** | `core/export/` is the only writer of user-facing files. Every write routes through one function asserting the target resolves inside the chosen export root and does not already exist. It has no delete function. |
-| **No hydration of cloud placeholders** | OneDrive-style dehydrated files are detected by attribute and **never opened** (§6.5). Reading one would trigger a download — a state change, and potentially gigabytes of it. |
+| **No hydration of cloud placeholders** | OneDrive-style dehydrated files are detected by attribute and **never opened** (§6.7). Reading one would trigger a download — a state change, and potentially gigabytes of it. |
 | **No-touch regression test** | The suite builds a fixture tree, records a Merkle hash of every path, size, timestamp, and byte, runs a **full** scan → analysis → plan → export cycle, and re-hashes. The assertion is byte-and-metadata identity, including access times. If any code ever touches source data, this test fails. |
 | **Denylist on generated text** | Plan exports may include *copy-only* command previews (`robocopy` without `/MIR` or `/PURGE`, `rsync` without `--delete`) for you to review and run yourself. A linter rejects any generated string containing `del`, `rm`, `rmdir`, `erase`, `format`, `diskpart`, `unlink`, `/MIR`, `/PURGE`, `--delete`. The tool will not so much as *print* a destructive command. |
 
@@ -139,9 +141,11 @@ drivefusion/
 │   │   └── windows.py    # IOCTL_STORAGE_QUERY_PROPERTY for serials; volume GUID paths;
 │   │                     # Get-Disk/Get-Partition/Get-Volume as fallback
 │   ├── enum/
-│   │   ├── walk.py       # unprivileged: FindFirstFileExW + LARGE_FETCH via ctypes
-│   │   ├── usn.py        # elevated: FSCTL_ENUM_USN_DATA full enum, READ_USN_JOURNAL delta
-│   │   └── helper/       # dfscan-helper.exe — narrow elevated enumerator (§6.3)
+│   │   ├── backend.py    # per-volume strategy selection by filesystem + privilege
+│   │   ├── usn.py        # NTFS: FSCTL_ENUM_USN_DATA full enum, READ_USN_JOURNAL delta
+│   │   ├── batchwalk.py  # exFAT: GetFileInformationByHandleEx batch directory reads
+│   │   ├── layout.py     # read-ordering keys: FRN, or extents via retrieval pointers
+│   │   └── helper/       # dfscan-helper.exe — narrow elevated enumerator (§6.5)
 │   ├── health/           # smartctl --json parsing, risk scoring, AFR tables
 │   ├── scan/             # pipeline, checkpointing, fixity, layout-ordered hashing
 │   ├── identity/         # content identity, tiered hashing, hardlink/dedup handling
@@ -184,48 +188,96 @@ and it is dominated by metadata seeks, not by throughput. A rescan costing the s
 first scan makes the tool unusable in practice, because the catalog is only valuable when
 it is current.
 
-### 6.2 The fast path: read NTFS metadata in bulk
+### 6.2 Two filesystems, two strategies
 
-NTFS keeps all file metadata in the Master File Table, and Windows exposes bulk access:
+With the fleet split evenly, the tool needs two genuinely good enumeration paths, not one good
+path and one fallback. What each filesystem offers differs sharply:
 
-- **Full enumeration — `FSCTL_ENUM_USN_DATA`** on a read-only volume handle streams one
-  record per file: File Reference Number, Parent FRN, name, attributes, and USN. It reads the
-  MFT largely sequentially. In practice this is one to two orders of magnitude faster than
-  directory recursion, taking a 10M-file volume from hours to a few minutes.
-- **Path reconstruction** is a join on Parent FRN. The trick at this scale is that only
+| Capability | NTFS | exFAT |
+|---|---|---|
+| Bulk metadata table (MFT) | yes | **no** |
+| Change journal | yes (USN) | **no** |
+| Stable file IDs | yes (FRN) | **no** — IDs are derived from directory position and do not survive a move |
+| Hardlinks | yes | **no** — every path is its own file, which simplifies copy counting |
+| Cheap incremental rescan | **yes, seconds** | **no — a rescan is a full re-walk** |
+| Read-ordering key | FRN ≈ MFT order | extent start via retrieval pointers, where supported (§6.6) |
+
+The enumeration backend is selected per volume from filesystem and privilege, and which one
+ran is recorded on the scan, so a report can always explain how its numbers were obtained.
+
+### 6.3 NTFS: bulk metadata and true incrementals
+
+- **Full enumeration — `FSCTL_ENUM_USN_DATA`** on a read-only volume handle streams one record
+  per file: File Reference Number, Parent FRN, name, attributes, and USN, reading the MFT
+  largely sequentially. One to two orders of magnitude faster than directory recursion — a
+  10M-file volume goes from hours to a few minutes.
+- **Path reconstruction** is a join on Parent FRN. At this scale the trick is that only
   *directories* need to be in memory — roughly 5% of entries — so a 50M-file catalog needs a
   ~2.5M-entry FRN → (parent, name) dictionary, a few hundred MB. Files stream straight to the
-  staging table carrying only their parent FRN, and paths resolve in SQL against the interned
+  staging table carrying only their parent FRN; paths resolve in SQL against the interned
   directory tree (§7.1).
 - **Incremental rescan — `FSCTL_READ_USN_JOURNAL`** returns only what changed since a stored
-  USN cursor. Per volume the tool records `journal_id` and `next_usn`; a rescan processes a
-  few thousand changed records instead of ten million unchanged ones. **This is the difference
-  between a catalog you refresh monthly and one you refresh whenever you plug a drive in.**
-  If the journal ID changed, the journal was deleted, or the cursor fell off the end
-  (`ERROR_JOURNAL_ENTRY_DELETED`), the tool detects it and falls back to full enumeration —
-  correctness never depends on the journal being intact.
-- **`GetFileInformationByHandleEx` with `FileIdBothDirectoryInfo`** is the middle path for
-  scoped subtree rescans: one call returns a batch of entries with sizes, timestamps, and file
-  IDs, avoiding a per-file `stat`.
+  cursor. Per volume the tool records `journal_id` and `next_usn`; a rescan processes a few
+  thousand changed records instead of ten million unchanged ones. If the journal ID changed,
+  the journal was deleted, or the cursor fell off the end (`ERROR_JOURNAL_ENTRY_DELETED`), the
+  tool detects it and falls back to full enumeration — correctness never depends on the journal
+  being intact.
 
-Non-NTFS volumes (exFAT/FAT32 externals, common for portable drives) have no MFT or journal,
-so they use the unprivileged walker with large-fetch batching. The enumeration backend is
-selected per volume by filesystem and privilege, and which one ran is recorded on the scan.
+### 6.4 exFAT: make the walk as cheap as a walk can be
 
-### 6.3 Privilege, handled honestly
+Half the fleet gets no MFT and no journal, so **every exFAT rescan is a full re-walk**. That is
+a hard limit, and the plan states it plainly rather than implying parity. What can be done is
+to make the walk fast and to make its cost predictable:
 
-Opening `\\.\X:` requires administrator rights. A read-only cataloging tool demanding
-permanent elevation is a smell, so:
+- **Batch directory reads.** `GetFileInformationByHandleEx` with `FileFullDirectoryInfo` returns
+  many entries — names, sizes, timestamps, attributes — per call against an open directory
+  handle, instead of a `FindNextFile` round trip and a `stat` per file. (`FileIdBothDirectoryInfo`
+  is the NTFS-side variant; on exFAT the file-ID field is not dependable, so the plain
+  full-directory class is used and identity comes from path plus metadata.)
+- **Parallel directory enumeration.** Metadata reads are small and latency-bound, so the walker
+  uses a work-stealing pool of 4–8 threads even on spinning disks — queue depth lets the drive
+  reorder requests. **This is deliberately different from the 1–2 reader limit for bulk data
+  hashing** (§6.6): many small metadata reads benefit from depth, while large sequential body
+  reads are hurt by contention. Conflating the two is the usual way tools end up slow on HDDs.
+- **Change detection by comparison, not by journal.** The re-walk produces
+  `(dir, name, size, mtime)` tuples that diff against the previous scan in SQL. The walk is the
+  cost; the diff is free. An exFAT rescan is therefore *minutes*, not the *seconds* NTFS
+  manages — an honest and acceptable number for archive drives that are mounted rarely.
+- **Staleness, surfaced.** Because exFAT volumes cannot be cheaply confirmed current, the UI
+  shows per-volume staleness ("last scanned 34 days ago") rather than implying freshness. An
+  optional pre-scan probe compares volume free space and a sample of directory timestamps to
+  *suggest* whether anything likely changed — but it is labeled a hint, only changes the default
+  suggested action, and never updates catalog state. Directory timestamps in the FAT family are
+  not reliably propagated on child modification, so trusting them for correctness would silently
+  under-report changes.
+- **Renames are handled by content, not by identity.** Without stable file IDs, a renamed or
+  moved exFAT file looks like a deletion plus a creation. The content-addressed model absorbs
+  this: the hash is unchanged, so the file is recognized as the same content at a new path, and
+  copy counts stay correct. This is a case where the design decision made for deduplication
+  turns out to carry the weight for exFAT history tracking too.
+- **Filesystem fragility is reported.** exFAT has no journaling, so an unclean dismount can
+  leave inconsistent metadata. The tool reads the volume dirty flag and reports it, and flags
+  content whose *only* copy lives on an exFAT volume as a distinct finding alongside the
+  drive-level risk score.
 
-- The app runs **unprivileged by default** and is fully functional that way, using the walker.
-- The fast path is offered as an explicit "Fast scan (requires administrator)" action that
-  launches **`dfscan-helper.exe`**, a small separate executable whose entire capability is:
-  open a volume read-only, enumerate, stream records to stdout, exit. It has no write code, no
-  network code, and no delete code, so the elevated surface is a few hundred lines that can be
+### 6.5 Privilege, handled honestly
+
+Opening `\\.\X:` requires administrator rights. Elevation is acceptable in this environment, so
+the NTFS fast path is a supported default rather than an opt-in curiosity — but a read-only
+cataloging tool that demands *permanent* elevation is still a smell, and it would buy nothing on
+the exFAT half of the fleet:
+
+- The main application runs **as invoker** and never silently elevates. It remains fully
+  functional unprivileged, which is not a token fallback — it is the only mode exFAT volumes can
+  use anyway, so that path is exercised constantly rather than bit-rotting.
+- The NTFS path launches **`dfscan-helper.exe`**, a small separate executable whose entire
+  capability is: open a volume read-only, enumerate, stream records to stdout, exit. No write
+  code, no network code, no delete code — an elevated surface of a few hundred lines that can be
   audited in one sitting.
 - The helper is covered by the same AST lint and no-touch test as the main application.
+- Elevation is requested per scan, and the consent is recorded in the audit log.
 
-### 6.4 Tiered hashing, ordered by physical layout
+### 6.6 Tiered hashing, ordered by physical layout
 
 Three tiers keep hashing tractable:
 
@@ -238,22 +290,38 @@ Three tiers keep hashing tractable:
 3. **Tier 2 — full hash.** Only where quick hashes collide. The only tier that reads whole
    files, over a small fraction of total bytes.
 
-At this scale the ordering of reads matters as much as their number. Hashing 20M candidate
-files in directory order on a spinning external drive is seek-bound — tens of hours. So
-candidates are **sorted by volume and File Reference Number before reading**, which
-approximates physical MFT order and turns a random-seek workload into a largely sequential
-one. Concurrency is set per device from the discovered media type: **1–2 readers for HDD**
-(more only adds seek thrash), **4–8 for SSD/NVMe**. Scans checkpoint continuously, so an
-unplugged cable costs seconds, not a pass.
+At this scale the ordering of reads matters as much as their number. Hashing 20M candidate files
+in directory order on a spinning external drive is seek-bound — tens of hours. So candidates are
+sorted by an approximation of physical layout before reading, and the available ordering key
+differs by filesystem:
 
-### 6.5 Windows realities the design must handle
+- **NTFS** — sort by File Reference Number, which approximates MFT and allocation order. Free,
+  since the FRN is already captured during enumeration.
+- **exFAT** — no file IDs, so ordering uses the file's starting extent, obtained per handle via
+  `FSCTL_GET_RETRIEVAL_POINTERS`. That costs one open per file, so it is applied only to files
+  above a size threshold (~1 MB) where the seek saving dominates the open cost. Smaller files
+  are ordered by `(dir_id, position within directory)`, which approximates allocation order well
+  on the mostly-append-only drives this tool targets.
+  **Verification task at M2:** confirm that the exFAT driver on the target Windows versions
+  supports retrieval pointers; if it does not, directory-order reads become the only option for
+  those volumes and the exFAT hashing budget in §13 must be re-measured. This is called out as a
+  task rather than assumed, because the whole exFAT hashing budget rests on it.
+
+Concurrency for **body reads** is set per device from the discovered media type: **1–2 readers
+for HDD** (more only adds seek thrash), **4–8 for SSD/NVMe** — distinct from the metadata
+enumeration pool in §6.4. Scans checkpoint continuously, so an unplugged cable costs seconds,
+not a pass.
+
+### 6.7 Windows realities the design must handle
 
 | Reality | Handling |
 |---|---|
 | **Cloud placeholders** (OneDrive et al.) | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` / `RECALL_ON_OPEN` / `OFFLINE` → recorded as `dehydrated`, **never opened**. Opening one downloads it. They are catalogued by metadata and excluded from hashing, with a clear report line |
 | **Long paths** | All paths use the `\\?\` prefix; the app manifest also declares long-path awareness. A tool that dies at 260 characters is useless on an archive drive |
-| **Hardlinks** | NTFS `NumberOfLinks` + File Reference Number; entries sharing an FRN on a volume are **one physical copy**. Counting them twice would inflate redundancy — a correctness bug, not a cosmetic one |
+| **Hardlinks** | NTFS `NumberOfLinks` + File Reference Number; entries sharing an FRN on a volume are **one physical copy**. Counting them twice would inflate redundancy — a correctness bug, not a cosmetic one. exFAT has no hardlinks, so the question does not arise there |
 | **Sparse / compressed files** | Record logical size *and* allocated size; report both, since capacity planning needs allocated and dedup needs logical |
+| **Cluster slack** | exFAT volumes are frequently formatted with 128 KiB clusters, so a million 4 KiB files can consume ~128 GB rather than ~4 GB. Cluster size is recorded per volume and drives destination-footprint estimates (§9); ignoring it would make plans wrong by a wide margin, in the unsafe direction |
+| **Dirty volume flag** | Read and reported per volume; exFAT has no journal, so an unclean dismount is a real integrity signal rather than a curiosity |
 | **Server Data Deduplication** | Files report full logical size while sharing chunks on disk. Flagged, so free-space projections do not lie |
 | **Alternate Data Streams** | Enumerated and sized optionally; off by default, since they are rare and cost a pass |
 | **Case-insensitivity** | Normalized for matching, stored as observed |
@@ -356,9 +424,12 @@ CREATE TABLE volume (
   volume_guid TEXT UNIQUE,       -- \\?\Volume{...}\ — stable identity, unlike drive letters
   label TEXT, fs_type TEXT,      -- NTFS|exFAT|FAT32
   capacity_bytes INTEGER, free_bytes INTEGER,
+  cluster_bytes INTEGER,         -- drives footprint estimates; often 128 KiB on exFAT
   last_letter TEXT, last_seen_at TEXT,
-  usn_journal_id INTEGER, usn_next INTEGER,   -- incremental rescan cursor
-  supports_hardlink INTEGER, supports_usn INTEGER
+  usn_journal_id INTEGER, usn_next INTEGER,   -- NTFS incremental cursor; NULL on exFAT
+  dirty_flag INTEGER,
+  supports_hardlink INTEGER, supports_usn INTEGER, supports_file_ids INTEGER,
+  rescan_cost TEXT               -- delta|full-walk — sets expectations in the UI
 );
 
 CREATE TABLE scan (
@@ -525,6 +596,32 @@ not reusable (**R1.1**), scan history plus fixity events plus the hash-chained a
 PROV-O/PREMIS (**R1.2**), and format-risk flags recommending open preservation alternatives —
 a recommendation only; the tool never converts anything (**R1.3**).
 
+### 8.4 Collections without a directory convention
+
+There is no existing convention to import, so collections must be **inferred and then
+confirmed**. Inference is a proposal engine, never an assignment:
+
+- **Candidate detection** walks `dir_rollup` and scores subtrees on signals that survive at
+  50M files: subtree size falling inside a target band, file-type homogeneity, temporal
+  clustering of modification times (one project, one period), sibling-name patterns (dates,
+  repeated tokens, sequence numbers), and depth at which a subtree stops looking like a
+  container and starts looking like content.
+- **Every candidate carries its evidence** — why it was proposed, sample paths, counts, size,
+  date span — because a proposal you cannot audit is a proposal you cannot safely accept.
+- **Confirmation is explicit and required.** Accept, rename, merge, split, or reject. Bulk
+  accept above a confidence threshold exists for efficiency, but it is still an act you take.
+- **Confirmed collections become rules**, not fixed lists (`collection_rule`), so files that
+  later appear inside a confirmed subtree join automatically — while genuinely *new* subtrees
+  return to the review queue rather than being silently absorbed.
+- **Unfiled content is first-class.** At 50M files most bytes will start unfiled, and hiding
+  that would make every scorecard a lie. The "unfiled" bucket reports its size, its risk, and
+  its under-protected share, and it is a legitimate permanent state for content you never
+  intend to curate.
+
+Crucially, **the planner does not wait for any of this** (§9): placement units fall back to
+directory subtrees drawn from `dir_rollup`, so consolidation planning works on day one, and
+confirmed collections simply make the units better.
+
 ---
 
 ## 9. The planner
@@ -543,13 +640,21 @@ minimize   α · Σ_u size_u · P(loss | drives holding u)      # durability
          + δ · imbalance(free space across drives)           # headroom
          + ε · Σ unmet FAIR / NDSA findings                  # stewardship
 
-subject to Σ_u size_u · x[u][d] ≤ cap_d − reserve_d          for all d
+subject to Σ_u footprint(u, d) · x[u][d] ≤ cap_d − reserve_d  for all d
            Σ_d x[u][d] ≥ k_u                                 copy target for u's NDSA level
            Σ_{d ∈ batch b} x[u][d] ≤ k_u − 1                 manufacturer/batch diversity
            Σ_{d ∈ zone z} x[u][d] ≤ k_u − 1                  geographic separation
            x[u][d] = 1                                       every existing copy, pinned
            x[u][d] = 0                                       for excluded drives
 ```
+
+**`footprint(u, d)` is deliberately not `size_u`.** A unit's cost on a destination depends on
+that volume's cluster size: with a million small files, a 128 KiB-cluster exFAT target can
+consume many times the logical byte count. The planner computes footprint per candidate
+destination as `Σ_files ceil(size / cluster_bytes_d) × cluster_bytes_d`, so a plan that says
+"this fits" is right. Estimating from logical bytes would produce plans that overflow the
+destination partway through a copy — the failure mode most likely to make a user distrust the
+tool, and one that only shows up on the exFAT half of the fleet.
 
 The pinning of every current location is the formal expression of read-only operation: **the
 solver may only add placements.** It cannot represent a state where an existing copy is gone,
@@ -592,15 +697,22 @@ Eight screens over the same core. No screen has an "Apply," "Move," or "Delete" 
 because no such capability exists behind them.
 
 1. **Scan scope** — the drives and roots you have chosen; add/remove scope, globs, dry-run
-   preview with estimated counts, per-volume last-scan status and method.
+   preview with estimated counts. Per volume it shows filesystem, enumeration method, rescan
+   cost (`delta` or `full-walk`), and staleness age — so it is always obvious which drives can
+   be confirmed current in seconds and which require a re-walk.
 2. **Dashboard** — drives with capacity/free bars colored by health; total unique bytes,
    duplicate overhead, under-protected bytes, expected loss/yr, scorecard distribution.
 3. **Drives** — inventory; edit purchase date, price, vendor, warranty, location, disaster zone,
    role, nickname; SMART detail with history sparklines; "connected / last seen 12 days ago."
 4. **Catalog** — tree plus virtualized table; size, copies, holding drives, riskiest holder,
    collection; subtree sizes served instantly from `dir_rollup`.
-5. **Collections** — title, creators, license, data type, relations, membership rules, metadata
-   completeness meter.
+5. **Collections** — two panes. A **review queue** of *inferred* collection candidates (§8.4),
+   each with its evidence, sample paths, file and byte counts, and accept / rename / merge /
+   split / reject actions; and the confirmed collections themselves, with title, creators,
+   license, data type, relations, membership rules, and a metadata completeness meter. Nothing
+   becomes a collection without an explicit confirmation, and coverage — the share of bytes in
+   confirmed collections — is shown at the top, because a scorecard over 12% of the archive
+   should not look like a scorecard over all of it.
 6. **Duplicates & Versions** — groups with reclaimable bytes, side-by-side compare, proposed
    preferred member with rationale. Output is a report.
 7. **Plan** — proposed steps grouped by drive with rationale and risk delta; simulation panel;
@@ -643,9 +755,10 @@ Stated as testable numbers, because at this scale "should be fast enough" is not
 
 | Operation | Budget |
 |---|---|
-| Full enumeration, 10M-file NTFS volume, elevated (USN) | **< 5 min** |
-| Full enumeration, 10M-file volume, unprivileged walker | < 45 min |
-| Incremental rescan, unchanged 10M-file volume (USN delta) | **< 60 s** |
+| Full enumeration, 10M-file **NTFS** volume, elevated (USN) | **< 5 min** |
+| Full enumeration, 10M-file **exFAT** volume, batch walker | **< 30 min** |
+| Incremental rescan, unchanged 10M-file **NTFS** volume (USN delta) | **< 60 s** |
+| Rescan, unchanged 10M-file **exFAT** volume (full re-walk + diff) | **< 35 min** — the floor, not a target to optimize away |
 | Quick-hash pass, 5M candidate files, external HDD, layout-ordered | < 8 h (and resumable) |
 | Duplicate + redundancy report across 50M rows | < 5 min |
 | Catalog size | ≤ 250 bytes/file all-in → **50M files ≈ 12 GB** |
@@ -656,6 +769,15 @@ Stated as testable numbers, because at this scale "should be fast enough" is not
 These are the acceptance criteria for M1–M4 and the content of the scale test. Missing one is a
 milestone failure, not a footnote.
 
+The NTFS and exFAT rescan figures differ by roughly two orders of magnitude, and no amount of
+engineering closes that gap — it is a filesystem capability difference. The design response is
+to be honest about it in the UI (§11) rather than to average the two into a misleading single
+number. A practical consequence worth planning around: **if any drives are yet to be formatted,
+or are due to be reformatted during consolidation, choosing NTFS buys cheap incremental
+rescans, hardlink-accurate copy counting, stable file identity, and journaling.** The planner
+surfaces that as an advisory note on `acquire` steps; it is a suggestion about drives you are
+already going to buy or reformat, never a proposal to reformat anything you own.
+
 ---
 
 ## 14. Testing
@@ -664,9 +786,21 @@ milestone failure, not a footnote.
   Merkle hash of the fixture tree before and after a full cycle, asserting byte *and* metadata
   identity including access times.
 - **AST lint** for forbidden calls, as a required CI status check, covering `dfscan-helper` too.
-- **Synthetic NTFS fixtures** built on VHDX images attached in CI, with known duplicate,
-  version, hardlink, sparse, compressed, reparse-point, and long-path structure. VHDX matters:
-  the USN and MFT paths cannot be tested against a plain temp directory.
+- **Synthetic VHDX fixtures in both filesystems**, attached in CI: an NTFS image with known
+  duplicate, version, hardlink, sparse, compressed, reparse-point, and long-path structure, and
+  an **exFAT image with a large cluster size** carrying many small files. VHDX matters because
+  the USN and MFT paths cannot be tested against a plain temp directory, and the exFAT image
+  matters because cluster-slack arithmetic and the no-file-ID path are invisible on NTFS.
+- **Cross-filesystem parity tests** — the same logical tree on both images must yield identical
+  content identity, duplicate groups, and copy counts, differing only where the filesystems
+  genuinely differ (hardlinks, allocated size). This is the test that catches an exFAT path
+  quietly under-reporting.
+- **Rename-on-exFAT test** — move and rename a file between scans and assert it is recognized as
+  the same content at a new path, not as a deletion plus a new file, since exFAT has no stable
+  file IDs to rely on.
+- **Footprint test** — a plan targeting a 128 KiB-cluster volume must estimate the destination
+  footprint in clusters; asserting against the volume's actual free-space delta after a manual
+  copy in the fixture.
 - **Journal-invalidation tests** — delete the journal, rotate the journal ID, and force a USN
   cursor past the end; each must be detected and must fall back to full enumeration rather than
   silently under-reporting. A missed change here means a wrong copy count, which means a plan
@@ -688,11 +822,11 @@ milestone failure, not a footnote.
 |---|---|---|
 | **M0** | Skeleton **and guardrails** | repo layout, `core/fsio.py`, AST lint in CI, no-touch test, VHDX fixture harness, PyInstaller build. *The safety mechanism ships before any code that reads user media.* |
 | **M1** | Catalog core | scope registry, Windows discovery, unprivileged walker, interned-path schema, staging+merge loader, `scope`/`scan`/`find` CLI. **Benchmark gate: single-DB vs. sharded decision (§7.2)** |
-| **M2** | Fast path & incremental | `dfscan-helper.exe`, `FSCTL_ENUM_USN_DATA` full enumeration, `READ_USN_JOURNAL` deltas, journal invalidation handling, `dir_rollup`. *This is the milestone that makes 50M files practical.* |
+| **M2** | Fast enumeration, **both filesystems** | NTFS: `dfscan-helper.exe`, `FSCTL_ENUM_USN_DATA`, `READ_USN_JOURNAL` deltas, journal-invalidation handling. exFAT: batch directory reads, parallel walker, comparison-based change detection, staleness surfacing, retrieval-pointer verification (§6.6). Plus `dir_rollup`. *This is the milestone that makes 50M files practical, and with a 50/50 fleet it carries two distinct paths rather than one path and a stub.* |
 | **M3** | Identity & analysis | tiered hashing with layout-ordered reads, duplicate groups, copies-per-drive, under-protected and reclamation reports, fixity baseline |
 | **M4** | GUI shell | PySide6 app: scope, dashboard, drives, virtualized catalog browser with keyset paging |
 | **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |
-| **M6** | Curation & FAIR | collections, membership rules, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
+| **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
 | **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |
 | **M8** | Exports & polish | RO-Crate/BagIt/DataCite, per-drive manifests, naming-template mappings, HTML/CSV reports, signed build |
 
@@ -708,8 +842,12 @@ would mean reworking the scan pipeline.
 | Risk | Mitigation |
 |---|---|
 | **50M rows overwhelms SQLite** | Path interning, staging+merge loading, keyset pagination, rollup tables; explicit budgets (§13) with a benchmark gate at M1 and a sharding fallback |
-| **Enumeration too slow to keep current** | USN journal deltas (§6.2); a rescan is seconds, not hours |
+| **Enumeration too slow to keep current** | USN journal deltas on NTFS (§6.3); batch reads and a parallel walker on exFAT (§6.4) |
 | **USN journal missing, rotated, or truncated** | Detected via journal ID and cursor validation; automatic fallback to full enumeration; tested explicitly |
+| **Half the fleet has no cheap rescan** | Accepted and made visible rather than engineered around: per-volume staleness in the UI, honest separate budgets (§13), and an advisory to prefer NTFS on drives being acquired or reformatted anyway |
+| **exFAT retrieval pointers unsupported** | Explicit verification task at M2 (§6.6); if unsupported, directory-order reads are the fallback and the exFAT hashing budget is re-measured rather than quietly missed |
+| **exFAT cluster slack breaks capacity plans** | Per-volume cluster size recorded; destination footprint computed as clusters, not logical bytes (§9) |
+| **Inferred collections get silently wrong** | Inference proposes, never assigns; every candidate carries its evidence; confirmation is explicit; unfiled content is a first-class reported state (§8.4) |
 | **Hashing is seek-bound on external HDDs** | Tiered hashing plus reads ordered by File Reference Number; per-media concurrency limits; fully resumable |
 | **Cloud placeholders silently hydrate** | Detected by attribute and never opened; asserted by test |
 | **A future change reintroduces a write path** | Structural enforcement (§3.2): gateway with no writer, read-only volume handles, CI lint, no-touch test. A regression must defeat four independent mechanisms |
@@ -723,28 +861,28 @@ would mean reworking the scan pipeline.
 
 ---
 
-## 17. Decisions locked, and what remains open
+## 17. Decisions locked
 
-**Locked:** Windows-only, 64-bit. Local drives only. ~20 drives, 10–50M files. User-defined
-scan scope, opt-in. Non-identifiable data only, with an acknowledged disclaimer. No active DMS
-plan — FAIR and NDSA are the stewardship rubrics; the NIH DMS export is deferred to an optional
-module. Read-only by construction, non-negotiable.
+Every scoping question is now answered; nothing blocks M0.
 
-**Still open, and none of them block M0:**
+**Locked:** Windows-only, 64-bit. Local drives only. ~20 drives, 10–50M files, **~50/50 NTFS and
+exFAT**. User-defined scan scope, opt-in. **Elevation acceptable** — the NTFS fast path is a
+supported default via a narrow read-only helper, while the main app runs as invoker.
+**No directory convention** — collections are inferred and require explicit confirmation, and
+unfiled content is a first-class state. Non-identifiable data only, with an acknowledged
+disclaimer. No active DMS plan — FAIR and NDSA are the stewardship rubrics; the NIH DMS export
+is deferred to an optional module. Read-only by construction, non-negotiable.
 
-1. **Elevation appetite** — is running an elevated helper acceptable in your environment, or
-   should M2's fast path be optional-and-rarely-used? If elevation is off the table, the
-   unprivileged walker becomes the only path and the §13 enumeration budgets relax by roughly
-   an order of magnitude. Worth answering before M2, not before M0.
-2. **Filesystem mix** — roughly how many of the 20 drives are NTFS versus exFAT? exFAT externals
-   get no MFT or journal, so if most drives are exFAT the USN work in M2 pays off less and
-   should be re-weighted against M3.
-3. **Collection granularity** — do you already have a directory convention that maps to
-   collections (per project, per year, per instrument), or should M6 infer candidates from the
-   directory tree and let you confirm them?
+**Assumptions carried into M0, worth correcting if wrong:**
 
-Sensible defaults if you would rather not decide: elevation offered but never required, USN work
-proceeds as planned, and M6 infers collection candidates for you to confirm.
+1. The archive is **cold** — drives are mounted occasionally, and most content does not change
+   between scans. This is what makes a 30-minute exFAT re-walk acceptable. If some exFAT volumes
+   are actively written daily, tell me and their scan cadence needs separate thought.
+2. Drives are **connected one or a few at a time**, not all 20 at once, so plans should sequence
+   work by drive and expect gaps between sessions. Plan documents are written to be picked up
+   days later, and scans are fully resumable.
+3. **Reformatting is off the table** for existing drives. The NTFS advisory (§13) applies only
+   to drives being newly acquired or already destined for a reformat.
 
 ---
 

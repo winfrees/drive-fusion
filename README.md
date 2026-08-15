@@ -13,9 +13,10 @@ reviewable plans to consolidate that content into a traceable, FAIR-aligned orde
 
 Python 3.11+ · PySide6 GUI · SQLite catalog · packaged as a signed 64-bit Windows executable.
 
-**Designed for:** ~20 drives, 10–50 million files, local drives only, user-defined scan scope.
-Scale drives the design — NTFS MFT/USN bulk enumeration for fast scans and near-instant
-incremental rescans, interned paths, and fully virtualized views.
+**Designed for:** ~20 drives (~50/50 NTFS and exFAT), 10–50 million files, local drives only,
+user-defined scan scope. Scale drives the design — NTFS MFT/USN bulk enumeration for fast scans
+and near-instant incremental rescans, a parallel batch walker for exFAT volumes that have
+neither, layout-ordered hashing, interned paths, and fully virtualized views.
 
 **Not for identifiable human-subjects data, PHI, or otherwise regulated data.** See the
 disclaimer in the plan.
