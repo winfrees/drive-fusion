@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from drivefusion.core import fsio
+from drivefusion.core.enum.batchwalk import DEFAULT_WORKERS, ParallelWalker
 from drivefusion.core.errors import UnreadableError
 from drivefusion.core.scope.registry import ExclusionSet
 from drivefusion.core.store.catalog import BATCH_ROWS, Catalog, ScanStats
@@ -42,6 +43,9 @@ class ScanCounters:
     dehydrated: int = 0
     excluded: int = 0
     reparse_skipped: int = 0
+    #: Listings that arrived for a directory the scan never interned. Should
+    #: always be zero; non-zero means traversal and recording disagreed.
+    unplaced: int = 0
     unreadable_paths: list[str] = field(default_factory=list)
 
     def coverage_line(self) -> str:
@@ -56,6 +60,8 @@ class ScanCounters:
             parts.append(f"{self.excluded:,} excluded")
         if self.reparse_skipped:
             parts.append(f"{self.reparse_skipped:,} links not traversed")
+        if self.unplaced:
+            parts.append(f"{self.unplaced:,} unplaced listings (report this)")
         return "; ".join(parts)
 
 
@@ -73,6 +79,8 @@ def scan_root(
     excludes: ExclusionSet | None = None,
     progress: Callable[[ScanCounters], None] | None = None,
     method: str = "walk",
+    lister=None,
+    workers: int = DEFAULT_WORKERS,
 ) -> dict:
     """Enumerate one scope root into the catalog. Returns a result summary."""
     excludes = excludes or ExclusionSet.for_root(())
@@ -91,31 +99,60 @@ def scan_root(
 
     pending: list[tuple] = []
     since_checkpoint = 0
-    stack: list[tuple[str, int, int]] = [(root_path, root_dir_id, 0)]
+
+    def prune(parent: str, entry) -> bool:
+        """Keep the traversal and the recording rules identical.
+
+        The walker must not descend into anything the scan would exclude:
+        otherwise the excluded directory is still listed and its children
+        arrive attached to a parent the scanner never interned.
+        """
+        entry_path = os.path.join(parent, entry.name)
+        return excludes.excludes(
+            name=entry.name,
+            relpath=os.path.relpath(entry_path, root_path),
+            absolute=entry_path,
+        )
+
+    walker = ParallelWalker(lister, workers=workers, prune=prune)
+
+    # Directory ids for paths that have been discovered but whose own listing
+    # has not been consumed yet. Entries are popped on consumption, so this
+    # holds only the in-flight frontier rather than every directory on the
+    # volume — the walker submits a child only after its parent's result has
+    # been processed, so the id is always present when needed.
+    dir_ids: dict[str, tuple[int, int]] = {root_path: (root_dir_id, 0)}
 
     conn.execute("BEGIN")
     try:
-        while stack:
-            current_path, current_dir_id, depth = stack.pop()
+        for result in walker.walk(root_path):
+            known = dir_ids.pop(result.path, None)
+            if known is None:
+                # A listing for a directory that was never interned. There is
+                # no correct parent to file its contents under, and defaulting
+                # to the root would silently misplace real files, so it is
+                # counted and skipped rather than guessed at.
+                counters.unplaced += 1
+                continue
+            current_dir_id, depth = known
 
-            try:
-                entries = list(fsio.scandir(current_path))
-            except UnreadableError:
+            if not result.ok:
                 counters.unreadable += 1
                 if len(counters.unreadable_paths) < 50:
-                    counters.unreadable_paths.append(current_path)
+                    counters.unreadable_paths.append(result.path)
                 continue
             counters.dirs += 1
 
-            for entry in entries:
-                relpath = os.path.relpath(entry.path, root_path)
+            for entry in result.entries:
+                entry_path = os.path.join(result.path, entry.name)
+                relpath = os.path.relpath(entry_path, root_path)
                 if excludes.excludes(
-                    name=entry.name, relpath=relpath, absolute=entry.path
+                    name=entry.name, relpath=relpath, absolute=entry_path
                 ):
                     counters.excluded += 1
                     continue
 
-                if entry.is_symlink or entry.is_reparse_point:
+                if fsio.is_reparse_point(entry.attributes):
                     # Reported, never traversed: a junction loop must not turn
                     # a bounded volume into an unbounded walk.
                     counters.reparse_skipped += 1
@@ -131,13 +168,13 @@ def scan_root(
                         scan_id=scan_id,
                         frn=entry.file_id,
                     )
-                    stack.append((entry.path, child_id, depth + 1))
+                    dir_ids[entry_path] = (child_id, depth + 1)
                     continue
 
                 if entry.stat_failed:
                     counters.unreadable += 1
                     read_state = "unreadable"
-                elif entry.is_dehydrated:
+                elif fsio.is_dehydrated(entry.attributes):
                     # Catalogued from metadata; never opened (§3.2).
                     counters.dehydrated += 1
                     read_state = "skipped-dehydrated"
@@ -149,9 +186,9 @@ def scan_root(
                 pending.append(
                     (
                         scan_id, volume_id, current_dir_id, entry.name,
-                        _extension(entry.name), entry.size, None,
+                        _extension(entry.name), entry.size, entry.alloc_size or None,
                         entry.mtime_ns, entry.ctime_ns, entry.file_id,
-                        entry.nlink, entry.attributes, read_state,
+                        1, entry.attributes, read_state,
                     )
                 )
 

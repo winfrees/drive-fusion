@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,42 @@ def test_wal_and_page_size_applied(catalog: Catalog) -> None:
     assert catalog.conn.execute("PRAGMA page_size").fetchone()[0] == (
         schema.INITIAL_PAGE_SIZE
     )
+
+
+def test_upgrades_an_older_catalog_in_place(tmp_path: Path) -> None:
+    """A v1 catalog must gain the USN cursor columns without losing data."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL,
+                                     applied_at TEXT NOT NULL);
+        CREATE TABLE volume (
+            id INTEGER PRIMARY KEY, drive_id INTEGER, volume_guid TEXT UNIQUE
+            NOT NULL, label TEXT, fs_type TEXT, capacity_bytes INTEGER,
+            free_bytes INTEGER, cluster_bytes INTEGER, last_letter TEXT,
+            last_seen_at TEXT, dirty_flag INTEGER, supports_hardlink INTEGER,
+            supports_usn INTEGER, supports_file_ids INTEGER, rescan_cost TEXT);
+        INSERT INTO schema_version VALUES (1, '2026-01-01T00:00:00+00:00');
+        INSERT INTO volume (volume_guid, label) VALUES ('old:1', 'ARCHIVE');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    with Catalog(path) as catalog:
+        assert schema.current_version(catalog.conn) == schema.SCHEMA_VERSION
+        columns = {
+            row["name"]
+            for row in catalog.conn.execute("PRAGMA table_info(volume)")
+        }
+        assert {"usn_journal_id", "usn_next"} <= columns
+
+        row = catalog.conn.execute("SELECT label FROM volume").fetchone()
+        assert row["label"] == "ARCHIVE"  # existing data survives
+
+    # The pre-upgrade catalog is copied aside, never replaced in place.
+    assert list(tmp_path.glob("old.db.*.bak"))
 
 
 def test_future_schema_is_refused(tmp_path: Path) -> None:

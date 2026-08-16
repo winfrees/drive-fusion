@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -85,7 +85,11 @@ CREATE TABLE IF NOT EXISTS volume (
     supports_hardlink   INTEGER,
     supports_usn        INTEGER,
     supports_file_ids   INTEGER,
-    rescan_cost         TEXT
+    rescan_cost         TEXT,
+    -- NTFS change-journal cursor. Both must match the volume's current
+    -- journal for a delta rescan to be trustworthy; see core/enum/journal.py.
+    usn_journal_id      INTEGER,
+    usn_next            INTEGER
 );
 
 -- What the user has chosen to catalog. Nothing is scanned that is not here.
@@ -220,6 +224,16 @@ CREATE TABLE IF NOT EXISTS audit (
 """
 
 
+#: Statements that bring an older catalog forward, keyed by the version they
+#: produce. Fresh databases get the full DDL above instead and skip these.
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: (
+        "ALTER TABLE volume ADD COLUMN usn_journal_id INTEGER",
+        "ALTER TABLE volume ADD COLUMN usn_next INTEGER",
+    ),
+}
+
+
 class SchemaError(RuntimeError):
     """Raised when the catalog cannot be opened or migrated safely."""
 
@@ -293,6 +307,13 @@ def migrate(conn: sqlite3.Connection, path: Path | None = None) -> int:
         )
     if version > 0 and path is not None:
         backup_catalog(path)
+
+    # Upgrades run their ALTERs first; a fresh database skips them because the
+    # DDL below already declares the current shape.
+    if version > 0:
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            for statement in MIGRATIONS.get(target, ()):
+                conn.execute(statement)
 
     # executescript() issues an implicit COMMIT before running, so the DDL
     # cannot be wrapped in an explicit transaction here. Every statement is

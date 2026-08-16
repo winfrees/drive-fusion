@@ -216,6 +216,13 @@ ran is recorded on the scan, so a report can always explain how its numbers were
   ~2.5M-entry FRN → (parent, name) dictionary, a few hundred MB. Files stream straight to the
   staging table carrying only their parent FRN; paths resolve in SQL against the interned
   directory tree (§7.1).
+- **What a USN record does *not* contain: size or modification time.** It identifies a file,
+  its parent, and its name. This was found while building M2 and it changes the shape of the
+  NTFS path: bulk enumeration gives the *tree* very cheaply, but metadata still has to come
+  from a directory-info pass. So M2 uses the batch reader (§6.4) for metadata on both
+  filesystems, and uses the journal for what it is uniquely good at — telling us the small set
+  of things that changed. Reaching the sub-5-minute *full* NTFS enumeration budget in §13 would
+  need direct `$MFT` parsing, which carries sizes; that is deferred rather than written blind.
 - **Incremental rescan — `FSCTL_READ_USN_JOURNAL`** returns only what changed since a stored
   cursor. Per volume the tool records `journal_id` and `next_usn`; a rescan processes a few
   thousand changed records instead of ten million unchanged ones. If the journal ID changed,
@@ -767,7 +774,7 @@ Stated as testable numbers, because at this scale "should be fast enough" is not
 
 | Operation | Budget |
 |---|---|
-| Full enumeration, 10M-file **NTFS** volume, elevated (USN) | **< 5 min** |
+| Full enumeration, 10M-file **NTFS** volume, elevated (USN) | **< 5 min** — *requires direct `$MFT` parsing, deferred past M2; the batch reader currently puts NTFS on the same footing as exFAT for a full pass* |
 | Full enumeration, 10M-file **exFAT** volume, batch walker | **< 30 min** |
 | Incremental rescan, unchanged 10M-file **NTFS** volume (USN delta) | **< 60 s** |
 | Rescan, unchanged 10M-file **exFAT** volume (full re-walk + diff) | **< 35 min** — the floor, not a target to optimize away |
@@ -834,7 +841,7 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 |---|---|---|
 | **M0** | Skeleton **and guardrails** | repo layout, `core/fsio.py`, AST lint in CI, no-touch test, VHDX fixture harness, PyInstaller build. *The safety mechanism ships before any code that reads user media.* |
 | **M1** | Catalog core | scope registry, Windows discovery, unprivileged walker, interned-path schema, staging+merge loader, `scope`/`scan`/`find` CLI. **Benchmark gate: single-DB vs. sharded decision (§7.2)** |
-| **M2** | Fast enumeration, **both filesystems** | NTFS: `dfscan-helper.exe`, `FSCTL_ENUM_USN_DATA`, `READ_USN_JOURNAL` deltas, journal-invalidation handling. exFAT: batch directory reads, parallel walker, comparison-based change detection, staleness surfacing, retrieval-pointer verification (§6.6). Plus `dir_rollup`. *This is the milestone that makes 50M files practical, and with a 50/50 fleet it carries two distinct paths rather than one path and a stub.* |
+| **M2** | Fast enumeration, **both filesystems** | **In progress.** Done: USN and directory-info binary parsers, FRN path reconstruction, journal state and invalidation decision, backend selection, staleness surfacing, the parallel batch walker (wired into the scanner), Win32 shims, schema v2 with the journal cursor. Remaining: the elevated `dfscan-helper` process, wiring USN deltas through the staging merge, retrieval-pointer verification (§6.6), and Windows validation of every shim. |
 | **M3** | Identity & analysis | tiered hashing with layout-ordered reads, duplicate groups, copies-per-drive, under-protected and reclamation reports, fixity baseline |
 | **M4** | GUI shell | PySide6 app: scope, dashboard, drives, virtualized catalog browser with keyset paging |
 | **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from drivefusion import __version__
 from drivefusion.core import discovery
+from drivefusion.core.enum.backend import describe_age, method_summary, plan_enumeration
 from drivefusion.core.scan import preview_root, scan_root
 from drivefusion.core.scope import ExclusionSet, ScopeError, validate_new_root
 from drivefusion.core.store.catalog import Catalog
@@ -155,8 +156,10 @@ def cmd_scope_list(args) -> int:
             label = (volume["label"] or volume["volume_guid"]) if volume else "?"
             fs_type = volume["fs_type"] if volume else "?"
             cost = volume["rescan_cost"] if volume else "?"
+            age = describe_age(volume["last_seen_at"] if volume else None)
             print(f"[{root.id}] {root.path}")
             print(f"      volume: {label} ({fs_type}, rescan: {cost})")
+            print(f"      last scanned: {age}")
             if root.excludes:
                 print(f"      excludes: {', '.join(root.excludes)}")
         return 0
@@ -202,14 +205,26 @@ def cmd_scan(args) -> int:
             print("no scope roots; add one with: drivefusion scope add <path>")
             return 1
 
+        volumes = {row["id"]: row for row in catalog.volumes()}
         for root in roots:
+            volume = volumes.get(root.volume_id)
+            decision = plan_enumeration(
+                supports_usn=bool(volume["supports_usn"]) if volume else False,
+                elevated=False,
+                journal_id=volume["usn_journal_id"] if volume else None,
+                next_usn=volume["usn_next"] if volume else None,
+            )
             print(f"scanning [{root.id}] {root.path} ...")
+            print(
+                f"  method: {method_summary(decision, volume['supports_usn'] if volume else False)}"
+            )
             result = scan_root(
                 catalog,
                 root_path=root.path,
                 root_id=root.id,
                 volume_id=root.volume_id,
                 excludes=ExclusionSet.for_root(root.excludes),
+                method=decision.method.value,
             )
             counters = result["counters"]
             merged = result["merged"]
@@ -268,6 +283,17 @@ def cmd_status(args) -> int:
             print(f"  vanished:    {counts['vanished']:,} (metadata retained)")
         if counts["files"]:
             print(f"  catalog cost: {size / counts['files']:.0f} bytes/file")
+
+        volumes = catalog.volumes()
+        if volumes:
+            print("\nvolumes:")
+            for volume in volumes:
+                label = volume["label"] or volume["volume_guid"]
+                print(
+                    f"  {label} ({volume['fs_type'] or '?'}) "
+                    f"rescan: {volume['rescan_cost'] or '?'}, "
+                    f"last scanned {describe_age(volume['last_seen_at'])}"
+                )
 
         scans = catalog.scans(limit=5)
         if scans:

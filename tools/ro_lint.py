@@ -45,6 +45,7 @@ PERMITTED_WRITER_PREFIXES = (
 RAW_HANDLE_MODULES = (
     "drivefusion/core/fsio.py",
     "drivefusion/core/discovery/windows.py",
+    "drivefusion/core/enum/winio.py",
 )
 
 #: Win32 access rights that would make a handle capable of writing. Their mere
