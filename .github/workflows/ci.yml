@@ -60,10 +60,11 @@ jobs:
       - name: Build one-folder executable
         run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
 
-      - name: Verify the built executable runs
+      - name: Verify the built executables run
         run: |
           dist\DriveFusion\DriveFusion.exe --version
           dist\DriveFusion\DriveFusion.exe --help
+          dist\DriveFusion\dfscan-helper.exe --help
 
       - uses: actions/upload-artifact@v4
         with:

@@ -70,6 +70,17 @@ def _extension(name: str) -> str | None:
     return ext or None
 
 
+def stage_row_for(scan_id: int, volume_id: int, dir_id: int, entry, read_state: str):
+    """Build one staging tuple. Shared with the delta path so a full scan and
+    an incremental scan cannot drift into recording files differently."""
+    return (
+        scan_id, volume_id, dir_id, entry.name,
+        _extension(entry.name), entry.size, entry.alloc_size or None,
+        entry.mtime_ns, entry.ctime_ns, entry.file_id,
+        1, entry.attributes, read_state,
+    )
+
+
 def scan_root(
     catalog: Catalog,
     *,
@@ -81,6 +92,7 @@ def scan_root(
     method: str = "walk",
     lister=None,
     workers: int = DEFAULT_WORKERS,
+    supports_file_ids: bool | None = None,
 ) -> dict:
     """Enumerate one scope root into the catalog. Returns a result summary."""
     excludes = excludes or ExclusionSet.for_root(())
@@ -114,7 +126,9 @@ def scan_root(
             absolute=entry_path,
         )
 
-    walker = ParallelWalker(lister, workers=workers, prune=prune)
+    walker = ParallelWalker(
+        lister, workers=workers, prune=prune, supports_file_ids=supports_file_ids
+    )
 
     # Directory ids for paths that have been discovered but whose own listing
     # has not been consumed yet. Entries are popped on consumption, so this
@@ -184,11 +198,8 @@ def scan_root(
                 counters.files += 1
                 counters.bytes += entry.size
                 pending.append(
-                    (
-                        scan_id, volume_id, current_dir_id, entry.name,
-                        _extension(entry.name), entry.size, entry.alloc_size or None,
-                        entry.mtime_ns, entry.ctime_ns, entry.file_id,
-                        1, entry.attributes, read_state,
+                    stage_row_for(
+                        scan_id, volume_id, current_dir_id, entry, read_state
                     )
                 )
 

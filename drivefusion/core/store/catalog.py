@@ -319,12 +319,101 @@ class Catalog:
         )
         return len(batch)
 
-    def merge_scan(self, scan_id: int, volume_id: int, root_id: int | None) -> dict:
+    def dir_by_frn(self, volume_id: int, frn: int) -> sqlite3.Row | None:
+        """Find a catalogued directory by its file reference number.
+
+        The change journal names parents by frn, so this is how a delta maps a
+        journal record back to a row the catalog already knows.
+        """
+        return self.conn.execute(
+            "SELECT * FROM dir WHERE volume_id = ? AND frn = ?", (volume_id, frn)
+        ).fetchone()
+
+    def tombstone_subtree(self, dir_id: int) -> int:
+        """Mark a directory, its descendants, and all their files as gone.
+
+        Used when a fresh listing shows a directory is no longer present. The
+        rows are kept — a tombstone is how the catalog outlives the bits, and
+        is what lets a report say what was lost when a drive fails.
+        """
+        now = utcnow()
+        ids = [
+            int(row["id"])
+            for row in self.conn.execute(
+                "WITH RECURSIVE tree(id) AS ("
+                "  SELECT id FROM dir WHERE id = ?"
+                "  UNION ALL"
+                "  SELECT d.id FROM dir d JOIN tree ON d.parent_id = tree.id"
+                ") SELECT id FROM tree",
+                (dir_id,),
+            )
+        ]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        self.conn.execute(
+            f"UPDATE file SET vanished_at = ? WHERE vanished_at IS NULL "
+            f"AND dir_id IN ({placeholders})",
+            (now, *ids),
+        )
+        self.conn.execute(
+            f"UPDATE dir SET vanished_at = ? WHERE vanished_at IS NULL "
+            f"AND id IN ({placeholders})",
+            (now, *ids),
+        )
+        return len(ids)
+
+    def stage_dirs(self, scan_id: int, dir_ids: Iterable[int]) -> int:
+        """Record which directories a scan actually examined."""
+        rows = [(scan_id, dir_id) for dir_id in dir_ids]
+        if rows:
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO stage_dir (scan_id, dir_id) VALUES (?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    def journal_cursor(self, volume_id: int) -> tuple[int | None, int | None]:
+        row = self.conn.execute(
+            "SELECT usn_journal_id, usn_next FROM volume WHERE id = ?", (volume_id,)
+        ).fetchone()
+        if row is None:
+            return (None, None)
+        return (row["usn_journal_id"], row["usn_next"])
+
+    def set_journal_cursor(
+        self, volume_id: int, journal_id: int | None, next_usn: int | None
+    ) -> None:
+        """Store the point a delta rescan should resume from.
+
+        Written only after a scan has been merged. Advancing it earlier would
+        mean a crash between enumeration and merge silently skipped the changes
+        that were read but never recorded.
+        """
+        self.conn.execute(
+            "UPDATE volume SET usn_journal_id = ?, usn_next = ? WHERE id = ?",
+            (journal_id, next_usn, volume_id),
+        )
+
+    def merge_scan(
+        self,
+        scan_id: int,
+        volume_id: int,
+        root_id: int | None,
+        *,
+        vanish_scope: str = "root",
+    ) -> dict:
         """Fold a scan's staged rows into the catalog in one set-based pass.
 
         Returns counts for reporting. This is where the loading strategy from
         docs/PLAN.md §7.2 pays off: one upsert over the staging table instead
         of tens of millions of individual index-updating inserts.
+
+        ``vanish_scope`` decides what "not seen" is allowed to mean. A full
+        scan covered a whole root, so anything under it that went unseen is
+        gone (``"root"``). A delta examined only the directories the journal
+        named, so only those may be tombstoned (``"staged-dirs"``) — applying
+        the root rule to a delta would declare the entire volume missing.
         """
         conn = self.conn
         conn.execute("BEGIN")
@@ -369,8 +458,11 @@ class Catalog:
                 "SELECT COUNT(*) AS n FROM file WHERE volume_id = ?", (volume_id,)
             ).fetchone()["n"]
 
-            vanished = self._mark_vanished(scan_id, volume_id, root_id)
+            vanished = self._mark_vanished(
+                scan_id, volume_id, root_id, vanish_scope
+            )
             conn.execute("DELETE FROM stage_file WHERE scan_id = ?", (scan_id,))
+            conn.execute("DELETE FROM stage_dir WHERE scan_id = ?", (scan_id,))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
@@ -385,7 +477,11 @@ class Catalog:
         }
 
     def _mark_vanished(
-        self, scan_id: int, volume_id: int, root_id: int | None
+        self,
+        scan_id: int,
+        volume_id: int,
+        root_id: int | None,
+        vanish_scope: str = "root",
     ) -> int:
         """Tombstone rows this scan did not see, scoped to what it looked at.
 
@@ -395,6 +491,18 @@ class Catalog:
         sufficient and cheap filter.
         """
         now = utcnow()
+
+        if vanish_scope == "staged-dirs":
+            # Only directories this scan actually listed are eligible. A file
+            # in an unexamined directory is unknown, not gone.
+            cursor = self.conn.execute(
+                "UPDATE file SET vanished_at = ? WHERE vanished_at IS NULL "
+                "AND last_seen_scan < ? AND dir_id IN "
+                "(SELECT dir_id FROM stage_dir WHERE scan_id = ?)",
+                (now, scan_id, scan_id),
+            )
+            return cursor.rowcount
+
         if root_id is None:
             cursor = self.conn.execute(
                 "UPDATE file SET vanished_at = ? WHERE volume_id = ? "

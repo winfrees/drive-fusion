@@ -87,12 +87,23 @@ def fsio_lister(path: str) -> list[DirEntry]:
     return out
 
 
-def default_lister() -> Lister:
-    """The best available directory lister for this platform."""
+def default_lister(*, supports_file_ids: bool | None = None) -> Lister:
+    """The best available directory lister for this platform and volume.
+
+    ``supports_file_ids`` comes from the volume's reported capabilities. exFAT
+    has no dependable persistent file ids, so asking for the id-carrying
+    variant there would record values that do not survive a move — identity on
+    those volumes comes from path plus metadata instead (docs/PLAN.md §6.4).
+    """
     if WINDOWS:
         from drivefusion.core.enum import dirinfo
 
-        return dirinfo.list_directory
+        with_ids = True if supports_file_ids is None else bool(supports_file_ids)
+
+        def lister(path: str):
+            return dirinfo.list_directory(path, with_file_ids=with_ids)
+
+        return lister
     return fsio_lister
 
 
@@ -107,8 +118,9 @@ class ParallelWalker:
         max_inflight: int = DEFAULT_MAX_INFLIGHT,
         follow_links: bool = False,
         prune: Callable[[str, DirEntry], bool] | None = None,
+        supports_file_ids: bool | None = None,
     ) -> None:
-        self.lister = lister or default_lister()
+        self.lister = lister or default_lister(supports_file_ids=supports_file_ids)
         self.workers = max(1, workers)
         self.max_inflight = max(1, max_inflight)
         self.follow_links = follow_links

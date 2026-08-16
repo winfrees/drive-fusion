@@ -30,8 +30,9 @@ rescan incrementally, and search the result.
 |---|---|
 | **M0** Skeleton and guardrails | **done** — gateway, lint, no-touch test, volume fixtures, build |
 | **M1** Catalog core | **done** — scope, discovery, walker, interned schema, merge, CLI |
-| **M2** Fast enumeration | **in progress** — parsers, journal logic, parallel walker done; elevated helper and USN delta wiring remain |
-| M3–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M2** Fast enumeration | **done** — parsers, journal logic, parallel walker, `dfscan-helper`, incremental rescan |
+| M3 Identity & analysis | next |
+| M4–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
 ```
 drivefusion scope add D:\Research

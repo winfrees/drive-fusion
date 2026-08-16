@@ -225,6 +225,9 @@ def cmd_scan(args) -> int:
                 volume_id=root.volume_id,
                 excludes=ExclusionSet.for_root(root.excludes),
                 method=decision.method.value,
+                supports_file_ids=(
+                    bool(volume["supports_file_ids"]) if volume else None
+                ),
             )
             counters = result["counters"]
             merged = result["merged"]

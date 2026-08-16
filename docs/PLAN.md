@@ -280,7 +280,15 @@ the exFAT half of the fleet:
 - The NTFS path launches **`dfscan-helper.exe`**, a small separate executable whose entire
   capability is: open a volume read-only, enumerate, stream records to stdout, exit. No write
   code, no network code, no delete code — an elevated surface of a few hundred lines that can be
-  audited in one sitting.
+  audited in one sitting. It forwards raw IOCTL buffers rather than re-serialising records, so
+  the parent parses them with the same tested functions a same-process read would use and there
+  is no second decoder to keep in step.
+- **How the helper gets its rights, as built at M2:** it is spawned directly and inherits the
+  parent's token, so it works when Drive Fusion is already running elevated and reports a clear
+  reason when it is not. Prompting from a non-elevated process needs `ShellExecuteEx` with the
+  `runas` verb plus a named pipe to carry output back; that lands with the GUI at M4, which has
+  somewhere to host the prompt. Writing it blind now would put untested Win32 plumbing on the
+  privileged path.
 - The helper is covered by the same AST lint and no-touch test as the main application.
 - Elevation is requested per scan, and the consent is recorded in the audit log.
 
@@ -841,7 +849,7 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 |---|---|---|
 | **M0** | Skeleton **and guardrails** | repo layout, `core/fsio.py`, AST lint in CI, no-touch test, VHDX fixture harness, PyInstaller build. *The safety mechanism ships before any code that reads user media.* |
 | **M1** | Catalog core | scope registry, Windows discovery, unprivileged walker, interned-path schema, staging+merge loader, `scope`/`scan`/`find` CLI. **Benchmark gate: single-DB vs. sharded decision (§7.2)** |
-| **M2** | Fast enumeration, **both filesystems** | **In progress.** Done: USN and directory-info binary parsers, FRN path reconstruction, journal state and invalidation decision, backend selection, staleness surfacing, the parallel batch walker (wired into the scanner), Win32 shims, schema v2 with the journal cursor. Remaining: the elevated `dfscan-helper` process, wiring USN deltas through the staging merge, retrieval-pointer verification (§6.6), and Windows validation of every shim. |
+| **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
 | **M3** | Identity & analysis | tiered hashing with layout-ordered reads, duplicate groups, copies-per-drive, under-protected and reclamation reports, fixity baseline |
 | **M4** | GUI shell | PySide6 app: scope, dashboard, drives, virtualized catalog browser with keyset paging |
 | **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |

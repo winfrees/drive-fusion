@@ -31,7 +31,24 @@ analysis = Analysis(
     noarchive=False,
 )
 
+# The elevated enumerator ships as its own binary, not a mode of the main
+# application: only it ever needs administrator rights, and keeping it separate
+# keeps that privileged surface to a few hundred auditable lines
+# (docs/PLAN.md §6.5).
+helper_analysis = Analysis(
+    [os.path.join(ROOT, "drivefusion", "core", "enum", "helper", "__main__.py")],
+    pathex=[ROOT],
+    binaries=[],
+    datas=[],
+    hiddenimports=["drivefusion.core.enum.journal", "drivefusion.core.enum.winio"],
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=["tkinter", "test", "unittest", "pydoc_data"],
+    noarchive=False,
+)
+
 pyz = PYZ(analysis.pure)
+helper_pyz = PYZ(helper_analysis.pure)
 
 exe = EXE(
     pyz,
@@ -53,10 +70,35 @@ exe = EXE(
     ),
 )
 
+helper_exe = EXE(
+    helper_pyz,
+    helper_analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="dfscan-helper",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    # asInvoker as well: the helper is launched by an already-elevated parent
+    # rather than prompting on its own. See core/enum/helper/client.py.
+    manifest=(
+        os.path.join(SPECPATH, "drivefusion.manifest") if IS_WINDOWS else None
+    ),
+)
+
 collect = COLLECT(
     exe,
     analysis.binaries,
     analysis.datas,
+    helper_exe,
+    helper_analysis.binaries,
+    helper_analysis.datas,
     strip=False,
     upx=False,
     name="DriveFusion",

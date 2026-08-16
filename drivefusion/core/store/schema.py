@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -140,6 +140,9 @@ CREATE TABLE IF NOT EXISTS dir (
 );
 CREATE INDEX IF NOT EXISTS ix_dir_root ON dir(root_id);
 CREATE INDEX IF NOT EXISTS ix_dir_parent ON dir(parent_id);
+-- Resolves a change-journal parent reference to a catalogued directory.
+CREATE INDEX IF NOT EXISTS ix_dir_vol_frn ON dir(volume_id, frn)
+    WHERE frn IS NOT NULL;
 
 -- Maintained at scan time so the tree view never aggregates on demand.
 CREATE TABLE IF NOT EXISTS dir_rollup (
@@ -211,6 +214,16 @@ CREATE TABLE IF NOT EXISTS stage_file (
     read_state  TEXT NOT NULL DEFAULT 'ok'
 );
 
+-- Directories a scan actually looked at. A full scan covers a whole root, so
+-- tombstoning is scoped by root_id; a delta covers only the directories the
+-- journal named, and tombstoning anything outside them would declare files
+-- gone that were simply not examined.
+CREATE TABLE IF NOT EXISTS stage_dir (
+    scan_id     INTEGER NOT NULL,
+    dir_id      INTEGER NOT NULL,
+    PRIMARY KEY (scan_id, dir_id)
+) WITHOUT ROWID;
+
 -- Append-only, hash-chained (docs/PLAN.md §7.3, FAIR R1.2 provenance).
 CREATE TABLE IF NOT EXISTS audit (
     id          INTEGER PRIMARY KEY,
@@ -231,6 +244,9 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE volume ADD COLUMN usn_journal_id INTEGER",
         "ALTER TABLE volume ADD COLUMN usn_next INTEGER",
     ),
+    # v3 adds only new tables and indexes, which the DDL above creates with
+    # IF NOT EXISTS on the upgrade pass; no ALTER is needed.
+    3: (),
 }
 
 
