@@ -19,7 +19,7 @@ def catalog(tmp_path: Path) -> Catalog:
         yield cat
 
 
-def scan(catalog: Catalog, root: Path, excludes=None) -> dict:
+def scan(catalog: Catalog, root: Path, excludes=None, lister=None) -> dict:
     volume_id = catalog.upsert_volume(volume_guid="test:1", fs_type="exfat")
     root_id = catalog.add_scope_root(volume_id, str(root))
     return scan_root(
@@ -28,6 +28,7 @@ def scan(catalog: Catalog, root: Path, excludes=None) -> dict:
         root_id=root_id,
         volume_id=volume_id,
         excludes=excludes,
+        lister=lister,
     )
 
 
@@ -176,31 +177,36 @@ def test_scan_records_coverage(catalog: Catalog, sample_tree: Path) -> None:
 def test_dehydrated_files_are_catalogued_but_not_opened(
     catalog: Catalog, sample_tree: Path, monkeypatch
 ) -> None:
-    """Cloud placeholders belong in the catalog; opening them does not."""
+    """Cloud placeholders belong in the catalog; opening them does not.
+
+    The marker is injected through the lister rather than by patching the
+    gateway, because which lister the scan uses is platform-dependent: Windows
+    reads directories through the Win32 batch call, so patching
+    ``fsio.scandir`` would have quietly tested nothing there.
+    """
     from drivefusion.core import fsio
+    from drivefusion.core.enum import batchwalk
+    from drivefusion.core.enum.records import DirEntry
 
-    real_scandir = fsio.scandir
-
-    def marked(path: str):
-        for entry in real_scandir(path):
+    def marked_lister(path: str) -> list[DirEntry]:
+        out = []
+        for entry in batchwalk.fsio_lister(path):
             if entry.name == "report.txt":
-                yield type(entry)(
-                    name=entry.name, path=entry.path, is_dir=entry.is_dir,
-                    is_symlink=entry.is_symlink,
+                entry = DirEntry(
+                    name=entry.name,
                     attributes=fsio.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
-                    size=entry.size, mtime_ns=entry.mtime_ns,
-                    ctime_ns=entry.ctime_ns, nlink=entry.nlink,
+                    size=entry.size, alloc_size=entry.alloc_size,
+                    mtime_ns=entry.mtime_ns, ctime_ns=entry.ctime_ns,
                     file_id=entry.file_id,
                 )
-            else:
-                yield entry
+            out.append(entry)
+        return out
 
-    monkeypatch.setattr("drivefusion.core.scan.scanner.fsio.scandir", marked)
     monkeypatch.setattr(
         fsio, "open_read", lambda *a, **k: pytest.fail("scan opened a file")
     )
 
-    result = scan(catalog, sample_tree)
+    result = scan(catalog, sample_tree, lister=marked_lister)
     assert result["counters"].dehydrated == 1
 
     row = catalog.conn.execute(

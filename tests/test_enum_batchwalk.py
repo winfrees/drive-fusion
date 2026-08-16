@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -15,6 +16,15 @@ from drivefusion.core.enum.batchwalk import (
 from drivefusion.core.enum.records import DirEntry
 
 DIRECTORY = fsio.FILE_ATTRIBUTE_DIRECTORY
+
+
+def p(*parts: str) -> str:
+    """Join with the platform separator.
+
+    The walker builds child paths with ``os.path.join``, so fixtures that
+    hardcode "/" only match on POSIX and silently mismatch on Windows.
+    """
+    return os.path.join(*parts)
 
 
 def fake_tree(layout: dict[str, list[tuple[str, bool]]]):
@@ -40,13 +50,13 @@ def fake_tree(layout: dict[str, list[tuple[str, bool]]]):
 
 def test_visits_every_directory() -> None:
     layout = {
-        "/root": [("a", True), ("b", True), ("f1.txt", False)],
-        "/root/a": [("a1", True), ("f2.txt", False)],
-        "/root/b": [("f3.txt", False)],
-        "/root/a/a1": [("f4.txt", False)],
+        p("root"): [("a", True), ("b", True), ("f1.txt", False)],
+        p("root", "a"): [("a1", True), ("f2.txt", False)],
+        p("root", "b"): [("f3.txt", False)],
+        p("root", "a", "a1"): [("f4.txt", False)],
     }
     walker = ParallelWalker(fake_tree(layout), workers=4)
-    results = list(walker.walk("/root"))
+    results = list(walker.walk(p("root")))
 
     assert {r.path for r in results} == set(layout)
     assert all(r.ok for r in results)
@@ -57,24 +67,24 @@ def test_visits_every_directory() -> None:
 
 def test_unreadable_directories_are_reported_not_dropped() -> None:
     layout = {
-        "/root": [("ok", True), ("denied", True)],
-        "/root/ok": [("f.txt", False)],
-        # "/root/denied" is deliberately absent, so listing it raises
+        p("root"): [("ok", True), ("denied", True)],
+        p("root", "ok"): [("f.txt", False)],
+        # p("root", "denied") is deliberately absent, so listing it raises
     }
-    results = list(ParallelWalker(fake_tree(layout), workers=2).walk("/root"))
+    results = list(ParallelWalker(fake_tree(layout), workers=2).walk(p("root")))
 
     failed = [r for r in results if not r.ok]
     assert len(failed) == 1
-    assert failed[0].path == "/root/denied"
+    assert failed[0].path == p("root", "denied")
     assert "no such directory" in failed[0].error
 
     # The failure must not abort the rest of the traversal.
-    assert {r.path for r in results if r.ok} == {"/root", "/root/ok"}
+    assert {r.path for r in results if r.ok} == {p("root"), p("root", "ok")}
 
 
 def test_links_are_not_traversed() -> None:
     def lister(path: str):
-        if path == "/root":
+        if path == p("root"):
             return [
                 DirEntry(
                     name="loop",
@@ -84,7 +94,7 @@ def test_links_are_not_traversed() -> None:
             ]
         raise AssertionError(f"walker followed a reparse point into {path}")
 
-    results = list(ParallelWalker(lister, workers=2).walk("/root"))
+    results = list(ParallelWalker(lister, workers=2).walk(p("root")))
     assert len(results) == 1
     assert results[0].entries[0].name == "loop"
 
@@ -93,7 +103,7 @@ def test_dot_entries_are_not_descended() -> None:
     """FAT-family listings include . and ..; descending them never terminates."""
 
     def lister(path: str):
-        if path != "/root":
+        if path != p("root"):
             raise AssertionError(f"descended into {path}")
         return [
             DirEntry(name=".", attributes=DIRECTORY, size=0, alloc_size=0,
@@ -102,15 +112,15 @@ def test_dot_entries_are_not_descended() -> None:
                      mtime_ns=0, ctime_ns=0),
         ]
 
-    assert len(list(ParallelWalker(lister, workers=2).walk("/root"))) == 1
+    assert len(list(ParallelWalker(lister, workers=2).walk(p("root")))) == 1
 
 
 def test_directories_are_listed_concurrently() -> None:
     """Depth is the whole point: serial listing would take workers x longer."""
     width = 8
-    layout = {"/root": [(f"d{i}", True) for i in range(width)]}
+    layout = {p("root"): [(f"d{i}", True) for i in range(width)]}
     for i in range(width):
-        layout[f"/root/d{i}"] = [("f.txt", False)]
+        layout[p("root", f"d{i}")] = [("f.txt", False)]
 
     base = fake_tree(layout)
     concurrent = 0
@@ -131,7 +141,7 @@ def test_directories_are_listed_concurrently() -> None:
 
     walker = ParallelWalker(slow_lister, workers=width)
     start = time.perf_counter()
-    results = list(walker.walk("/root"))
+    results = list(walker.walk(p("root")))
     elapsed = time.perf_counter() - start
 
     assert len(results) == width + 1
@@ -143,9 +153,9 @@ def test_directories_are_listed_concurrently() -> None:
 def test_inflight_submissions_are_bounded() -> None:
     """A wide tree must not queue a future per directory up front."""
     width = 200
-    layout = {"/root": [(f"d{i}", True) for i in range(width)]}
+    layout = {p("root"): [(f"d{i}", True) for i in range(width)]}
     for i in range(width):
-        layout[f"/root/d{i}"] = []
+        layout[p("root", f"d{i}")] = []
 
     base = fake_tree(layout)
     live = 0
@@ -164,15 +174,15 @@ def test_inflight_submissions_are_bounded() -> None:
                 live -= 1
 
     walker = ParallelWalker(counting_lister, workers=4, max_inflight=8)
-    results = list(walker.walk("/root"))
+    results = list(walker.walk(p("root")))
 
     assert len(results) == width + 1
     assert peak <= 8
 
 
 def test_empty_directory_terminates() -> None:
-    results = list(ParallelWalker(fake_tree({"/root": []})).walk("/root"))
-    assert results == [DirectoryResult(path="/root", entries=())]
+    results = list(ParallelWalker(fake_tree({p("root"): []})).walk(p("root")))
+    assert results == [DirectoryResult(path=p("root"), entries=())]
 
 
 def test_fsio_lister_reads_a_real_tree(sample_tree: Path) -> None:
@@ -191,6 +201,8 @@ def test_walker_over_a_real_tree(sample_tree: Path) -> None:
 
     listed = {r.path for r in results if r.ok}
     expected = {str(sample_tree)} | {
-        str(p) for p in sample_tree.rglob("*") if p.is_dir() and not p.is_symlink()
+        str(child)
+        for child in sample_tree.rglob("*")
+        if child.is_dir() and not child.is_symlink()
     }
     assert listed == expected

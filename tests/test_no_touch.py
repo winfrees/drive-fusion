@@ -228,7 +228,10 @@ def test_reading_does_not_update_access_times(sample_tree: Path) -> None:
         (lambda root: (root / "docs" / "report.txt").unlink(), "deleted"),
         (lambda root: (root / "docs" / "new.txt").write_bytes(b"new"), "created"),
         (lambda root: os.utime(root / "docs" / "report.txt", (0, 0)), "modified"),
-        (lambda root: (root / "docs" / "report.txt").chmod(0o600), "modified"),
+        # 0o444, not 0o600: Windows only models the read-only bit, so a mode
+        # that leaves the file writable changes nothing there and the case
+        # would pass vacuously.
+        (lambda root: (root / "docs" / "report.txt").chmod(0o444), "modified"),
     ],
 )
 def test_the_snapshot_detects_tampering(sample_tree: Path, damage, expected: str) -> None:
