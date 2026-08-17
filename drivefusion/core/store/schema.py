@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -165,6 +165,9 @@ CREATE TABLE IF NOT EXISTS content (
     format_id   TEXT,
     format_risk TEXT
 );
+-- Careful: SQLite treats every NULL as distinct in a UNIQUE index, so this
+-- does NOT constrain rows where full_hash is still NULL. Catalog.upsert_content
+-- matches that case explicitly; see the note there before changing either.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_content_hash
     ON content(size_bytes, quick_hash, full_hash);
 
@@ -214,6 +217,22 @@ CREATE TABLE IF NOT EXISTS stage_file (
     read_state  TEXT NOT NULL DEFAULT 'ok'
 );
 
+-- Fixity over time: the same content re-hashed later. Content whose hash
+-- changed while its modification time did not is silent corruption, which is
+-- exactly what a catalog is for — nobody notices bit rot by looking at a
+-- folder (docs/PLAN.md §6.2).
+CREATE TABLE IF NOT EXISTS fixity_check (
+    id              INTEGER PRIMARY KEY,
+    content_id      INTEGER REFERENCES content(id),
+    file_id         INTEGER REFERENCES file(id),
+    checked_at      TEXT NOT NULL,
+    expected_hash   BLOB,
+    observed_hash   BLOB,
+    result          TEXT NOT NULL   -- ok|mismatch|unreadable|missing
+);
+CREATE INDEX IF NOT EXISTS ix_fixity_result ON fixity_check(result)
+    WHERE result != 'ok';
+
 -- Directories a scan actually looked at. A full scan covers a whole root, so
 -- tombstoning is scoped by root_id; a delta covers only the directories the
 -- journal named, and tombstoning anything outside them would declare files
@@ -244,9 +263,10 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE volume ADD COLUMN usn_journal_id INTEGER",
         "ALTER TABLE volume ADD COLUMN usn_next INTEGER",
     ),
-    # v3 adds only new tables and indexes, which the DDL above creates with
-    # IF NOT EXISTS on the upgrade pass; no ALTER is needed.
+    # v3 and v4 add only new tables and indexes, which the DDL above creates
+    # with IF NOT EXISTS on the upgrade pass; no ALTER is needed.
     3: (),
+    4: (),
 }
 
 

@@ -23,15 +23,16 @@ disclaimer in the plan.
 
 ## Status
 
-**M1 complete — the catalog works end to end.** You can register scan scope, enumerate it,
-rescan incrementally, and search the result.
+**M3 complete — the tool now answers use cases 1 and 2.** You can register scan scope,
+enumerate it, rescan incrementally, search it, establish content identity, and get
+redundancy, duplication, and fixity reports.
 
 | Milestone | State |
 |---|---|
 | **M0** Skeleton and guardrails | **done** — gateway, lint, no-touch test, volume fixtures, build |
 | **M1** Catalog core | **done** — scope, discovery, walker, interned schema, merge, CLI |
 | **M2** Fast enumeration | **done** — parsers, journal logic, parallel walker, `dfscan-helper`, incremental rescan |
-| M3 Identity & analysis | next |
+| **M3** Identity & analysis | **done** — tiered hashing, duplicate groups, copies-per-drive, fixity |
 | M4–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
 ```
@@ -39,8 +40,16 @@ drivefusion scope add D:\Research
 drivefusion scope preview 1        # counts what a scan would cover, writes nothing
 drivefusion scan
 drivefusion find "*.psd"
+drivefusion hash                   # content identity; the only verb that reads file bodies
+drivefusion report                 # duplication, durability, and fixity findings
+drivefusion verify                 # re-hash and report silent corruption
 drivefusion status
 ```
+
+Redundancy is counted **over distinct physical drives, not over paths**. Two copies on one
+drive are one copy — if that drive dies they go together — and a hardlink is the same file
+seen twice, not a second copy of anything. Both rules exist because getting them wrong does
+not raise an error; it produces a confident number that is false.
 
 Measured at 3M files: **222 bytes per file** (≈10.4 GB projected at 50M), 192k rows/s merge,
 555 MB peak RSS — all inside the [§13 budgets](docs/PLAN.md). Run `python tools/benchmark.py`

@@ -105,9 +105,78 @@ def test_unknown_scope_root_is_an_error(cli, capsys) -> None:
 
 
 def test_planned_verbs_report_their_milestone(cli, capsys) -> None:
-    for verb, milestone in (("report", "M3"), ("plan", "M7"), ("export", "M8")):
+    for verb, milestone in (("score", "M6"), ("plan", "M7"), ("export", "M8")):
         assert cli(verb) == 2
         assert milestone in capsys.readouterr().err
+
+
+def test_hash_report_and_verify(cli, tmp_path: Path, capsys) -> None:
+    tree = tmp_path / "media"
+    (tree / "sub").mkdir(parents=True)
+    payload = b"duplicated content" * 60
+    (tree / "one.bin").write_bytes(payload)
+    (tree / "sub" / "two.bin").write_bytes(payload)
+    (tree / "solo.bin").write_bytes(b"x" * 977)
+
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    capsys.readouterr()
+
+    assert cli("hash") == 0
+    assert "quick-hashed" in capsys.readouterr().out
+
+    assert cli("report") == 0
+    report = capsys.readouterr().out
+    assert "one.bin" in report and "two.bin" in report
+    # The solo file has a size no other file shares, so it is never opened —
+    # and the report has to say so rather than implying full coverage.
+    assert "no content identity yet" in report
+    # A reclamation figure must never read as an instruction.
+    assert "never deletes" in report
+
+    assert cli("report", "duplicates") == 0
+    assert "more than one path" in capsys.readouterr().out
+
+    assert cli("verify") == 0
+    verified = capsys.readouterr().out
+    assert "checked:    2" in verified
+    assert "mismatched: 0" in verified
+
+
+def test_verify_exits_nonzero_on_corruption(cli, tmp_path: Path, capsys) -> None:
+    """A fixity failure is a finding; it must not look like a clean run."""
+    import os
+
+    tree = tmp_path / "media"
+    tree.mkdir()
+    payload = b"fixity" * 100
+    (tree / "a.bin").write_bytes(payload)
+    (tree / "b.bin").write_bytes(payload)
+
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    assert cli("hash") == 0
+    capsys.readouterr()
+
+    target = tree / "a.bin"
+    before = os.stat(target)
+    damaged = bytearray(payload)
+    damaged[len(payload) // 2] = ord("!")
+    target.write_bytes(bytes(damaged))
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert cli("verify") == 1
+    assert "mismatched: 1" in capsys.readouterr().out
+
+    assert cli("report", "integrity") == 0
+    incidents = capsys.readouterr().out
+    assert "mismatch" in incidents and "a.bin" in incidents
+
+
+def test_report_on_an_empty_catalog_says_so(cli, capsys) -> None:
+    assert cli("report") == 0
+    out = capsys.readouterr().out
+    assert "distinct content:  0" in out
 
 
 def test_scan_without_scope_is_an_error(cli, capsys) -> None:

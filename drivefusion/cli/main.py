@@ -15,7 +15,16 @@ from pathlib import Path
 
 from drivefusion import __version__
 from drivefusion.core import discovery
+from drivefusion.core.analysis import (
+    content_paths,
+    duplicate_groups,
+    integrity_incidents,
+    reclamation_candidates,
+    redundancy_summary,
+    under_protected,
+)
 from drivefusion.core.enum.backend import describe_age, method_summary, plan_enumeration
+from drivefusion.core.identity import HASH_ALGO, hash_pass, verify_pass
 from drivefusion.core.scan import preview_root, scan_root
 from drivefusion.core.scope import ExclusionSet, ScopeError, validate_new_root
 from drivefusion.core.store.catalog import Catalog
@@ -28,7 +37,6 @@ DEFAULT_CATALOG = Path(
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
-    "report": ("duplicate, redundancy, and integrity reports", "M3"),
     "score": ("FAIR and NDSA scorecards", "M6"),
     "plan": ("build a consolidation plan", "M7"),
     "export": ("write reports, manifests, and bundles to an export folder", "M8"),
@@ -88,6 +96,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-vanished", action="store_true",
         help="include files last seen in an earlier scan",
     )
+
+    hashing = subparsers.add_parser(
+        "hash", help="establish content identity for catalogued files"
+    )
+    hashing.add_argument(
+        "--volume", type=int, default=None, metavar="ID",
+        help="restrict to one volume",
+    )
+    hashing.add_argument(
+        "--limit", type=int, default=None, help="stop after this many candidates"
+    )
+
+    report = subparsers.add_parser(
+        "report", help="duplicate, redundancy, and integrity reports"
+    )
+    report.add_argument(
+        "kind", nargs="?", default="summary",
+        choices=("summary", "duplicates", "redundancy", "integrity"),
+    )
+    report.add_argument("--top", type=int, default=20, help="rows to show")
+    report.add_argument(
+        "--min-copies", type=int, default=2, metavar="N",
+        help="copies on distinct drives a file should have (default: 2)",
+    )
+
+    verify = subparsers.add_parser(
+        "verify", help="re-hash catalogued content and report fixity failures"
+    )
+    verify.add_argument("--volume", type=int, default=None, metavar="ID")
+    verify.add_argument("--limit", type=int, default=None)
 
     subparsers.add_parser("status", help="catalog summary")
     subparsers.add_parser("volumes", help="volumes currently attached")
@@ -271,6 +309,166 @@ def cmd_find(args) -> int:
         return 0
 
 
+def cmd_hash(args) -> int:
+    """Tier 1 and tier 2 hashing.
+
+    This is the only verb that reads file *contents*; it still opens every file
+    read-only through the gateway and writes nothing back to disk.
+    """
+    with Catalog(args.catalog) as catalog:
+        def report(counters) -> None:
+            print(f"  {counters.summary()}", flush=True)
+
+        print(f"hashing with {HASH_ALGO} (files are opened read-only) ...")
+        counters = hash_pass(
+            catalog, volume_id=args.volume, limit=args.limit, progress=report
+        )
+        if not counters.candidates:
+            print(
+                "nothing to hash: every catalogued file already has an identity, "
+                "or has a size shared with no other file"
+            )
+            return 0
+        print(f"  {counters.summary()}")
+        print(f"  read {_human_bytes(counters.bytes_read)} of file contents")
+        if counters.unreadable_paths:
+            print("  first unreadable paths:")
+            for line in counters.unreadable_paths[:5]:
+                print(f"    {line}")
+        return 0
+
+
+def _print_group(catalog, group, *, show_paths: int = 4) -> None:
+    line = (
+        f"{_human_bytes(group.size_bytes):>12}  "
+        f"{group.paths} path(s) on {group.drives} drive(s)"
+    )
+    if group.physical_copies != group.paths:
+        # Hardlinks: fewer real copies than paths, and the difference matters.
+        line += f", {group.physical_copies} physical copies"
+    if group.reclaimable_bytes:
+        line += f" — {_human_bytes(group.reclaimable_bytes)} duplicated on one drive"
+    print(line)
+    for path in content_paths(catalog, group.content_id, limit=show_paths):
+        print(f"              {path}")
+    if group.paths > show_paths:
+        print(f"              ... and {group.paths - show_paths} more")
+
+
+def cmd_report(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        summary = redundancy_summary(catalog, min_copies=args.min_copies)
+
+        if summary["unhashed_files"] and args.kind != "integrity":
+            # Stated, never implied: a report over a partly-hashed catalog
+            # describes only the part that was hashed.
+            print(
+                f"note: {summary['unhashed_files']:,} catalogued files have no "
+                "content identity yet.\n"
+                "      Files with a size shared by no other file are never "
+                "opened and never will be;\n"
+                "      run `drivefusion hash` if you expect more coverage than "
+                "this.\n"
+            )
+
+        if args.kind in ("summary", "redundancy"):
+            print("catalog")
+            print(f"  distinct content:  {summary['distinct_content']:,}")
+            print(f"  catalogued paths:  {summary['catalogued_paths']:,}")
+            print(f"  bytes over paths:  {_human_bytes(summary['path_bytes'])}")
+            print(f"  distinct bytes:    {_human_bytes(summary['unique_bytes'])}")
+            print(
+                "  duplicate weight:  "
+                f"{_human_bytes(summary['duplicate_overhead_bytes'])}"
+            )
+            print(
+                f"\ndurability (target: {args.min_copies} copies on distinct drives)"
+            )
+            print(f"  under-protected:   {summary['under_protected_items']:,} items")
+            print(
+                "  at risk:           "
+                f"{_human_bytes(summary['under_protected_bytes'])}"
+            )
+            print(
+                "  same-drive waste:  "
+                f"{_human_bytes(summary['reclaimable_bytes'])}"
+            )
+
+        if args.kind in ("summary", "redundancy"):
+            exposed = under_protected(
+                catalog, min_copies=args.min_copies, limit=args.top
+            )
+            if exposed:
+                print(
+                    f"\nheld on fewer than {args.min_copies} drives "
+                    f"(largest {len(exposed)}):"
+                )
+                for group in exposed:
+                    _print_group(catalog, group)
+
+        if args.kind == "duplicates":
+            groups = duplicate_groups(catalog, limit=args.top)
+            if not groups:
+                print("no content found at more than one path")
+                return 0
+            print(f"content at more than one path (largest {len(groups)}):")
+            for group in groups:
+                _print_group(catalog, group)
+
+        if args.kind == "summary":
+            waste = reclamation_candidates(catalog, limit=args.top)
+            if waste:
+                print(
+                    f"\nduplicated within a single drive — space without "
+                    f"durability (largest {len(waste)}):"
+                )
+                for group in waste:
+                    _print_group(catalog, group)
+                print(
+                    "\nThese are observations, not instructions. Drive Fusion "
+                    "never deletes\nand never emits a command that would."
+                )
+
+        if args.kind in ("summary", "integrity"):
+            incidents = integrity_incidents(catalog, limit=args.top)
+            if incidents:
+                print(f"\nfixity failures ({len(incidents)}):")
+                for incident in incidents:
+                    print(
+                        f"  {incident['result']:10} {incident['path']}"
+                        f"{os.sep}{incident['name']}"
+                    )
+                    print(
+                        f"             checked {incident['checked_at']}; this "
+                        f"content is on {incident['other_copies']} drive(s)"
+                    )
+            elif args.kind == "integrity":
+                print("no fixity failures recorded; run `drivefusion verify` to check")
+
+        return 0
+
+
+def cmd_verify(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        print("verifying content against recorded hashes ...")
+        result = verify_pass(catalog, volume_id=args.volume, limit=args.limit)
+        print(f"  checked:    {result['checked']:,}")
+        print(f"  mismatched: {result['mismatched']:,}")
+        print(f"  unreadable: {result['unreadable']:,}")
+        if not result["checked"] and not result["unreadable"]:
+            print(
+                "\nNothing in this catalog has a hash to verify against yet. "
+                "Run `drivefusion hash`\nfirst; note that files whose size is "
+                "shared with no other file are never opened,\nso they carry no "
+                "hash and cannot be checked for corruption."
+            )
+            return 0
+        for incident in result["incidents"][:20]:
+            print(f"  {incident['result']:10} {incident['path']}")
+        # A mismatch is a finding, not a crash, but it should not look like success.
+        return 1 if result["mismatched"] else 0
+
+
 def cmd_status(args) -> int:
     with Catalog(args.catalog) as catalog:
         counts = catalog.counts()
@@ -282,6 +480,10 @@ def cmd_status(args) -> int:
         print(f"  directories: {counts['dirs']:,}")
         print(f"  files:       {counts['files']:,}")
         print(f"  bytes:       {_human_bytes(counts['bytes'])}")
+        print(
+            f"  identified:  {counts['identified']:,} files "
+            f"({counts['content']:,} distinct content items)"
+        )
         if counts["vanished"]:
             print(f"  vanished:    {counts['vanished']:,} (metadata retained)")
         if counts["files"]:
@@ -343,6 +545,9 @@ DISPATCH = {
     ("scope", "preview"): cmd_scope_preview,
     ("scan", None): cmd_scan,
     ("find", None): cmd_find,
+    ("hash", None): cmd_hash,
+    ("report", None): cmd_report,
+    ("verify", None): cmd_verify,
     ("status", None): cmd_status,
     ("volumes", None): cmd_volumes,
 }

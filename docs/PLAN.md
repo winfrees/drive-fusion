@@ -558,6 +558,13 @@ FTS5 over 50M full paths would add several GB and a long build. Instead:
 - **Integrity drift** — content whose hash changed while its mtime did not (silent corruption),
   files now unreadable, and content that has vanished since a prior scan. Each incident names
   the other drives holding a verified copy that could repair it — a repair *you* perform.
+  **Verification covers both hash tiers.** A full hash is exact by definition; below
+  `SMALL_FILE_BYTES` the quick hash also read every byte, so it is an equally valid witness.
+  Checking only full hashes would skip most of a real catalog by file count while still
+  reporting "0 mismatches" — a fixity result that silently excludes the majority of the data
+  is worse than none, because it reads as a clean bill of health. Files whose size is unique
+  in the catalog are never hashed at all, and reports say so rather than implying coverage
+  they do not have.
 
 ### 8.2 Durability: turning `l`, `p`, `o` into a number
 
@@ -850,7 +857,7 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 | **M0** | Skeleton **and guardrails** | repo layout, `core/fsio.py`, AST lint in CI, no-touch test, VHDX fixture harness, PyInstaller build. *The safety mechanism ships before any code that reads user media.* |
 | **M1** | Catalog core | scope registry, Windows discovery, unprivileged walker, interned-path schema, staging+merge loader, `scope`/`scan`/`find` CLI. **Benchmark gate: single-DB vs. sharded decision (§7.2)** |
 | **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
-| **M3** | Identity & analysis | tiered hashing with layout-ordered reads, duplicate groups, copies-per-drive, under-protected and reclamation reports, fixity baseline |
+| **M3** | Identity & analysis | **Done.** Tier 1 quick hash and tier 2 full hash with layout-ordered reads, content identity in the catalog, duplicate groups, copies counted over distinct physical drives, under-protected and reclamation reports, the `fixity_check` table and a `verify` pass covering **both** tiers (§8.1). `hash`/`report`/`verify` CLI verbs; the no-touch cycle extended to cover all of it. Deferred with reasons: retrieval-pointer read ordering (→ M4, measurable only against real fragmented NTFS volumes, and the batch walker's ordering already recovers most of the benefit); per-drive parallel hashing (→ M5, where drive health tells us which devices tolerate concurrent reads). |
 | **M4** | GUI shell | PySide6 app: scope, dashboard, drives, virtualized catalog browser with keyset paging |
 | **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |
 | **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |

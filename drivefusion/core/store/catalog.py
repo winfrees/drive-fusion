@@ -593,6 +593,136 @@ class Catalog:
         self.conn.execute("ANALYZE")
         self.conn.execute("PRAGMA optimize")
 
+    # -- content identity --------------------------------------------------
+
+    def hash_candidates(self, volume_id: int | None = None, limit: int | None = None):
+        """Files worth opening: those whose size occurs more than once.
+
+        A size that appears exactly once anywhere in the catalog cannot be a
+        duplicate of anything, so the file is never opened — that is what keeps
+        a multi-terabyte pass tractable (docs/PLAN.md §6.4).
+
+        Ordered by volume then file reference number, which approximates
+        physical layout on NTFS and turns a seek-bound workload into a largely
+        sequential one. exFAT has no file ids, so those rows fall back to
+        directory order, which approximates allocation order on the
+        mostly-append-only drives this tool targets.
+        """
+        sql = (
+            "SELECT f.id, f.volume_id, f.dir_id, f.name, f.size_bytes, f.frn "
+            "FROM file f "
+            "WHERE f.content_id IS NULL "
+            "  AND f.vanished_at IS NULL "
+            "  AND f.read_state = 'ok' "
+            "  AND f.size_bytes > 0 "
+            "  AND f.size_bytes IN ("
+            "      SELECT size_bytes FROM file "
+            "      WHERE vanished_at IS NULL AND read_state = 'ok' "
+            "      GROUP BY size_bytes HAVING COUNT(*) > 1"
+            "  )"
+        )
+        params: list = []
+        if volume_id is not None:
+            sql += " AND f.volume_id = ?"
+            params.append(volume_id)
+        sql += " ORDER BY f.volume_id, f.frn IS NULL, f.frn, f.dir_id, f.name"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return list(self.conn.execute(sql, params))
+
+    def upsert_content(
+        self,
+        *,
+        size_bytes: int,
+        quick_hash: bytes,
+        full_hash: bytes | None,
+        hash_algo: str,
+    ) -> int:
+        """Return the content row for a hash, creating it if new.
+
+        The ``full_hash IS NULL`` case is handled separately, and for the same
+        reason the directory root is (see ``intern_dir``): **SQLite treats
+        every NULL as distinct in a UNIQUE index**, so
+        ``UNIQUE(size_bytes, quick_hash, full_hash)`` does not constrain rows
+        that have no full hash yet. Left to the upsert, two byte-identical
+        files would each get their own content row, and the tool would report
+        one copy of each where there are two of one — the precise opposite of
+        what it exists to say.
+        """
+        if full_hash is None:
+            existing = self.conn.execute(
+                "SELECT id FROM content WHERE size_bytes = ? AND quick_hash = ? "
+                "AND full_hash IS NULL",
+                (size_bytes, quick_hash),
+            ).fetchone()
+            if existing:
+                return int(existing["id"])
+            cursor = self.conn.execute(
+                "INSERT INTO content (size_bytes, quick_hash, full_hash, hash_algo) "
+                "VALUES (?, ?, NULL, ?)",
+                (size_bytes, quick_hash, hash_algo),
+            )
+            return int(cursor.lastrowid)
+
+        row = self.conn.execute(
+            "INSERT INTO content (size_bytes, quick_hash, full_hash, hash_algo) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(size_bytes, quick_hash, full_hash) DO UPDATE SET "
+            "  hash_algo = excluded.hash_algo "
+            "RETURNING id",
+            (size_bytes, quick_hash, full_hash, hash_algo),
+        ).fetchone()
+        return int(row["id"])
+
+    def assign_content(self, pairs: Iterable[tuple[int, int]]) -> int:
+        """Attach files to content rows: an iterable of (content_id, file_id)."""
+        rows = list(pairs)
+        if rows:
+            self.conn.executemany(
+                "UPDATE file SET content_id = ? WHERE id = ?", rows
+            )
+        return len(rows)
+
+    def quick_hash_collisions(self) -> list[sqlite3.Row]:
+        """Content rows whose quick hash may be hiding more than one file.
+
+        Only these need a full read. A group is ambiguous when several *files*
+        with different bytes could share the sampled blocks; a group whose
+        quick hash covered the whole file is already exact.
+        """
+        return list(
+            self.conn.execute(
+                "SELECT c.id, c.size_bytes, COUNT(f.id) AS files "
+                "FROM content c JOIN file f ON f.content_id = c.id "
+                "WHERE c.full_hash IS NULL AND f.vanished_at IS NULL "
+                "GROUP BY c.id HAVING COUNT(f.id) > 1"
+            )
+        )
+
+    def files_for_content(self, content_id: int) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                "SELECT id, volume_id, dir_id, name, size_bytes FROM file "
+                "WHERE content_id = ? AND vanished_at IS NULL",
+                (content_id,),
+            )
+        )
+
+    def record_fixity(
+        self,
+        content_id: int,
+        file_id: int,
+        expected: bytes | None,
+        observed: bytes | None,
+        result: str,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO fixity_check (content_id, file_id, checked_at, "
+            "expected_hash, observed_hash, result) VALUES (?, ?, ?, ?, ?, ?)",
+            (content_id, file_id, utcnow(), expected, observed, result),
+        )
+
     # -- queries -----------------------------------------------------------
 
     def find(
@@ -639,6 +769,9 @@ class Catalog:
             "  (SELECT COUNT(*) FROM file WHERE vanished_at IS NULL) AS files, "
             "  (SELECT COALESCE(SUM(size_bytes), 0) FROM file "
             "     WHERE vanished_at IS NULL) AS bytes, "
-            "  (SELECT COUNT(*) FROM file WHERE vanished_at IS NOT NULL) AS vanished"
+            "  (SELECT COUNT(*) FROM file WHERE vanished_at IS NOT NULL) AS vanished, "
+            "  (SELECT COUNT(*) FROM file WHERE vanished_at IS NULL "
+            "     AND content_id IS NOT NULL) AS identified, "
+            "  (SELECT COUNT(*) FROM content) AS content"
         ).fetchone()
         return dict(row)

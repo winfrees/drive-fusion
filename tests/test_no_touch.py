@@ -21,7 +21,15 @@ from pathlib import Path
 import pytest
 
 from drivefusion.core import fsio
+from drivefusion.core.analysis import (
+    duplicate_groups,
+    integrity_incidents,
+    reclamation_candidates,
+    redundancy_summary,
+    under_protected,
+)
 from drivefusion.core.errors import ReadOnlyViolation
+from drivefusion.core.identity import hash_pass, verify_pass
 from drivefusion.core.scan import scan_root
 from drivefusion.core.store.catalog import Catalog
 from tests.fixtures import tree as tree_fixture
@@ -33,9 +41,10 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     M0: enumerate, stat, and hash every readable file through the gateway.
     M1: plus a real catalog scan — scope registration, directory interning,
     staging, merge, rollups, and search.
-    M3 adds hashing tiers and analysis, M7 planning, M8 export — each extending
-    this function rather than testing separately, so the guarantee is always
-    asserted over the whole pipeline rather than the parts wired up first.
+    M3: plus tiered hashing, fixity verification, and every analysis query.
+    M7 planning and M8 export extend this function in turn, rather than being
+    tested separately, so the guarantee is always asserted over the whole
+    pipeline rather than the parts wired up first.
 
     The catalog is deliberately created outside the tree under test: writing it
     inside would be a change to the thing being observed.
@@ -75,6 +84,23 @@ def run_full_cycle(root: Path) -> dict[str, str]:
             )
             list(catalog.find("%", limit=100))
             catalog.counts()
+
+            # M3: content identity and fixity. These are the passes that open
+            # file bodies in bulk — the ones most able to disturb a drive — so
+            # the guarantee has to cover them, and the reports they feed.
+            counters = hash_pass(catalog)
+            assert counters.candidates, (
+                "the fixture must contain same-size files, or this stage "
+                "reads nothing and asserts nothing"
+            )
+            verified = verify_pass(catalog)
+            assert verified["checked"], "fixity stage verified nothing"
+
+            redundancy_summary(catalog)
+            duplicate_groups(catalog)
+            under_protected(catalog)
+            reclamation_candidates(catalog)
+            integrity_incidents(catalog)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
