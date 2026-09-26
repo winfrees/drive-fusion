@@ -41,3 +41,44 @@ def ntfs_volume(request, tmp_path_factory):
 def exfat_volume(request, tmp_path_factory):
     """A real exFAT volume with a 128 KiB cluster size."""
     return _volume_fixture(request, tmp_path_factory, "exfat")
+
+
+# -- GUI ---------------------------------------------------------------------
+
+def _qt_unavailable() -> str | None:
+    """Why GUI tests cannot run here, or None if they can.
+
+    PySide6 is an optional dependency, and a machine can import it and still fail
+    to construct a QApplication for want of platform libraries. Both are skips
+    with a stated reason, never a silent pass.
+    """
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        return "PySide6 is not installed (pip install -e '.[gui]')"
+
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError as exc:
+        return f"Qt platform libraries missing: {exc}"
+
+    if QApplication.instance() is None:
+        try:
+            QApplication([])
+        except Exception as exc:  # noqa: BLE001
+            return f"Qt could not start: {exc}"
+    return None
+
+
+@pytest.fixture(scope="session")
+def qt_app():
+    """A QApplication for the whole session; Qt permits only one."""
+    reason = _qt_unavailable()
+    if reason:
+        pytest.skip(reason)
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance()

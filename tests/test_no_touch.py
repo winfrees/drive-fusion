@@ -21,6 +21,14 @@ from pathlib import Path
 import pytest
 
 from drivefusion.core import fsio
+from drivefusion.core.analysis.browse import (
+    PAGE_ROWS,
+    child_dirs,
+    count_files_in_dir,
+    dir_summary,
+    drive_inventory,
+    files_in_dir,
+)
 from drivefusion.core.analysis import (
     duplicate_groups,
     integrity_incidents,
@@ -42,6 +50,7 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     M1: plus a real catalog scan — scope registration, directory interning,
     staging, merge, rollups, and search.
     M3: plus tiered hashing, fixity verification, and every analysis query.
+    M4: plus the full browse traversal the GUI performs.
     M7 planning and M8 export extend this function in turn, rather than being
     tested separately, so the guarantee is always asserted over the whole
     pipeline rather than the parts wired up first.
@@ -101,10 +110,48 @@ def run_full_cycle(root: Path) -> dict[str, str]:
             under_protected(catalog)
             reclamation_candidates(catalog)
             integrity_incidents(catalog)
+
+            # M4: everything the browser reads. The GUI is a reader, and this is
+            # where that claim is checked against the fixture tree rather than
+            # argued from the absence of a delete button.
+            _browse_everything(catalog)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
     return digests
+
+
+def _browse_everything(catalog) -> None:
+    """Walk the catalogued tree the way the browser screen does.
+
+    Deliberately exhaustive: every directory is summarised and every page of
+    every listing is fetched, so the traversal the GUI performs is covered by the
+    no-touch assertion rather than assumed to be harmless.
+    """
+    drive_inventory(catalog)
+
+    pending: list[int | None] = [None]
+    seen_dirs = 0
+    seen_files = 0
+    while pending:
+        parent = pending.pop()
+        for row in child_dirs(catalog, parent):
+            seen_dirs += 1
+            pending.append(row.id)
+            dir_summary(catalog, row.id)
+            seen_files += count_files_in_dir(catalog, row.id)
+
+            after = None
+            while True:
+                page = files_in_dir(catalog, row.id, after_name=after)
+                if not page:
+                    break
+                after = page[-1].name
+                if len(page) < PAGE_ROWS:
+                    break
+
+    assert seen_dirs, "the browse stage walked nothing"
+    assert seen_files, "the browse stage listed no files"
 
 
 #: Landmarks that must appear in any honest snapshot of the fixture tree.

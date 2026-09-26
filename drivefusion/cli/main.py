@@ -43,6 +43,37 @@ PLANNED_VERBS = {
 }
 
 
+#: Name of the windowed executable built by packaging/drivefusion.spec.
+WINDOWED_EXECUTABLE_STEM = "drivefusion"
+
+
+def wants_window(argv0: str, *, frozen: bool, has_command: bool) -> bool:
+    """True when this invocation should open the GUI instead of printing help.
+
+    The frozen build ships two front ends from one entry point: a windowed
+    ``DriveFusion.exe`` and a console ``drivefusion.exe``. Double-clicking the
+    windowed one passes no arguments, and printing help at a process with no
+    console writes to nowhere at all — the user sees the program start and vanish.
+    So that one case opens the window.
+
+    Distinguished by the executable's name, capitalised in the windowed build,
+    and only ever when frozen: from a source checkout ``python -m drivefusion``
+    should keep printing help.
+
+    The basename is taken separator-agnostically rather than with ``pathlib``,
+    which on POSIX does not split a Windows path at all and would hand back the
+    whole string as the stem. The answer must not depend on which platform is
+    reading the argument.
+    """
+    if has_command or not frozen:
+        return False
+    basename = argv0.replace("\\", "/").rsplit("/", 1)[-1]
+    stem = basename[:-4] if basename.lower().endswith(".exe") else basename
+    # Case-sensitive on purpose: "DriveFusion" is the window, "drivefusion" the
+    # console tool, and on Windows only the spelling tells them apart.
+    return stem != WINDOWED_EXECUTABLE_STEM and stem.lower() == WINDOWED_EXECUTABLE_STEM
+
+
 def _human_bytes(value: int) -> str:
     size = float(value)
     for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
@@ -127,6 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--volume", type=int, default=None, metavar="ID")
     verify.add_argument("--limit", type=int, default=None)
 
+    subparsers.add_parser("gui", help="open the desktop window")
     subparsers.add_parser("status", help="catalog summary")
     subparsers.add_parser("volumes", help="volumes currently attached")
 
@@ -469,6 +501,17 @@ def cmd_verify(args) -> int:
         return 1 if result["mismatched"] else 0
 
 
+def cmd_gui(args) -> int:
+    """Open the window.
+
+    The GUI is an optional extra, so a missing PySide6 is an instruction rather
+    than a traceback — the CLI does everything the window does.
+    """
+    from drivefusion.gui.app import main as gui_main
+
+    return gui_main(catalog=args.catalog)
+
+
 def cmd_status(args) -> int:
     with Catalog(args.catalog) as catalog:
         counts = catalog.counts()
@@ -548,6 +591,7 @@ DISPATCH = {
     ("hash", None): cmd_hash,
     ("report", None): cmd_report,
     ("verify", None): cmd_verify,
+    ("gui", None): cmd_gui,
     ("status", None): cmd_status,
     ("volumes", None): cmd_volumes,
 }
@@ -558,6 +602,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.command:
+        if wants_window(
+            sys.argv[0] if sys.argv else "",
+            frozen=getattr(sys, "frozen", False),
+            has_command=False,
+        ):
+            return cmd_gui(args)
         parser.print_help()
         return 0
 

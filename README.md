@@ -23,9 +23,10 @@ disclaimer in the plan.
 
 ## Status
 
-**M3 complete — the tool now answers use cases 1 and 2.** You can register scan scope,
-enumerate it, rescan incrementally, search it, establish content identity, and get
-redundancy, duplication, and fixity reports.
+**M4 complete — there is a window now.** The tool answers use cases 1 and 2 from either the
+command line or a desktop app: register scan scope, enumerate it, rescan incrementally, search
+it, establish content identity, browse the catalog, and get redundancy, duplication and fixity
+reports.
 
 | Milestone | State |
 |---|---|
@@ -33,7 +34,8 @@ redundancy, duplication, and fixity reports.
 | **M1** Catalog core | **done** — scope, discovery, walker, interned schema, merge, CLI |
 | **M2** Fast enumeration | **done** — parsers, journal logic, parallel walker, `dfscan-helper`, incremental rescan |
 | **M3** Identity & analysis | **done** — tiered hashing, duplicate groups, copies-per-drive, fixity |
-| M4–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M4** GUI shell | **done** — Scope, Dashboard, Drives, Catalog; paged views, cancellable scans, UAC prompt |
+| M5–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
 ```
 drivefusion scope add D:\Research
@@ -44,7 +46,18 @@ drivefusion hash                   # content identity; the only verb that reads 
 drivefusion report                 # duplication, durability, and fixity findings
 drivefusion verify                 # re-hash and report silent corruption
 drivefusion status
+drivefusion gui                    # the desktop window (needs the [gui] extra)
 ```
+
+The window has four screens — Scope, Dashboard, Drives and Catalog. Scans and hash passes run
+on a worker thread with a Cancel button that takes effect within a directory rather than at the
+end of a root, the catalog browser pages through a directory 200 rows at a time by keyset seek
+rather than `OFFSET`, and file counts are computed off-thread and shown as "counting…" until
+they land. Screens that belong to later milestones are listed and visibly disabled rather than
+present and inert.
+
+There is no delete, move, or apply control anywhere in it, and a test walks the whole widget
+tree on every CI run to assert there never is one.
 
 Redundancy is counted **over distinct physical drives, not over paths**. Two copies on one
 drive are one copy — if that drive dies they go together — and a hardlink is the same file
@@ -58,7 +71,7 @@ to reproduce.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,gui]"
 
 python tools/ro_lint.py        # the read-only guard; exits non-zero on any finding
 python -m pytest -q            # full suite
@@ -69,8 +82,12 @@ pyinstaller packaging/drivefusion.spec --noconfirm --clean
 ```
 
 The VHDX volume tests need Windows and administrator rights (they call `diskpart`) and skip
-everywhere else. CI runs the lint and tests on Windows and Linux, then builds and smoke-tests
-the Windows executable.
+everywhere else. The GUI tests run headless under `QT_QPA_PLATFORM=offscreen` on both
+platforms; CI installs Qt's runtime libraries and then asserts Qt can actually start, because a
+GUI suite that skips itself would otherwise turn a green run into a statement about nothing.
+
+CI runs the lint and tests on Windows and Linux, then builds and smoke-tests the Windows
+executables — a windowed `DriveFusion.exe` and a console `drivefusion.exe` from one build.
 
 ### The one rule
 

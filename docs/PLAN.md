@@ -754,12 +754,29 @@ because no such capability exists behind them.
 8. **Exports** — RO-Crate/BagIt bundles, DataCite metadata, per-drive manifests, CSV/HTML
    reports, each timestamped into its own folder recording the standards versions used.
 
+**Threading, because a frozen window is a bug:** a ``sqlite3`` connection belongs to the
+thread that created it, so the GUI keeps **one catalog per thread** — never one shared
+connection, and never `check_same_thread=False`, which converts a loud failure into silently
+interleaved transactions. WAL mode lets the UI thread read while a worker writes, which is what
+keeps the browser scrolling during a scan. Cancellation is cooperative and checked *per
+directory* rather than per root: a root can take hours, and a Cancel button that only takes
+effect when the work finishes is a lie.
+
 **Virtualization rules, non-negotiable at 50M rows:** models fetch pages on demand via
 `canFetchMore`/`fetchMore`; **keyset pagination** (`WHERE (dir_id, name) > (?, ?) LIMIT 200`),
 never `OFFSET`, which degrades linearly; filtered row counts are computed asynchronously and
 displayed as "counting…" rather than blocking on `COUNT(*)`; no view ever calls `rowCount()`
 over an unbounded query. Every long operation is cancellable, and the read-only guarantee is
 stated in the UI wherever a user would expect a destructive action.
+
+Two further rules M4 settled in code:
+
+- **Unknown is rendered as unknown.** A file with no content identity yet shows "—" in the
+  Copies column, never "1". "1" would be a confident claim that no copy exists elsewhere, made
+  about a file the tool has not read.
+- **The browser counts copies with the analysis module's own expression**, imported rather than
+  rewritten. Two implementations of "what is a copy" would eventually disagree, and then one
+  screen would contradict `drivefusion report` with no way for a user to tell which was right.
 
 ---
 
@@ -858,7 +875,7 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 | **M1** | Catalog core | scope registry, Windows discovery, unprivileged walker, interned-path schema, staging+merge loader, `scope`/`scan`/`find` CLI. **Benchmark gate: single-DB vs. sharded decision (§7.2)** |
 | **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
 | **M3** | Identity & analysis | **Done.** Tier 1 quick hash and tier 2 full hash with layout-ordered reads, content identity in the catalog, duplicate groups, copies counted over distinct physical drives, under-protected and reclamation reports, the `fixity_check` table and a `verify` pass covering **both** tiers (§8.1). `hash`/`report`/`verify` CLI verbs; the no-touch cycle extended to cover all of it. Deferred with reasons: retrieval-pointer read ordering (→ M4, measurable only against real fragmented NTFS volumes, and the batch walker's ordering already recovers most of the benefit); per-drive parallel hashing (→ M5, where drive health tells us which devices tolerate concurrent reads). |
-| **M4** | GUI shell | PySide6 app: scope, dashboard, drives, virtualized catalog browser with keyset paging |
+| **M4** | GUI shell | **Done.** PySide6 app: Scope, Dashboard, Drives and Catalog screens; per-thread catalog connections; cancellable background tasks with progress; a keyset-paged file table and lazily-expanded directory tree; asynchronous row counting; UAC elevation offered per scan (the M2 deferral, §6.5); `drivefusion gui`; two front ends from one build (windowed `DriveFusion.exe`, console `drivefusion.exe`). The no-touch cycle now includes the full browse traversal, and the read-only guarantee is asserted over the *widget tree* — no control may carry a destructive verb. Deferred with reasons: editable drive metadata and SMART sparklines (→ M5, where the durability model gives those fields meaning); retrieval-pointer read ordering (→ M5, measurable only against real fragmented NTFS). |
 | **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |
 | **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
 | **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |

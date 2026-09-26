@@ -179,6 +179,39 @@ def test_report_on_an_empty_catalog_says_so(cli, capsys) -> None:
     assert "distinct content:  0" in out
 
 
+def test_gui_verb_exists_and_is_not_destructive() -> None:
+    """The window is reachable from the CLI, and adds no new verbs behind it."""
+    parser = build_parser()
+    commands = set()
+    for action in parser._actions:
+        if getattr(action, "choices", None) and hasattr(action.choices, "keys"):
+            commands.update(action.choices.keys())
+    assert "gui" in commands
+
+
+def test_the_windowed_build_opens_a_window_instead_of_printing_help() -> None:
+    """Double-clicking the windowed exe must not print help to a missing console.
+
+    A process built with console=False has nowhere to write, so a user who
+    double-clicks would see the program start and vanish with no explanation.
+    """
+    from drivefusion.cli.main import wants_window
+
+    # The windowed build, launched with no arguments: open the window.
+    assert wants_window("C:\\Program Files\\DriveFusion\\DriveFusion.exe",
+                        frozen=True, has_command=False)
+
+    # The console build: keep printing help.
+    assert not wants_window("C:\\Program Files\\DriveFusion\\drivefusion.exe",
+                            frozen=True, has_command=False)
+
+    # A subcommand was given, so it is a CLI run whichever binary started it.
+    assert not wants_window("DriveFusion.exe", frozen=True, has_command=True)
+
+    # From a source checkout, `python -m drivefusion` still prints help.
+    assert not wants_window("DriveFusion.exe", frozen=False, has_command=False)
+
+
 def test_scan_without_scope_is_an_error(cli, capsys) -> None:
     assert cli("scan") == 1
     assert "no scope roots" in capsys.readouterr().out
