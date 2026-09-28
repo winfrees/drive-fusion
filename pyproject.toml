@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drivefusion"
+version = "0.1.0"
+description = "Read-only drive and file cataloging and consolidation planner"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.6"]
+solver = ["ortools>=9.8"]
+fast-hash = ["blake3>=0.4"]
+dev = ["pytest>=8.0", "pyinstaller>=6.3"]
+
+[project.scripts]
+drivefusion = "drivefusion.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["drivefusion*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "windows: requires Windows",
+    "admin: requires administrator/root privileges",
+    "slow: excluded from the fast pre-commit run",
+]
