@@ -105,7 +105,7 @@ def test_unknown_scope_root_is_an_error(cli, capsys) -> None:
 
 
 def test_planned_verbs_report_their_milestone(cli, capsys) -> None:
-    for verb, milestone in (("score", "M6"), ("plan", "M7"), ("export", "M8")):
+    for verb, milestone in (("plan", "M7"), ("export", "M8")):
         assert cli(verb) == 2
         assert milestone in capsys.readouterr().err
 
@@ -316,6 +316,128 @@ def test_risk_report_on_an_unhashed_catalog_says_why_it_is_empty(
 
     assert cli("report", "risk") == 0
     assert "nothing to put a risk figure on" in capsys.readouterr().out
+
+
+def _curated(cli, tmp_path: Path, capsys):
+    """A scanned, hashed tree with one confirmed collection."""
+    root = tmp_path / "drive" / "study-2024"
+    root.mkdir(parents=True)
+    for index in range(10):
+        (root / f"scan-{index}.tif").write_bytes(b"T" * (200_000 + index % 3))
+
+    assert cli("scope", "add", str(tmp_path / "drive")) == 0
+    assert cli("scan") == 0
+    assert cli("hash") == 0
+    assert cli("collections", "propose", "--record") == 0
+    capsys.readouterr()
+    return root
+
+
+def test_collections_propose_confirms_nothing(cli, tmp_path: Path, capsys) -> None:
+    """The milestone's central rule, asserted on the CLI surface too."""
+    root = tmp_path / "drive" / "study-2024"
+    root.mkdir(parents=True)
+    for index in range(10):
+        (root / f"scan-{index}.tif").write_bytes(b"T" * (200_000 + index % 3))
+
+    assert cli("scope", "add", str(tmp_path / "drive")) == 0
+    assert cli("scan") == 0
+    capsys.readouterr()
+
+    assert cli("collections", "propose") == 0
+    proposed = capsys.readouterr().out
+    assert "Nothing is confirmed until you say so" in proposed
+    assert "Nothing was stored" in proposed
+
+    assert cli("collections", "list") == 0
+    assert "No confirmed collections yet" in capsys.readouterr().out
+
+
+def test_accepting_warns_about_the_missing_licence(
+    cli, tmp_path: Path, capsys
+) -> None:
+    """R1.1 is the finding that caps a grade, so it is said at accept time."""
+    _curated(cli, tmp_path, capsys)
+
+    assert cli("collections", "queue") == 0
+    assert "accept <id>" in capsys.readouterr().out
+
+    assert cli("collections", "accept", "1", "--title", "Study 2024") == 0
+    accepted = capsys.readouterr().out
+    assert "membership is a rule" in accepted
+    assert "blocking finding" in accepted
+
+
+def test_score_reports_gaps_remedies_and_its_rubric(
+    cli, tmp_path: Path, capsys
+) -> None:
+    _curated(cli, tmp_path, capsys)
+    assert cli("collections", "accept", "1", "--title", "Study 2024") == 0
+    capsys.readouterr()
+
+    assert cli("score") == 0
+    report = capsys.readouterr().out
+    assert "FAIR:" in report
+    assert "drivefusion-fair-rubric" in report, "the rubric version must be named"
+    assert "BLOCKING R1.1" in report or "BLOCKING" in report
+    assert "remedy:" in report
+    assert "NDSA level" in report
+    # The unfiled bucket is scored separately, never folded into the grade.
+    assert "Unfiled content" in report
+    assert "describe the filed share only" in report
+
+
+def test_score_after_describing_lifts_the_block(cli, tmp_path: Path, capsys) -> None:
+    _curated(cli, tmp_path, capsys)
+    assert cli("collections", "accept", "1", "--title", "Study 2024") == 0
+    assert (
+        cli(
+            "collections", "describe", "1",
+            "--license", "CC-BY-4.0",
+            "--data-type", "imaging",
+            "--description", "Confocal scans.",
+            "--contact", "lab@example.org",
+            "--creators", "A. Researcher",
+            "--project", "Imaging",
+            "--retention-note", "Keep ten years.",
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert cli("score", "1") == 0
+    report = capsys.readouterr().out
+    assert "BLOCKING" not in report
+    assert "pass  R1.1" in report
+
+
+def test_coverage_names_the_unfiled_share(cli, tmp_path: Path, capsys) -> None:
+    _curated(cli, tmp_path, capsys)
+    assert cli("collections", "coverage") == 0
+    coverage = capsys.readouterr().out
+    assert "unfiled" in coverage.lower()
+    assert "in a collection" in coverage
+
+
+def test_vocab_lists_controlled_terms_without_forcing_them(
+    cli, capsys
+) -> None:
+    assert cli("collections", "vocab") == 0
+    vocab = capsys.readouterr().out
+    assert "CC-BY-4.0" in vocab
+    assert "not-for-sharing" in vocab
+    assert "never refused" in vocab, (
+        "the CLI must say an uncontrolled value is recorded, not rejected"
+    )
+
+
+def test_rejecting_a_candidate_is_remembered(cli, tmp_path: Path, capsys) -> None:
+    _curated(cli, tmp_path, capsys)
+    assert cli("collections", "reject", "1") == 0
+    assert "will not be proposed again" in capsys.readouterr().out
+
+    assert cli("collections", "reject", "1") == 1
+    assert "no pending candidate" in capsys.readouterr().err
 
 
 def test_scan_without_scope_is_an_error(cli, capsys) -> None:

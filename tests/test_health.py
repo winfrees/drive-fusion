@@ -382,11 +382,15 @@ def test_the_standards_table_is_declared_as_packaged_data() -> None:
 
 def test_the_table_path_is_resolved_for_a_frozen_build(monkeypatch, tmp_path: Path) -> None:
     """PyInstaller unpacks data under sys._MEIPASS, not beside the modules."""
-    monkeypatch.setattr(afr_module.sys, "_MEIPASS", str(tmp_path), raising=False)
+    from drivefusion.core import standards as core_standards
+
+    monkeypatch.setattr(core_standards.sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert core_standards.standards_dir() == tmp_path / "standards"
     assert afr_module._standards_dir() == tmp_path / "standards" / "afr"
 
-    monkeypatch.delattr(afr_module.sys, "_MEIPASS", raising=False)
+    monkeypatch.delattr(core_standards.sys, "_MEIPASS", raising=False)
     assert afr_module._standards_dir().is_dir(), "checkout path broke"
+    assert core_standards.standards_dir().is_dir()
 
 
 def test_a_missing_table_is_an_error(tmp_path: Path) -> None:

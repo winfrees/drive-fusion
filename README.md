@@ -23,10 +23,9 @@ disclaimer in the plan.
 
 ## Status
 
-**M5 complete — the reports now rank by risk, not just size.** The tool answers use cases 1
-and 2 from either the command line or a desktop app: register scan scope, enumerate it, rescan
-incrementally, search it, establish content identity, browse the catalog, read drive health,
-and get redundancy, duplication, fixity and expected-loss reports.
+**M6 complete — the archive can now describe itself.** On top of cataloging, redundancy and
+risk, Drive Fusion proposes collections out of the directory tree, lets you confirm or decline
+each one, and scores the confirmed ones against FAIR and the NDSA preservation levels.
 
 | Milestone | State |
 |---|---|
@@ -36,7 +35,8 @@ and get redundancy, duplication, fixity and expected-loss reports.
 | **M3** Identity & analysis | **done** — tiered hashing, duplicate groups, copies-per-drive, fixity |
 | **M4** GUI shell | **done** — Scope, Dashboard, Drives, Catalog; paged views, cancellable scans, UAC prompt |
 | **M5** Health & risk | **done** — smartctl parsing, versioned AFR table, durability model, expected bytes lost/yr |
-| M6–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M6** Curation & FAIR | **done** — collection inference and review queue, membership rules, FAIR + NDSA scorecards |
+| M7–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
 ```
 drivefusion scope add D:\Research
@@ -51,6 +51,9 @@ drivefusion health collect         # read SMART; falls back to age estimates
 drivefusion health show            # per-drive failure risk, with its evidence
 drivefusion health set 1 --purchase-date 2021-03-04 --disaster-zone home-office
 drivefusion report risk            # expected bytes lost per year
+drivefusion collections propose    # proposes groupings; confirms nothing
+drivefusion collections accept 1   # confirmation is always an explicit act
+drivefusion score                  # FAIR and NDSA scorecards, with remedies
 drivefusion gui                    # the desktop window (needs the [gui] extra)
 ```
 
@@ -65,6 +68,22 @@ names the table version it used.
 The under-protected queue is ranked by **size × P(loss)**. Ranked by size alone the top of the
 list is whatever is biggest, usually video on a healthy drive; ranked by expected loss it is
 whatever sits on the drive with pending sectors. Only one of those is a work queue.
+
+**Inference proposes; you decide.** There is no directory convention to import, so collections
+are scored out of the tree — size, file-type homogeneity, how tightly the modification dates
+cluster, whether sibling folders follow a dated or numbered pattern — and every proposal shows
+that reasoning, with sample paths and counts, before you accept, rename, merge or decline it.
+A decline is remembered. Confirmed membership is a *rule* over the subtree, so files that land
+there later join without you revisiting the decision.
+
+**The scorecards are built not to flatter.** Criteria the tool cannot assess are excluded from
+the denominator and listed, so a high percentage over a few criteria cannot read as a high
+score. A missing licence caps the grade at `incomplete` however well everything else scores,
+because unlicensed data is not reusable by anyone else — and "not for sharing" is accepted as
+the clear answer that a blank is not. NDSA rows about written policy and staff training are
+reported as *not assessable from a catalog* rather than quietly passed. The unfiled bucket is
+scored separately, because a grade for the curated 12% of an archive is not a grade for the
+archive.
 
 The window has four screens — Scope, Dashboard, Drives and Catalog. Scans and hash passes run
 on a worker thread with a Cancel button that takes effect within a directory rather than at the

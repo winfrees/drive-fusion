@@ -1,0 +1,155 @@
+{
+  "id": "drivefusion-fair-rubric",
+  "version": "1.0.0",
+  "retrieved_at": "2026-10-12",
+  "kind": "rubric",
+  "provenance": {
+    "framework": "FAIR Guiding Principles for scientific data management and stewardship",
+    "citation": "Wilkinson, M. D. et al. (2016). Scientific Data 3, 160018.",
+    "url": "https://www.go-fair.org/fair-principles/",
+    "note": "The principles are the published framework. The operational checks below are this tool's interpretation of them for offline personal and lab archives — they are not part of the published standard, and are versioned separately so a changed interpretation is a data change."
+  },
+  "scoring": {
+    "note": "Each criterion is pass, fail, or not-applicable. A score is the share of applicable criteria passed, weighted. Criteria marked blocking make the collection's grade at most 'incomplete' however well it scores elsewhere.",
+    "grades": [
+      [0.9, "strong"],
+      [0.7, "adequate"],
+      [0.4, "weak"],
+      [0.0, "poor"]
+    ]
+  },
+  "criteria": [
+    {
+      "id": "F1",
+      "principle": "Findable",
+      "title": "Globally unique and persistent identifiers",
+      "check": "local_pid",
+      "weight": 2.0,
+      "blocking": true,
+      "gap": "The collection has no persistent local identifier, so nothing can refer to it stably.",
+      "remedy": "A local_pid is assigned on confirmation; this should never fail, and failing means the row was created outside the confirmation path."
+    },
+    {
+      "id": "F1b",
+      "principle": "Findable",
+      "title": "Content addressed by checksum",
+      "check": "content_identified_share",
+      "threshold": 0.95,
+      "weight": 1.0,
+      "gap": "Some content has no hash, so it has no permanent name independent of its path.",
+      "remedy": "Run a hash pass. Files whose size is unique in the catalog are never opened and cannot be hashed; those are excluded from the denominator."
+    },
+    {
+      "id": "F2",
+      "principle": "Findable",
+      "title": "Rich metadata",
+      "check": "metadata_completeness",
+      "threshold": 0.6,
+      "weight": 2.0,
+      "gap": "Core descriptive fields are empty, so the collection cannot be understood by anyone who did not create it.",
+      "remedy": "Fill title, description, creators, contact and data type."
+    },
+    {
+      "id": "F3",
+      "principle": "Findable",
+      "title": "Metadata explicitly references the data",
+      "check": "manifest_linkage",
+      "weight": 1.0,
+      "gap": "No manifest binds the identifier to checksums, paths and holding drives.",
+      "remedy": "Export the collection; the bundle writes that binding (arrives with M8)."
+    },
+    {
+      "id": "F4",
+      "principle": "Findable",
+      "title": "Indexed and searchable",
+      "check": "indexed",
+      "weight": 1.0,
+      "gap": "The content is not in a searchable index.",
+      "remedy": "Content in the catalog is searchable by name, size, date, drive and collection; this fails only for content outside the catalogued scope."
+    },
+    {
+      "id": "A1",
+      "principle": "Accessible",
+      "title": "Retrievable by identifier",
+      "check": "locatable",
+      "weight": 2.0,
+      "gap": "The collection cannot be located: no live copy is recorded on any known drive.",
+      "remedy": "Attach the drive and rescan, or record where the media is shelved."
+    },
+    {
+      "id": "A2",
+      "principle": "Accessible",
+      "title": "Metadata persists when data does not",
+      "check": "tombstones_kept",
+      "weight": 1.0,
+      "gap": "Descriptions and checksums would not survive the loss of the media.",
+      "remedy": "The catalog tombstones vanished files rather than deleting their rows, so this passes by construction."
+    },
+    {
+      "id": "I1",
+      "principle": "Interoperable",
+      "title": "Formal, shared representation",
+      "check": "export_format",
+      "weight": 1.0,
+      "gap": "The collection has no machine-readable description in a shared format.",
+      "remedy": "RO-Crate and DataCite export arrive with M8."
+    },
+    {
+      "id": "I2",
+      "principle": "Interoperable",
+      "title": "Controlled vocabularies",
+      "check": "vocabulary_terms",
+      "weight": 1.0,
+      "gap": "Data type or license is free text rather than a controlled term, so it cannot be compared or aggregated.",
+      "remedy": "Choose a data type and licence from the shipped vocabularies."
+    },
+    {
+      "id": "I3",
+      "principle": "Interoperable",
+      "title": "Qualified references to other data",
+      "check": "relations",
+      "weight": 1.0,
+      "optional": true,
+      "gap": "No typed relations to other collections or external records.",
+      "remedy": "Where version sets were detected, an IsVersionOf relation is proposed for confirmation."
+    },
+    {
+      "id": "R1",
+      "principle": "Reusable",
+      "title": "Accurate and relevant attributes",
+      "check": "reuse_completeness",
+      "threshold": 0.6,
+      "weight": 1.0,
+      "gap": "Attributes a reuser would need are missing.",
+      "remedy": "Fill description, data type, project and retention note."
+    },
+    {
+      "id": "R1.1",
+      "principle": "Reusable",
+      "title": "Clear and accessible licence",
+      "check": "license",
+      "weight": 3.0,
+      "blocking": true,
+      "gap": "No licence is recorded. Unlicensed data is not reusable by anyone else, whatever else is in place.",
+      "remedy": "Set a licence from the shipped vocabulary. For material that genuinely must not be shared, record that explicitly rather than leaving it blank."
+    },
+    {
+      "id": "R1.2",
+      "principle": "Reusable",
+      "title": "Provenance",
+      "check": "provenance",
+      "weight": 1.0,
+      "gap": "No scan history or fixity record exists for this content.",
+      "remedy": "Scan history is recorded automatically; run a verify pass to add fixity events."
+    },
+    {
+      "id": "R1.3",
+      "principle": "Reusable",
+      "title": "Domain-relevant community standards",
+      "check": "format_risk",
+      "weight": 1.0,
+      "gap": "A substantial share of the collection is in formats at risk of becoming unreadable.",
+      "remedy": "Consider open preservation formats for the at-risk share. This is a recommendation only — Drive Fusion never converts anything."
+    }
+  ]
+}

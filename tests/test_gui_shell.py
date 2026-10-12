@@ -19,6 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel
+
 from drivefusion.core.scan import scan_root
 from drivefusion.core.store.catalog import Catalog
 
@@ -124,11 +127,12 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
 
     from drivefusion.gui.main_window import PLANNED
 
-    assert window.stack.count() == 4
-    assert window.nav.count() == 4 + len(PLANNED)
+    built = window.stack.count()
+    assert built == 5, "Scope, Dashboard, Drives, Catalog, Collections"
+    assert window.nav.count() == built + len(PLANNED)
 
     for offset, (name, milestone) in enumerate(PLANNED):
-        item = window.nav.item(4 + offset)
+        item = window.nav.item(built + offset)
         assert name in item.text()
         assert milestone in item.text()
         assert item.flags() == Qt.NoItemFlags, "a pending screen must not be clickable"
@@ -312,6 +316,147 @@ def test_dashboard_states_partial_coverage(window) -> None:
 
 def test_dashboard_says_reclamation_is_an_observation(window) -> None:
     assert "never deletes" in window.dashboard.detail.text().lower()
+
+
+def test_the_collections_screen_makes_no_implicit_accept(window, monkeypatch) -> None:
+    """Nothing should be one keystroke from confirmed.
+
+    The whole design rests on inference proposing and a person deciding, so the
+    queue starts with no selection and the accept control is explicit.
+    """
+    from drivefusion.gui.screens import collections as collections_screen
+
+    assert window.collections.queue.currentItem() is None
+    assert window.collections.accept_button.text().endswith("…"), (
+        "accept must open a dialog rather than confirm in place"
+    )
+    assert window.collections.selected_candidate() is None
+
+    # QMessageBox.information is modal and blocks a headless run forever. The
+    # *module-level name* is patched rather than the Qt class attribute:
+    # monkeypatch.setattr on a Shiboken static method is silently ignored, so
+    # patching QMessageBox.information directly leaves the real dialog in place
+    # and the run hangs instead of failing.
+    shown: list = []
+
+    class _Recording:
+        @staticmethod
+        def information(*args, **kwargs):
+            shown.append(args)
+
+    monkeypatch.setattr(collections_screen, "QMessageBox", _Recording)
+
+    # Accepting with nothing chosen must not invent a collection.
+    from drivefusion.core.curate import collections as collections_module
+
+    before = len(collections_module.all_collections(window.session.catalog()))
+    window.collections.accept_selected()
+    after = len(collections_module.all_collections(window.session.catalog()))
+    assert after == before, "accepting nothing created a collection"
+    assert shown, "the user was given no feedback"
+
+
+def test_the_collections_screen_leads_with_coverage(window) -> None:
+    """A grade over the filed share must not read as a grade for the archive."""
+    text = window.collections.coverage.text().lower()
+    assert "coverage" in text or "nothing catalogued" in text
+
+
+def test_a_candidate_shows_its_evidence_before_any_decision(
+    window, tmp_path: Path
+) -> None:
+    """A proposal you cannot audit is one you cannot safely accept."""
+    from drivefusion.core.curate import candidates
+
+    # Built here rather than taken from the shared fixture: inference ignores
+    # subtrees under a megabyte, so a small tree would make this test skip —
+    # and a skipped test asserts nothing.
+    project = tmp_path / "evidence-drive" / "imaging-2024"
+    project.mkdir(parents=True)
+    for index in range(12):
+        (project / f"scan-{index:03d}.tif").write_bytes(b"T" * (200_000 + index))
+
+    catalog = window.session.catalog()
+    volume_id = catalog.upsert_volume(volume_guid="evidence:1", fs_type="ntfs")
+    root_id = catalog.add_scope_root(volume_id, str(tmp_path / "evidence-drive"))
+    scan_root(
+        catalog,
+        root_path=str(tmp_path / "evidence-drive"),
+        root_id=root_id,
+        volume_id=volume_id,
+    )
+
+    proposals = candidates.propose(catalog)
+    assert proposals, "the fixture should have produced a proposal"
+    candidates.record(catalog, proposals)
+    window.collections.refresh()
+    assert window.collections.queue.topLevelItemCount() >= 1
+
+    window.collections.queue.setCurrentItem(window.collections.queue.topLevelItem(0))
+    evidence = window.collections.evidence.toPlainText()
+    assert "Why this was proposed" in evidence
+    assert "Sample files" in evidence
+    assert "File types" in evidence
+
+
+def test_a_collection_without_a_licence_is_flagged_in_the_list(
+    window, tmp_path: Path
+) -> None:
+    from drivefusion.core.curate import collections as collections_module
+
+    catalog = window.session.catalog()
+    collections_module.create(catalog, title="Undeclared")
+    window.collections.refresh()
+
+    item = window.collections.confirmed.topLevelItem(0)
+    assert item.text(3) == "not set"
+    assert "R1.1" in item.toolTip(3)
+    assert item.text(4) == "incomplete", (
+        "a missing licence must cap the grade in the listing, not only in a report"
+    )
+
+
+def test_the_scorecard_states_what_it_did_not_score(window) -> None:
+    """A high percentage over a few criteria must not read as a high score."""
+    from drivefusion.core.curate import collections as collections_module
+
+    catalog = window.session.catalog()
+    collection = collections_module.create(catalog, title="Partly scored")
+    window.collections.refresh()
+
+    for index in range(window.collections.confirmed.topLevelItemCount()):
+        item = window.collections.confirmed.topLevelItem(index)
+        if int(item.data(0, Qt.UserRole)) == collection.id:
+            window.collections.confirmed.setCurrentItem(item)
+            break
+
+    card = window.collections.card.toPlainText()
+    assert "Not scored:" in card
+    assert "NDSA level" in card
+
+
+def test_the_describe_dialog_offers_a_private_answer(window) -> None:
+    """"Not for sharing" is a clear licence; a blank is not, and caps the grade."""
+    from drivefusion.gui.screens.collections import DescribeDialog
+
+    dialog = DescribeDialog({"title": "X"}, confirming=True)
+    assert "not-for-sharing" in dialog._licence.placeholderText()
+    assert "not reusable" in dialog.findChildren(QLabel)[0].text().lower()
+
+    dialog._licence.setText("CC0-1.0")
+    assert dialog.values()["license"] == "CC0-1.0"
+
+
+def test_describe_writes_back_only_what_changed(window) -> None:
+    """Otherwise opening and saving overwrites values set from the CLI."""
+    from drivefusion.gui.screens.collections import DescribeDialog
+
+    existing = {"title": "Kept", "license": "MIT", "description": "As before"}
+    dialog = DescribeDialog(existing)
+    assert dialog.changes(existing) == {}
+
+    dialog._licence.setText("CC-BY-4.0")
+    assert dialog.changes(existing) == {"license": "CC-BY-4.0"}
 
 
 def test_the_drives_screen_never_shows_risk_without_its_confidence(window) -> None:

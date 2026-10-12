@@ -29,6 +29,8 @@ from drivefusion.core.analysis.browse import (
     drive_inventory,
     files_in_dir,
 )
+from drivefusion.core.curate import candidates, collections
+from drivefusion.core.fair import ndsa, scorecard
 from drivefusion.core.analysis.exposure import (
     RiskIndex,
     content_exposure,
@@ -58,6 +60,7 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     M3: plus tiered hashing, fixity verification, and every analysis query.
     M4: plus the full browse traversal the GUI performs.
     M5: plus the durability model and the risk reports over the catalog.
+    M6: plus collection inference, confirmation, and both scorecards.
     M7 planning and M8 export extend this function in turn, rather than being
     tested separately, so the guarantee is always asserted over the whole
     pipeline rather than the parts wired up first.
@@ -127,6 +130,11 @@ def run_full_cycle(root: Path) -> dict[str, str]:
             # invoked here — it needs a real device, and the fixture tree is a
             # directory — but every analysis pass that reads the catalog is.
             _assess_risk(catalog)
+
+            # M6: inference, confirmation, and both scorecards. Curation reads
+            # the catalog and writes only to it; asserted here rather than
+            # argued from the absence of a write path.
+            _curate_and_score(catalog)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -179,6 +187,37 @@ def _assess_risk(catalog) -> None:
     content_exposure(catalog, limit=50)
     riskiest_drives(catalog)
     under_protected(catalog, by_risk=True)
+
+
+def _curate_and_score(catalog) -> None:
+    """Propose, confirm, and score, as the Collections screen does."""
+    proposals = candidates.propose(catalog, min_confidence=0.0)
+    candidates.record(catalog, proposals)
+
+    queued = candidates.pending(catalog)
+    if queued:
+        collection = candidates.accept(
+            catalog, queued[0]["id"], license="CC0-1.0", data_type="mixed"
+        )
+    else:
+        # The fixture may hold no subtree that scores as a collection; the
+        # scoring paths still need exercising, so one is confirmed by hand.
+        collection = collections.create(
+            catalog, title="No-touch collection", license="CC0-1.0"
+        )
+        root = catalog.conn.execute(
+            "SELECT id FROM dir WHERE parent_id IS NULL LIMIT 1"
+        ).fetchone()
+        if root is not None:
+            collections.add_rule(catalog, collection.id, pattern=str(root["id"]))
+
+    collections.coverage(catalog)
+    collections.stats(catalog, collection.id)
+    card = scorecard.score(catalog, collection.id)
+    assert card.results, "the scorecard produced no criteria"
+    scorecard.format_recommendations(catalog, collection.id)
+    ndsa.score(catalog, collection.id)
+    ndsa.score_unfiled(catalog)
 
 
 #: Landmarks that must appear in any honest snapshot of the fixture tree.

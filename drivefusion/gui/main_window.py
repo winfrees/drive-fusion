@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from drivefusion import __version__
 from drivefusion.gui import elevation
 from drivefusion.gui.screens.browser import BrowserScreen
+from drivefusion.gui.screens.collections import CollectionsScreen
 from drivefusion.gui.screens.dashboard import DashboardScreen
 from drivefusion.gui.screens.drives import DrivesScreen
 from drivefusion.gui.screens.scope import ScopeScreen
@@ -44,7 +45,6 @@ READ_ONLY_NOTICE = "Read-only — nothing on your drives is ever modified"
 
 #: Screens the plan defines but this milestone does not ship, and their milestone.
 PLANNED = (
-    ("Collections", "M6"),
     ("Duplicates & Versions", "M7"),
     ("Plan", "M7"),
     ("Exports", "M8"),
@@ -90,12 +90,14 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardScreen(self.session, self.runner)
         self.drives = DrivesScreen(self.session, self.runner)
         self.browser = BrowserScreen(self.session, self.runner)
+        self.collections = CollectionsScreen(self.session, self.runner)
 
         for name, screen in (
             ("Scope", self.scope),
             ("Dashboard", self.dashboard),
             ("Drives", self.drives),
             ("Catalog", self.browser),
+            ("Collections", self.collections),
         ):
             self.nav.addItem(QListWidgetItem(name))
             self.stack.addWidget(screen)
@@ -120,6 +122,10 @@ class MainWindow(QMainWindow):
         self.drives.healthRequested.connect(
             lambda body: self.run_task(body, "Reading drive health")
         )
+        self.collections.proposeRequested.connect(
+            lambda body: self.run_task(body, "Looking for collections")
+        )
+        self.collections.catalogChanged.connect(self.refresh_all)
         self.cancel_button.clicked.connect(self._cancel_current)
         self._current_task = None
 
@@ -134,6 +140,7 @@ class MainWindow(QMainWindow):
         self.dashboard.refresh()
         self.drives.refresh()
         self.browser.refresh()
+        self.collections.refresh()
 
     # -- background work ----------------------------------------------------
 

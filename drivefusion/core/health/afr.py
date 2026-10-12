@@ -9,10 +9,11 @@ the AFR table is the first of them.
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+from drivefusion.core import standards as core_standards
 
 DEFAULT_TABLE = "afr-defaults-v1.json"
 
@@ -20,15 +21,12 @@ DEFAULT_TABLE = "afr-defaults-v1.json"
 def _standards_dir() -> Path:
     """Where the shipped tables live, in a checkout and in a frozen build.
 
-    PyInstaller unpacks data files under ``sys._MEIPASS``, so a path derived from
-    ``__file__`` alone resolves inside the bundle's module tree and finds
-    nothing. Getting this wrong would not fail in CI — it would ship an
+    Delegates to :func:`core.standards.standards_dir`, which knows that
+    PyInstaller unpacks data files under ``sys._MEIPASS`` rather than beside the
+    modules. Getting that wrong would not fail in CI — it would ship an
     executable that raises AfrError the first time a user asked for a report.
     """
-    bundle = getattr(sys, "_MEIPASS", None)
-    if bundle:
-        return Path(bundle) / "standards" / "afr"
-    return Path(__file__).resolve().parents[3] / "standards" / "afr"
+    return core_standards.standards_dir() / "afr"
 
 
 #: Location of the shipped tables. Resolved once; see :func:`_standards_dir`.

@@ -37,7 +37,6 @@ DEFAULT_CATALOG = Path(
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
-    "score": ("FAIR and NDSA scorecards", "M6"),
     "plan": ("build a consolidation plan", "M7"),
     "export": ("write reports, manifests, and bundles to an export folder", "M8"),
 }
@@ -157,6 +156,76 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("--volume", type=int, default=None, metavar="ID")
     verify.add_argument("--limit", type=int, default=None)
+
+    collections_parser = subparsers.add_parser(
+        "collections", help="propose, confirm, and describe collections"
+    )
+    collections_sub = collections_parser.add_subparsers(
+        dest="collections_command", metavar="ACTION"
+    )
+
+    propose_parser = collections_sub.add_parser(
+        "propose", help="score subtrees and fill the review queue (confirms nothing)"
+    )
+    propose_parser.add_argument("--limit", type=int, default=25)
+    propose_parser.add_argument(
+        "--record", action="store_true",
+        help="store the proposals in the review queue",
+    )
+
+    collections_sub.add_parser("queue", help="proposals awaiting your decision")
+    collections_sub.add_parser("list", help="confirmed collections")
+
+    accept_parser = collections_sub.add_parser(
+        "accept", help="confirm a proposal as a collection"
+    )
+    accept_parser.add_argument("candidate_id", type=int)
+    accept_parser.add_argument("--title")
+    accept_parser.add_argument("--license")
+    accept_parser.add_argument("--data-type")
+
+    reject_parser = collections_sub.add_parser(
+        "reject", help="decline a proposal; it will not be offered again"
+    )
+    reject_parser.add_argument("candidate_id", type=int)
+
+    merge_parser = collections_sub.add_parser(
+        "merge", help="add a proposal's subtree to an existing collection"
+    )
+    merge_parser.add_argument("candidate_id", type=int)
+    merge_parser.add_argument("collection_id", type=int)
+
+    describe_parser = collections_sub.add_parser(
+        "describe", help="fill in the metadata the scorecard asks for"
+    )
+    describe_parser.add_argument("collection_id", type=int)
+    for field in (
+        "title", "description", "contact", "license", "data-type", "project",
+        "retention-note", "external-pid",
+    ):
+        describe_parser.add_argument(f"--{field}")
+    describe_parser.add_argument(
+        "--creators", help="comma-separated list of creator names"
+    )
+    describe_parser.add_argument("--ndsa-target", type=int, choices=(1, 2, 3, 4))
+    describe_parser.add_argument("--min-copies", type=int)
+
+    collections_sub.add_parser("vocab", help="the controlled terms available")
+    collections_sub.add_parser(
+        "coverage", help="how much of the archive is filed, and how much is not"
+    )
+
+    score_parser = subparsers.add_parser(
+        "score", help="FAIR and NDSA scorecards"
+    )
+    score_parser.add_argument(
+        "collection_id", type=int, nargs="?",
+        help="one collection, or all of them plus the unfiled bucket",
+    )
+    score_parser.add_argument(
+        "--formats", action="store_true",
+        help="list at-risk formats and open alternatives (a recommendation only)",
+    )
 
     health = subparsers.add_parser(
         "health", help="read drive health and estimate failure risk"
@@ -586,6 +655,320 @@ def cmd_verify(args) -> int:
         return 1 if result["mismatched"] else 0
 
 
+# -- collections --------------------------------------------------------------
+
+def cmd_collections_propose(args) -> int:
+    from drivefusion.core.curate import candidates
+
+    with Catalog(args.catalog) as catalog:
+        proposals = candidates.propose(catalog, limit=args.limit)
+        if not proposals:
+            print(
+                "No candidates. Either everything is already filed, or no "
+                "subtree looks enough like a collection to propose — both are "
+                "fine. You can also create one by hand."
+            )
+            return 0
+
+        print(f"{len(proposals)} proposal(s). Nothing is confirmed until you say so.\n")
+        for proposal in proposals:
+            print(f"  {proposal.proposed_title}")
+            print(f"    path:     {proposal.path}")
+            print(
+                f"    size:     {proposal.files:,} files, "
+                f"{_human_bytes(proposal.bytes)}"
+            )
+            print(f"    evidence: {proposal.why()}")
+            if proposal.sample_paths:
+                print(f"    samples:  {', '.join(proposal.sample_paths[:3])}")
+            print(f"    score:    {proposal.confidence:.2f}")
+            print()
+
+        if args.record:
+            stored = candidates.record(catalog, proposals)
+            print(f"{stored} proposal(s) in the review queue.")
+            print("Confirm with: drivefusion collections accept <id>")
+        else:
+            print("Nothing was stored. Pass --record to queue these for review.")
+        return 0
+
+
+def cmd_collections_queue(args) -> int:
+    import json as _json
+
+    from drivefusion.core.curate import candidates
+
+    with Catalog(args.catalog) as catalog:
+        queue = candidates.pending(catalog)
+        if not queue:
+            print("Nothing awaiting review. Run `collections propose --record`.")
+            return 0
+
+        for row in queue:
+            evidence = _json.loads(row["evidence_json"])
+            print(f"[{row['id']}] {row['proposed_title']}  ({row['confidence']:.2f})")
+            print(f"      {evidence.get('path', '')}")
+            print(
+                f"      {row['files']:,} files, {_human_bytes(row['bytes'])}"
+            )
+            for signal in evidence.get("signals", []):
+                if signal["score"] > 0:
+                    print(f"      · {signal['detail']}")
+            print()
+        print("accept <id> · reject <id> · merge <id> <collection_id>")
+        return 0
+
+
+def cmd_collections_list(args) -> int:
+    from drivefusion.core.curate import collections as collections_module
+
+    with Catalog(args.catalog) as catalog:
+        items = collections_module.all_collections(catalog)
+        if not items:
+            print("No confirmed collections yet.")
+            return 0
+
+        for collection in items:
+            stats = collections_module.stats(catalog, collection.id)
+            print(f"[{collection.id}] {collection.title}")
+            print(f"      pid:     {collection.local_pid}")
+            print(
+                f"      content: {stats['files']:,} files, "
+                f"{_human_bytes(stats['bytes'])}"
+            )
+            # A missing licence is the finding the scorecard blocks on, so it is
+            # visible in the listing rather than only in a report.
+            print(f"      licence: {collection.license or 'NOT SET — blocks FAIR R1.1'}")
+            print(f"      type:    {collection.data_type or '—'}")
+        return 0
+
+
+def cmd_collections_accept(args) -> int:
+    from drivefusion.core.curate import candidates, collections as collections_module
+
+    fields = {}
+    if args.license:
+        fields["license"] = args.license
+    if args.data_type:
+        fields["data_type"] = args.data_type
+
+    with Catalog(args.catalog) as catalog:
+        try:
+            collection = candidates.accept(
+                catalog, args.candidate_id, title=args.title, **fields
+            )
+        except collections_module.CollectionError as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
+
+        print(f"confirmed [{collection.id}] {collection.title}")
+        print(f"  pid: {collection.local_pid}")
+        print(
+            "  membership is a rule over that subtree, so files added there "
+            "later join automatically"
+        )
+        if not collection.license:
+            print(
+                "\n  No licence set. FAIR R1.1 treats that as a blocking "
+                "finding — unlicensed\n  data is not reusable by anyone else. "
+                "Set one with `collections describe`."
+            )
+        return 0
+
+
+def cmd_collections_reject(args) -> int:
+    from drivefusion.core.curate import candidates
+
+    with Catalog(args.catalog) as catalog:
+        if candidates.reject(catalog, args.candidate_id):
+            print(
+                f"rejected candidate {args.candidate_id}; it will not be "
+                "proposed again"
+            )
+            return 0
+        print(
+            f"drivefusion: no pending candidate {args.candidate_id}",
+            file=sys.stderr,
+        )
+        return 1
+
+
+def cmd_collections_merge(args) -> int:
+    from drivefusion.core.curate import candidates, collections as collections_module
+
+    with Catalog(args.catalog) as catalog:
+        try:
+            collection = candidates.merge_into(
+                catalog, args.candidate_id, args.collection_id
+            )
+        except collections_module.CollectionError as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
+        print(f"merged into [{collection.id}] {collection.title}")
+        return 0
+
+
+def cmd_collections_describe(args) -> int:
+    import json as _json
+
+    from drivefusion.core.curate import collections as collections_module
+
+    fields = {}
+    for name in (
+        "title", "description", "contact", "license", "data_type", "project",
+        "retention_note", "external_pid", "ndsa_target", "min_copies",
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            fields[name] = value
+    if args.creators:
+        fields["creators_json"] = _json.dumps(
+            [part.strip() for part in args.creators.split(",") if part.strip()]
+        )
+
+    if not fields:
+        print("nothing to set; pass at least one field", file=sys.stderr)
+        return 2
+
+    with Catalog(args.catalog) as catalog:
+        try:
+            collections_module.update(catalog, args.collection_id, **fields)
+        except collections_module.CollectionError as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
+        print(f"updated collection {args.collection_id}: {', '.join(sorted(fields))}")
+        return 0
+
+
+def cmd_collections_vocab(args) -> int:
+    from drivefusion.core import standards
+
+    vocab = standards.vocabularies()
+    print(f"{vocab.citation}\n")
+    print("licences (FAIR R1.1):")
+    for entry in vocab["licenses"]:
+        marker = "" if entry.get("reusable") else "  [not reusable by others]"
+        print(f"  {entry['id']:22} {entry['label']}{marker}")
+    print("\ndata types (FAIR I2):")
+    for entry in vocab["data_types"]:
+        print(f"  {entry['id']:22} {entry['label']}")
+    print(
+        "\nA value outside these lists is recorded and reported as "
+        "uncontrolled, never refused."
+    )
+    return 0
+
+
+def cmd_collections_coverage(args) -> int:
+    from drivefusion.core.curate import collections as collections_module
+
+    with Catalog(args.catalog) as catalog:
+        report = collections_module.coverage(catalog)
+        print("coverage")
+        print(f"  catalogued:  {_human_bytes(report['total_bytes'])} "
+              f"({report['total_files']:,} files)")
+        print(f"  in a collection: {_human_bytes(report['filed_bytes'])} "
+              f"({report['byte_share']:.0%} of bytes)")
+        print(f"  unfiled:     {_human_bytes(report['unfiled_bytes'])} "
+              f"({report['unfiled_files']:,} files)")
+        if report["unfiled_bytes"]:
+            print(
+                "\nUnfiled is a legitimate permanent state for content you "
+                "never intend to curate.\nIt is reported because a scorecard "
+                "over the filed share, presented as a scorecard\nfor the "
+                "archive, would be a lie."
+            )
+        if report["overlap_warning"]:
+            print(
+                "\nWarning: some collections claim overlapping directories, so "
+                "the filed total\ncounts those bytes once rather than twice."
+            )
+        return 0
+
+
+# -- scorecards ---------------------------------------------------------------
+
+def cmd_score(args) -> int:
+    from drivefusion.core.curate import collections as collections_module
+    from drivefusion.core.fair import ndsa, scorecard
+
+    with Catalog(args.catalog) as catalog:
+        if args.collection_id is not None:
+            targets = [collections_module.get(catalog, args.collection_id)]
+        else:
+            targets = collections_module.all_collections(catalog)
+
+        if not targets:
+            print(
+                "No collections to score. Run `collections propose --record` "
+                "and confirm one."
+            )
+            return 1
+
+        for collection in targets:
+            card = scorecard.score(catalog, collection.id)
+            print(f"[{collection.id}] {collection.title}  ({collection.local_pid})")
+            print(f"  FAIR: {card.summary()}")
+            print(f"  rubric: {card.rubric}")
+
+            for result in card.results:
+                if result.status == "pass":
+                    print(f"    pass  {result.id:5} {result.title}")
+            for result in card.failures:
+                flag = "BLOCKING" if result.blocking else "gap"
+                print(f"    {flag:8} {result.id:5} {result.title}")
+                print(f"              {result.detail}")
+                print(f"              {result.gap}")
+                print(f"      remedy: {result.remedy}")
+            for result in card.not_assessed:
+                print(f"    not scored  {result.id:5} {result.detail}")
+
+            levels = ndsa.score(catalog, collection.id)
+            print(f"\n  {levels.summary()}")
+            for area in levels.areas:
+                ceiling = (
+                    f", most this tool can assess is {area.ceiling}"
+                    if area.ceiling is not None and area.ceiling < 4
+                    else ""
+                )
+                print(f"    {area.title}: level {area.reached}{ceiling}")
+                for level in area.levels:
+                    if level.status == "fail":
+                        print(f"      next: {level.statement} — {level.detail}")
+                        break
+
+            if args.formats:
+                recommendations = scorecard.format_recommendations(
+                    catalog, collection.id
+                )
+                if recommendations:
+                    print("\n  at-risk formats (a recommendation only — Drive "
+                          "Fusion never converts anything):")
+                    for entry in recommendations:
+                        print(
+                            f"    .{entry['extension']}: {entry['files']:,} files, "
+                            f"{_human_bytes(entry['bytes'])}"
+                        )
+                        print(f"      {entry['why']}")
+                        if entry["alternative"]:
+                            print(f"      consider: {entry['alternative']}")
+            print()
+
+        if args.collection_id is None:
+            unfiled = ndsa.score_unfiled(catalog)
+            coverage = collections_module.coverage(catalog)
+            print(f"Unfiled content — {unfiled.summary()}")
+            print(
+                f"  {_human_bytes(coverage['unfiled_bytes'])} in no collection "
+                f"({1 - coverage['byte_share']:.0%} of catalogued bytes)."
+            )
+            print(
+                "  Scored separately on purpose: the grades above describe the "
+                "filed share only."
+            )
+        return 0
+
+
 def _confidence_note(confidence: str) -> str:
     return {
         "measured": "from the drive's own counters",
@@ -795,7 +1178,7 @@ def cmd_volumes(args) -> int:
 
 
 #: Verbs that require an action, and print their own help without one.
-SUBCOMMAND_VERBS = ("scope", "health")
+SUBCOMMAND_VERBS = ("scope", "health", "collections")
 
 DISPATCH = {
     ("scope", "add"): cmd_scope_add,
@@ -807,6 +1190,16 @@ DISPATCH = {
     ("hash", None): cmd_hash,
     ("report", None): cmd_report,
     ("verify", None): cmd_verify,
+    ("collections", "propose"): cmd_collections_propose,
+    ("collections", "queue"): cmd_collections_queue,
+    ("collections", "list"): cmd_collections_list,
+    ("collections", "accept"): cmd_collections_accept,
+    ("collections", "reject"): cmd_collections_reject,
+    ("collections", "merge"): cmd_collections_merge,
+    ("collections", "describe"): cmd_collections_describe,
+    ("collections", "vocab"): cmd_collections_vocab,
+    ("collections", "coverage"): cmd_collections_coverage,
+    ("score", None): cmd_score,
     ("health", "collect"): cmd_health_collect,
     ("health", "show"): cmd_health_show,
     ("health", "set"): cmd_health_set,

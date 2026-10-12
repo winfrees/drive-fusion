@@ -1,0 +1,100 @@
+{
+  "id": "drivefusion-vocabularies",
+  "version": "1.0.0",
+  "retrieved_at": "2026-10-12",
+  "kind": "controlled-vocabulary",
+  "provenance": {
+    "note": "Controlled terms for the fields FAIR I2 scores. Licence identifiers are SPDX short identifiers; data types are this tool's own small list, chosen to be few enough that a person will actually pick one. A free-text value is never rejected — it is recorded and reported as uncontrolled, because refusing the user's own word for their data would be worse than scoring it.",
+    "spdx": {
+      "name": "SPDX License List",
+      "url": "https://spdx.org/licenses/"
+    },
+    "pronom": {
+      "name": "PRONOM technical registry",
+      "url": "https://www.nationalarchives.gov.uk/PRONOM/",
+      "status": "Format identification by PRONOM PUID is not implemented; formats are recorded by extension, which is weaker and labelled as such."
+    }
+  },
+  "licenses": [
+    {"id": "CC0-1.0", "label": "CC0 1.0 — public domain dedication", "reusable": true},
+    {"id": "CC-BY-4.0", "label": "CC BY 4.0 — attribution", "reusable": true},
+    {"id": "CC-BY-SA-4.0", "label": "CC BY-SA 4.0 — attribution, share-alike", "reusable": true},
+    {"id": "CC-BY-NC-4.0", "label": "CC BY-NC 4.0 — attribution, non-commercial", "reusable": true},
+    {"id": "MIT", "label": "MIT", "reusable": true},
+    {"id": "Apache-2.0", "label": "Apache 2.0", "reusable": true},
+    {"id": "GPL-3.0-or-later", "label": "GPL 3.0 or later", "reusable": true},
+    {"id": "proprietary", "label": "Proprietary — all rights reserved", "reusable": false},
+    {
+      "id": "not-for-sharing",
+      "label": "Not for sharing — personal or confidential",
+      "reusable": false,
+      "note": "An explicit decision, which scores differently from a blank. FAIR R1.1 asks for a clear licence, and 'this is private' is a clear answer; leaving it empty is not."
+    }
+  ],
+  "data_types": [
+    {"id": "measurement", "label": "Instrument or sensor measurements"},
+    {"id": "imaging", "label": "Images or microscopy"},
+    {"id": "sequence", "label": "Sequence data"},
+    {"id": "tabular", "label": "Tabular or spreadsheet data"},
+    {"id": "document", "label": "Documents and writing"},
+    {"id": "code", "label": "Source code and notebooks"},
+    {"id": "audio-video", "label": "Audio or video"},
+    {"id": "photo", "label": "Personal photographs"},
+    {"id": "archive", "label": "Archives and backups"},
+    {"id": "mixed", "label": "Mixed content"},
+    {"id": "other", "label": "Other"}
+  ],
+  "relation_types": {
+    "$comment": "DataCite relationType values this tool proposes or accepts.",
+    "allowed": [
+      "IsVersionOf", "HasVersion", "IsPartOf", "HasPart", "IsSupplementTo",
+      "IsSupplementedBy", "IsDerivedFrom", "IsSourceOf", "Documents",
+      "IsDocumentedBy", "IsIdenticalTo", "Obsoletes", "IsObsoletedBy"
+    ]
+  },
+  "format_risk": {
+    "$comment": "Extension-based, which is weaker than PRONOM identification and is reported as such. 'at-risk' means proprietary, undocumented, or dependent on software that is no longer maintained — not that the file is damaged.",
+    "preferred": [
+      "txt", "csv", "tsv", "json", "xml", "md", "pdf", "png", "tif", "tiff",
+      "jpg", "jpeg", "wav", "flac", "mp4", "zip", "tar", "gz", "parquet",
+      "fits", "nc", "h5", "hdf5", "py", "r", "sql", "svg", "odt", "ods"
+    ],
+    "at_risk": [
+      {"ext": "psd", "why": "Proprietary Adobe format; opens reliably only in Adobe software"},
+      {"ext": "ai", "why": "Proprietary Adobe format"},
+      {"ext": "indd", "why": "Proprietary, version-sensitive; older files fail to open in newer InDesign"},
+      {"ext": "cdr", "why": "Proprietary CorelDRAW format with poor third-party support"},
+      {"ext": "wpd", "why": "WordPerfect; few current readers"},
+      {"ext": "pub", "why": "Microsoft Publisher; almost no third-party support"},
+      {"ext": "mdb", "why": "Legacy Access database; superseded and poorly supported"},
+      {"ext": "sda", "why": "Legacy StarOffice format"},
+      {"ext": "qxd", "why": "QuarkXPress; proprietary and version-sensitive"},
+      {"ext": "rm", "why": "RealMedia; effectively abandoned"},
+      {"ext": "wma", "why": "Proprietary Microsoft audio with declining support"},
+      {"ext": "flv", "why": "Flash video; the runtime is discontinued"},
+      {"ext": "swf", "why": "Flash; the runtime is discontinued"},
+      {"ext": "sit", "why": "StuffIt archive; few current extractors"},
+      {"ext": "hqx", "why": "BinHex; obsolete Mac encoding"},
+      {"ext": "pct", "why": "Classic Mac PICT; obsolete"},
+      {"ext": "dwg", "why": "Proprietary CAD format, version-sensitive"},
+      {"ext": "max", "why": "3ds Max scene; proprietary and version-locked"},
+      {"ext": "nef", "why": "Nikon raw; proprietary, though widely supported today"},
+      {"ext": "cr2", "why": "Canon raw; proprietary, though widely supported today"},
+      {"ext": "arw", "why": "Sony raw; proprietary, though widely supported today"}
+    ],
+    "alternatives": {
+      "psd": "TIFF or PNG for flattened output, keeping the PSD as the editable master",
+      "ai": "SVG or PDF/A",
+      "indd": "PDF/A for the laid-out result",
+      "doc": "ODT or PDF/A",
+      "xls": "CSV or ODS",
+      "nef": "DNG, or TIFF alongside the raw original",
+      "cr2": "DNG, or TIFF alongside the raw original",
+      "arw": "DNG, or TIFF alongside the raw original",
+      "flv": "MP4 (H.264) or Matroska",
+      "swf": "A rendered video capture; the interactivity cannot be preserved",
+      "wma": "FLAC for archival, MP3 or AAC for access",
+      "mdb": "SQLite, or CSV per table"
+    }
+  }
+}

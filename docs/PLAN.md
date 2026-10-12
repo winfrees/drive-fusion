@@ -631,6 +631,16 @@ revised standard is a data change, not a code change.
 | **PREMIS** / **PROV-O** | Fixity and provenance events in exports |
 | **NIH DMS Policy** (NOT-OD-21-013) and the **2026 Plan format** (NOT-OD-26-100) | **Optional module, deferred.** With no active plan of record this is not a build driver; the schema keeps the fields (`license`, `local_pid`, `external_pid`, `data_type`) that make a DMS or repository export a small addition later rather than a migration |
 
+**Scoring honestly** matters more here than scoring completely, so M6 fixed three rules in
+code. A criterion this tool cannot assess is **excluded from the denominator and listed**, never
+passed — otherwise 1.0 over four of fourteen criteria reads as a perfect score. A **missing
+licence is blocking**: unlicensed data is not reusable whatever else is in place, so the grade
+is capped at `incomplete` however well the rest scores, and `not-for-sharing` is accepted as the
+clear answer a blank is not. An **NDSA level requires every level beneath it**, so a lucky row
+cannot report level 3 over a failing level 2; rows about written policy and staff training are
+reported *not assessable from a catalog* rather than passed or failed, and each area states the
+ceiling this tool can reach.
+
 **FAIR scorecard**, scored per collection with each failing criterion naming the gap and its
 remedy: persistent local identifiers and content hashes as permanent names (**F1**), metadata
 completeness against the collection profile (**F2**), manifests binding PID ↔ checksums ↔ paths
@@ -664,7 +674,19 @@ confirmed**. Inference is a proposal engine, never an assignment:
 - **Unfiled content is first-class.** At 50M files most bytes will start unfiled, and hiding
   that would make every scorecard a lie. The "unfiled" bucket reports its size, its risk, and
   its under-protected share, and it is a legitimate permanent state for content you never
-  intend to curate.
+  intend to curate. M6 scores it against the NDSA levels *separately* from the confirmed
+  collections, so a grade for the curated share can never be read as a grade for the archive.
+
+Two implementation rules M6 added, both about not proposing:
+
+- **Only one candidate per path.** A project folder and each of its five dated sub-folders
+  scoring well would otherwise all appear in the queue — accepting the parent leaves five stale
+  proposals, and accepting all six creates six overlapping collections over the same bytes. The
+  first implementation deduplicated on `dir_id`, which is unique by construction and therefore
+  did nothing; the queue showed every level of the tree.
+- **A rejected subtree stays rejected**, and an accepted one is never re-offered. Re-proposing
+  after every scan trains a user to click through the queue without reading it, which is worse
+  than having no queue.
 
 Crucially, **the planner does not wait for any of this** (§9): placement units fall back to
 directory subtrees drawn from `dir_rollup`, so consolidation planning works on day one, and
@@ -895,7 +917,7 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 | **M3** | Identity & analysis | **Done.** Tier 1 quick hash and tier 2 full hash with layout-ordered reads, content identity in the catalog, duplicate groups, copies counted over distinct physical drives, under-protected and reclamation reports, the `fixity_check` table and a `verify` pass covering **both** tiers (§8.1). `hash`/`report`/`verify` CLI verbs; the no-touch cycle extended to cover all of it. Deferred with reasons: retrieval-pointer read ordering (→ M4, measurable only against real fragmented NTFS volumes, and the batch walker's ordering already recovers most of the benefit); per-drive parallel hashing (→ M5, where drive health tells us which devices tolerate concurrent reads). |
 | **M4** | GUI shell | **Done.** PySide6 app: Scope, Dashboard, Drives and Catalog screens; per-thread catalog connections; cancellable background tasks with progress; a keyset-paged file table and lazily-expanded directory tree; asynchronous row counting; UAC elevation offered per scan (the M2 deferral, §6.5); `drivefusion gui`; two front ends from one build (windowed `DriveFusion.exe`, console `drivefusion.exe`). The no-touch cycle now includes the full browse traversal, and the read-only guarantee is asserted over the *widget tree* — no control may carry a destructive verb. Deferred with reasons: editable drive metadata and SMART sparklines (→ M5, where the durability model gives those fields meaning); retrieval-pointer read ordering (→ M5, measurable only against real fragmented NTFS). |
 | **M5** | Health & risk | **Done.** `core/health/`: smartctl JSON parsing for SATA/NVMe/bridge devices, a versioned AFR table under `standards/afr/`, the §8.2 durability model (age, duty, SMART, bus, correlation), and `drive_health` history as schema v5. `core/analysis/exposure.py` turns it into expected bytes lost per year and ranks drives by what their failure would cost. The under-protected queue is now ranked by **size × P(loss)**, fulfilling the ordering M3 deferred. `health collect|show|set` and `report risk` on the CLI; risk and confidence columns plus an editable drive-details dialog in the GUI. **New guardrail: lint code DF008** confines process creation to modules that allowlist their own arguments — `smartctl -t long` starts a multi-hour self-test, which no filesystem rule would have caught. Deferred with reasons: retrieval-pointer read ordering (→ M7, measurable only against real fragmented NTFS); bundling `smartctl` into the installer (→ M8, where signing and the installer are built). |
-| **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
+| **M6** | Curation & FAIR | **Done.** `core/curate/`: candidate inference scoring subtrees on size, type homogeneity, temporal clustering and sibling-name patterns, each proposal carrying its evidence; confirmation as an explicit act, with accept / rename / merge / reject and a remembered rejection. Membership is a **rule** over a subtree, so content appearing there later joins by itself. `core/fair/`: FAIR scorecard and NDSA levels against versioned rubrics in `standards/` (`fair/`, `ndsa/`, `vocab/`), naming the gap *and* the remedy for every failure. Coverage and the unfiled bucket are first-class and scored separately. `collections propose\|queue\|accept\|reject\|merge\|describe\|vocab\|coverage` and `score` on the CLI; a Collections screen with the review queue, its evidence, and the scorecard. Schema v6. Deferred with reasons: PRONOM format identification (formats are recorded by extension, which is weaker and labelled as such); RO-Crate/DataCite export (→ M8, which owns bundles) — F3 and I1 are reported *not assessable* rather than failed, so a missing milestone does not depress a grade. |
 | **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |
 | **M8** | Exports & polish | RO-Crate/BagIt/DataCite, per-drive manifests, naming-template mappings, HTML/CSV reports, signed build |
 

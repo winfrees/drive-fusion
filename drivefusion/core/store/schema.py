@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -237,6 +237,80 @@ CREATE TABLE IF NOT EXISTS fixity_check (
 CREATE INDEX IF NOT EXISTS ix_fixity_result ON fixity_check(result)
     WHERE result != 'ok';
 
+-- Collections: what the archive is *about*, as opposed to where it sits.
+--
+-- There is no directory convention to import (docs/PLAN.md §8.4), so a
+-- collection is inferred and then confirmed by a person. Nothing reaches this
+-- table without that confirmation; proposals live in collection_candidate.
+CREATE TABLE IF NOT EXISTS collection (
+    id              INTEGER PRIMARY KEY,
+    -- Stable local persistent identifier (FAIR F1). A collection's permanent
+    -- name, so renaming the title never orphans its history or its exports.
+    local_pid       TEXT UNIQUE NOT NULL,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    creators_json   TEXT,
+    contact         TEXT,
+    -- FAIR R1.1. NULL is a reportable finding, not a blank: unlicensed data is
+    -- not reusable, and a scorecard that ignored that would be flattering.
+    license         TEXT,
+    external_pid    TEXT,          -- DOI or accession, once deposited
+    data_type       TEXT,
+    project         TEXT,
+    ndsa_target     INTEGER,       -- 1..4
+    min_copies      INTEGER,
+    require_diversity INTEGER,
+    require_offsite INTEGER,
+    retention_note  TEXT,
+    created_at      TEXT NOT NULL,
+    confirmed_at    TEXT,
+    confirmed_by    TEXT
+);
+
+-- Membership by rule rather than by fixed list, so a file that appears inside a
+-- confirmed subtree later joins without anyone re-running anything. A
+-- genuinely new subtree outside every rule goes back to the review queue
+-- instead of being silently absorbed.
+CREATE TABLE IF NOT EXISTS collection_rule (
+    id              INTEGER PRIMARY KEY,
+    collection_id   INTEGER NOT NULL REFERENCES collection(id),
+    kind            TEXT NOT NULL,     -- subtree|glob|extension
+    pattern         TEXT NOT NULL,     -- dir id, glob, or extension list
+    added_at        TEXT NOT NULL,
+    note            TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_rule_collection ON collection_rule(collection_id);
+
+-- Typed relations between collections, and to things outside the catalog
+-- (FAIR I3). `IsVersionOf` is the one version detection proposes.
+CREATE TABLE IF NOT EXISTS collection_relation (
+    id              INTEGER PRIMARY KEY,
+    from_collection INTEGER NOT NULL REFERENCES collection(id),
+    to_ref          TEXT NOT NULL,     -- local_pid, DOI, or URL
+    relation_type   TEXT NOT NULL,     -- DataCite relationType
+    added_at        TEXT NOT NULL
+);
+
+-- Proposals awaiting confirmation. Separate from `collection` on purpose: a
+-- candidate is evidence, and a row here has no standing in any report.
+CREATE TABLE IF NOT EXISTS collection_candidate (
+    id              INTEGER PRIMARY KEY,
+    dir_id          INTEGER NOT NULL REFERENCES dir(id),
+    proposed_title  TEXT NOT NULL,
+    confidence      REAL NOT NULL,
+    evidence_json   TEXT NOT NULL,     -- why this was proposed, for auditing
+    files           INTEGER NOT NULL,
+    bytes           INTEGER NOT NULL,
+    proposed_at     TEXT NOT NULL,
+    -- pending|accepted|rejected. A rejected candidate is remembered so the
+    -- same subtree is not proposed again every scan.
+    status          TEXT NOT NULL DEFAULT 'pending',
+    decided_at      TEXT,
+    collection_id   INTEGER REFERENCES collection(id),
+    UNIQUE(dir_id)
+);
+CREATE INDEX IF NOT EXISTS ix_candidate_status ON collection_candidate(status);
+
 -- Drive health over time, one row per smartctl reading (docs/PLAN.md §8.2).
 -- History rather than a snapshot on the drive row: a reallocated count that
 -- went from 0 to 3 last month is a different fact from one that has been 3 for
@@ -330,6 +404,8 @@ MIGRATIONS: dict[int, tuple] = {
     # v5 adds the drive_health table (created by the DDL) and one drive column,
     # which an existing database needs spelled out.
     5: (add_column("drive", "smart_device", "TEXT"),),
+    # v6 adds only new tables and indexes.
+    6: (),
 }
 
 
