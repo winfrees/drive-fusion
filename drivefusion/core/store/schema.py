@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -66,7 +66,11 @@ CREATE TABLE IF NOT EXISTS drive (
     retired_at          TEXT,
     notes               TEXT,
     first_seen_at       TEXT,
-    last_seen_at        TEXT
+    last_seen_at        TEXT,
+    -- What smartctl should be pointed at for this drive. Stored rather than
+    -- guessed: pointing smartctl at the wrong disk would attribute one drive's
+    -- health to another, which is worse than having no reading at all.
+    smart_device        TEXT
 );
 
 -- A filesystem. Identity is the volume GUID path, never a mount point.
@@ -233,6 +237,34 @@ CREATE TABLE IF NOT EXISTS fixity_check (
 CREATE INDEX IF NOT EXISTS ix_fixity_result ON fixity_check(result)
     WHERE result != 'ok';
 
+-- Drive health over time, one row per smartctl reading (docs/PLAN.md §8.2).
+-- History rather than a snapshot on the drive row: a reallocated count that
+-- went from 0 to 3 last month is a different fact from one that has been 3 for
+-- two years, and only a series can tell them apart.
+--
+-- Every counter is nullable and NULL means "the drive did not report it" — not
+-- zero. A USB bridge that passes no SMART through is not a healthy drive, and
+-- storing 0 here would turn missing evidence into a clean bill of health.
+CREATE TABLE IF NOT EXISTS drive_health (
+    id                  INTEGER PRIMARY KEY,
+    drive_id            INTEGER NOT NULL REFERENCES drive(id),
+    observed_at         TEXT NOT NULL,
+    power_on_hours      INTEGER,
+    temperature_c       INTEGER,
+    reallocated         INTEGER,
+    pending             INTEGER,
+    uncorrectable       INTEGER,
+    crc_errors          INTEGER,
+    wear_leveling       INTEGER,
+    tbw_written         INTEGER,
+    self_test_status    TEXT,
+    smart_passed        INTEGER,
+    smart_json          TEXT,
+    annual_failure_prob REAL,
+    confidence          TEXT NOT NULL   -- measured|estimated|unknown
+);
+CREATE INDEX IF NOT EXISTS ix_health_drive ON drive_health(drive_id, observed_at DESC);
+
 -- Directories a scan actually looked at. A full scan covers a whole root, so
 -- tombstoning is scoped by root_id; a delta covers only the directories the
 -- journal named, and tombstoning anything outside them would declare files
@@ -258,7 +290,35 @@ CREATE TABLE IF NOT EXISTS audit (
 
 #: Statements that bring an older catalog forward, keyed by the version they
 #: produce. Fresh databases get the full DDL above instead and skip these.
-MIGRATIONS: dict[int, tuple[str, ...]] = {
+def add_column(table: str, column: str, declaration: str):
+    """A migration step that adds a column only where it is genuinely missing.
+
+    A bare ``ALTER TABLE x ADD COLUMN`` fails two ways on real catalogs: the
+    table may not exist yet in a very old database (the DDL below then creates
+    it already carrying the column), or the column may already be there. Both
+    are fine; neither should abort an upgrade. Checked explicitly rather than
+    wrapped in ``try/except``, which would also swallow the failures that matter.
+    """
+
+    def step(conn: sqlite3.Connection) -> None:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if table not in tables:
+            return
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column in columns:
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+    step.__doc__ = f"add {table}.{column}"
+    return step
+
+
+MIGRATIONS: dict[int, tuple] = {
     2: (
         "ALTER TABLE volume ADD COLUMN usn_journal_id INTEGER",
         "ALTER TABLE volume ADD COLUMN usn_next INTEGER",
@@ -267,6 +327,9 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # with IF NOT EXISTS on the upgrade pass; no ALTER is needed.
     3: (),
     4: (),
+    # v5 adds the drive_health table (created by the DDL) and one drive column,
+    # which an existing database needs spelled out.
+    5: (add_column("drive", "smart_device", "TEXT"),),
 }
 
 
@@ -349,7 +412,10 @@ def migrate(conn: sqlite3.Connection, path: Path | None = None) -> int:
     if version > 0:
         for target in range(version + 1, SCHEMA_VERSION + 1):
             for statement in MIGRATIONS.get(target, ()):
-                conn.execute(statement)
+                if callable(statement):
+                    statement(conn)
+                else:
+                    conn.execute(statement)
 
     # executescript() issues an implicit COMMIT before running, so the DDL
     # cannot be wrapped in an explicit transaction here. Every statement is

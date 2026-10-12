@@ -29,6 +29,12 @@ from drivefusion.core.analysis.browse import (
     drive_inventory,
     files_in_dir,
 )
+from drivefusion.core.analysis.exposure import (
+    RiskIndex,
+    content_exposure,
+    expected_bytes_lost_per_year,
+    riskiest_drives,
+)
 from drivefusion.core.analysis import (
     duplicate_groups,
     integrity_incidents,
@@ -51,6 +57,7 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     staging, merge, rollups, and search.
     M3: plus tiered hashing, fixity verification, and every analysis query.
     M4: plus the full browse traversal the GUI performs.
+    M5: plus the durability model and the risk reports over the catalog.
     M7 planning and M8 export extend this function in turn, rather than being
     tested separately, so the guarantee is always asserted over the whole
     pipeline rather than the parts wired up first.
@@ -115,6 +122,11 @@ def run_full_cycle(root: Path) -> dict[str, str]:
             # where that claim is checked against the fixture tree rather than
             # argued from the absence of a delete button.
             _browse_everything(catalog)
+
+            # M5: the risk model and the reports built on it. smartctl is not
+            # invoked here — it needs a real device, and the fixture tree is a
+            # directory — but every analysis pass that reads the catalog is.
+            _assess_risk(catalog)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -152,6 +164,21 @@ def _browse_everything(catalog) -> None:
 
     assert seen_dirs, "the browse stage walked nothing"
     assert seen_files, "the browse stage listed no files"
+
+
+def _assess_risk(catalog) -> None:
+    """Run the durability model over the catalog, as the reports do."""
+    drive_id = catalog.upsert_drive(serial="no-touch-drive", media="hdd", bus="usb")
+    catalog.update_drive(drive_id, purchase_date="2021-01-01", batch_key="X|Y|2021-01")
+    catalog.record_health(drive_id, confidence="measured", pending=1, reallocated=4)
+
+    index = RiskIndex(catalog)
+    assert index.risk_for(drive_id).annual_probability > 0
+
+    expected_bytes_lost_per_year(catalog)
+    content_exposure(catalog, limit=50)
+    riskiest_drives(catalog)
+    under_protected(catalog, by_risk=True)
 
 
 #: Landmarks that must appear in any honest snapshot of the fixture tree.

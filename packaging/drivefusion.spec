@@ -25,7 +25,10 @@ analysis = Analysis(
     [os.path.join(ROOT, "drivefusion", "__main__.py")],
     pathex=[ROOT],
     binaries=[],
-    datas=[],
+    # The versioned reference tables are data, not code (docs/PLAN.md §8.3), so
+    # they have to be collected explicitly. Without this the build succeeds and
+    # then raises AfrError the first time a user asks for a risk report.
+    datas=[(os.path.join(ROOT, "standards"), "standards")],
     hiddenimports=[
         "drivefusion.cli.main",
         # Reached only through `drivefusion gui`, so PyInstaller cannot see them.

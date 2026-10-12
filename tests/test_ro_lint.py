@@ -49,6 +49,15 @@ def codes(source: str, path: str = GUARDED) -> set[str]:
         ("from os import O_TRUNC\n", "DF004"),
         ("import ctypes\nctypes.windll.kernel32.CreateFileW(x)\n", "DF007"),
         ("DeviceIoControl(handle, code)\n", "DF007"),
+        # DF008: an external process can change a drive in ways no
+        # filesystem-call rule sees. `smartctl -t long` starts a multi-hour
+        # self-test; `smartctl -s off` disables SMART. Neither is a write().
+        ("import subprocess\nsubprocess.run(['smartctl', '-t', 'long'])\n", "DF008"),
+        ("import subprocess\nsubprocess.Popen(argv)\n", "DF008"),
+        ("import subprocess\nsubprocess.check_output(argv)\n", "DF008"),
+        ("import os\nos.system('smartctl -t long /dev/sda')\n", "DF008"),
+        ("import os\nos.popen(cmd)\n", "DF008"),
+        ("import os\nos.execv(path, argv)\n", "DF008"),
     ],
 )
 def test_catches_mutating_code(source: str, expected: str) -> None:
@@ -95,6 +104,29 @@ def test_package_is_clean() -> None:
     assert not findings, "read-only violations in drivefusion/:\n" + "\n".join(
         str(f) for f in findings
     )
+
+
+def test_the_subprocess_allowlist_permits_its_own_modules() -> None:
+    """The modules that must spawn a process still may.
+
+    A guard that blocked the enumeration helper or smartctl outright would be
+    removed within a week, so the exemption is asserted as deliberately as the
+    rule.
+    """
+    source = "import subprocess\nsubprocess.run(argv)\n"
+    for permitted in ro_lint.PERMITTED_SUBPROCESS_MODULES:
+        assert "DF008" not in {
+            f.code for f in ro_lint.check_source(permitted, source)
+        }, f"{permitted} is on the allowlist but was still flagged"
+
+
+def test_subprocess_is_flagged_outside_the_allowlist() -> None:
+    source = "import subprocess\nsubprocess.run(['smartctl', '-t', 'long'])\n"
+    codes_found = {
+        f.code
+        for f in ro_lint.check_source("drivefusion/core/scan/scanner.py", source)
+    }
+    assert "DF008" in codes_found
 
 
 def test_allowlist_has_no_stale_entries() -> None:

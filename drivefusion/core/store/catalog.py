@@ -723,6 +723,122 @@ class Catalog:
             (content_id, file_id, utcnow(), expected, observed, result),
         )
 
+    # -- drive health ------------------------------------------------------
+
+    #: Columns a caller may set on a drive. An allowlist rather than
+    #: string-formatting whatever arrives: these names go into SQL, and
+    #: `serial` is deliberately absent because it is the drive's identity.
+    EDITABLE_DRIVE_FIELDS = (
+        "nickname",
+        "purchase_date",
+        "purchase_price_cents",
+        "vendor",
+        "warranty_end",
+        "batch_key",
+        "role",
+        "location",
+        "disaster_zone",
+        "encryption",
+        "notes",
+        "media",
+        "bus",
+        "capacity_bytes",
+        "retired_at",
+        "smart_device",
+    )
+
+    def update_drive(self, drive_id: int, **fields) -> int:
+        """Set user-supplied metadata on a drive. Returns rows changed."""
+        unknown = set(fields) - set(self.EDITABLE_DRIVE_FIELDS)
+        if unknown:
+            raise ValueError(f"not editable: {', '.join(sorted(unknown))}")
+        if not fields:
+            return 0
+
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        cursor = self.conn.execute(
+            f"UPDATE drive SET {assignments} WHERE id = ?",
+            (*fields.values(), drive_id),
+        )
+        return cursor.rowcount
+
+    def drive(self, drive_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM drive WHERE id = ?", (drive_id,)
+        ).fetchone()
+
+    def drives(self) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                "SELECT * FROM drive ORDER BY COALESCE(nickname, model, serial)"
+            )
+        )
+
+    def record_health(
+        self,
+        drive_id: int,
+        *,
+        confidence: str,
+        observed_at: str | None = None,
+        annual_failure_prob: float | None = None,
+        smart_json: str | None = None,
+        **counters,
+    ) -> int:
+        """Append one health observation. History, never an overwrite.
+
+        A counter absent from ``counters`` is stored NULL, which reads as "not
+        reported" everywhere downstream. Storing 0 instead would convert a drive
+        that says nothing into a drive that says it is fine.
+        """
+        columns = (
+            "power_on_hours",
+            "temperature_c",
+            "reallocated",
+            "pending",
+            "uncorrectable",
+            "crc_errors",
+            "wear_leveling",
+            "tbw_written",
+            "self_test_status",
+            "smart_passed",
+        )
+        unknown = set(counters) - set(columns)
+        if unknown:
+            raise ValueError(f"unknown health counter(s): {', '.join(sorted(unknown))}")
+
+        values = [counters.get(name) for name in columns]
+        cursor = self.conn.execute(
+            "INSERT INTO drive_health (drive_id, observed_at, "
+            + ", ".join(columns)
+            + ", smart_json, annual_failure_prob, confidence) "
+            "VALUES (?, ?, " + ", ".join("?" * len(columns)) + ", ?, ?, ?)",
+            (
+                drive_id,
+                observed_at or utcnow(),
+                *values,
+                smart_json,
+                annual_failure_prob,
+                confidence,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def latest_health(self, drive_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM drive_health WHERE drive_id = ? "
+            "ORDER BY observed_at DESC, id DESC LIMIT 1",
+            (drive_id,),
+        ).fetchone()
+
+    def health_history(self, drive_id: int, limit: int = 60) -> list[sqlite3.Row]:
+        """Oldest first, so a caller can plot it without reversing."""
+        rows = self.conn.execute(
+            "SELECT * FROM drive_health WHERE drive_id = ? "
+            "ORDER BY observed_at DESC, id DESC LIMIT ?",
+            (drive_id, limit),
+        ).fetchall()
+        return list(reversed(rows))
+
     # -- queries -----------------------------------------------------------
 
     def find(

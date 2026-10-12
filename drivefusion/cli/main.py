@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument(
         "kind", nargs="?", default="summary",
-        choices=("summary", "duplicates", "redundancy", "integrity"),
+        choices=("summary", "duplicates", "redundancy", "integrity", "risk"),
     )
     report.add_argument("--top", type=int, default=20, help="rows to show")
     report.add_argument(
@@ -157,6 +157,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("--volume", type=int, default=None, metavar="ID")
     verify.add_argument("--limit", type=int, default=None)
+
+    health = subparsers.add_parser(
+        "health", help="read drive health and estimate failure risk"
+    )
+    health_sub = health.add_subparsers(dest="health_command", metavar="ACTION")
+    health_collect = health_sub.add_parser(
+        "collect", help="read SMART for every known drive and record it"
+    )
+    health_collect.add_argument(
+        "--dry-run", action="store_true",
+        help="show what would be read without recording anything",
+    )
+    health_sub.add_parser("show", help="current health and risk per drive")
+    health_set = health_sub.add_parser(
+        "set", help="record what only you know: purchase date, location, role"
+    )
+    health_set.add_argument("drive_id", type=int)
+    for field in (
+        "nickname", "purchase-date", "vendor", "warranty-end", "batch-key",
+        "role", "location", "disaster-zone", "smart-device", "media", "bus",
+    ):
+        health_set.add_argument(f"--{field}")
+    health_set.add_argument("--purchase-price-cents", type=int)
 
     subparsers.add_parser("gui", help="open the desktop window")
     subparsers.add_parser("status", help="catalog summary")
@@ -477,7 +500,69 @@ def cmd_report(args) -> int:
             elif args.kind == "integrity":
                 print("no fixity failures recorded; run `drivefusion verify` to check")
 
+        if args.kind in ("summary", "risk"):
+            _print_risk(catalog, args)
+
         return 0
+
+
+def _print_risk(catalog, args) -> None:
+    """Expected annual loss, and which drive to act on first."""
+    from drivefusion.core.analysis.exposure import (
+        expected_bytes_lost_per_year,
+        riskiest_drives,
+    )
+
+    exposure = expected_bytes_lost_per_year(catalog)
+    if not exposure["content_items"]:
+        if args.kind == "risk":
+            print(
+                "No content has a hash yet, so there is nothing to put a risk "
+                "figure on.\nRun `drivefusion hash`, then "
+                "`drivefusion health collect`."
+            )
+        return
+
+    print("\nrisk")
+    print(
+        "  expected loss:     "
+        f"{_human_bytes(int(exposure['expected_bytes_lost_per_year']))}/year"
+    )
+    print(f"  content assessed:  {exposure['content_items']:,} items")
+    print(f"  rates:             {exposure['table']}")
+
+    measured = exposure["by_confidence"].get("measured", 0)
+    total = exposure["content_items"]
+    if measured < total:
+        # Stated, not implied: most of this figure may rest on age alone.
+        print(
+            f"  evidence:          {measured:,} of {total:,} items rest on "
+            "drive counters; the rest are age-based estimates"
+        )
+    if exposure["generic_rates"]:
+        print(
+            "  caveat:            failure rates are generic defaults, not "
+            "published fleet data (standards/README.md)"
+        )
+    if exposure["unhashed_files"]:
+        print(
+            f"  not included:      {exposure['unhashed_files']:,} files have no "
+            "content identity, so they are absent from the figure above"
+        )
+
+    drives = riskiest_drives(catalog, limit=args.top)
+    if drives:
+        print("\n  drives ranked by what their failure would cost:")
+        for entry in drives:
+            print(
+                f"    {entry['name']}: "
+                f"{_human_bytes(int(entry['expected_bytes_lost_per_year']))}/yr "
+                f"at risk — {_human_bytes(entry['sole_copy_bytes'])} exists "
+                f"nowhere else ({entry['annual_probability'] * 100:.2f}%/yr, "
+                f"{entry['confidence']})"
+            )
+            for reason in entry["reasons"][:3]:
+                print(f"        · {reason}")
 
 
 def cmd_verify(args) -> int:
@@ -499,6 +584,134 @@ def cmd_verify(args) -> int:
             print(f"  {incident['result']:10} {incident['path']}")
         # A mismatch is a finding, not a crash, but it should not look like success.
         return 1 if result["mismatched"] else 0
+
+
+def _confidence_note(confidence: str) -> str:
+    return {
+        "measured": "from the drive's own counters",
+        "estimated": "estimated from age and media — no SMART counters available",
+        "unknown": "nothing known about this drive; a placeholder, not a finding",
+    }.get(confidence, confidence)
+
+
+def cmd_health_collect(args) -> int:
+    from drivefusion.core.health import afr
+    from drivefusion.core.health.collect import collect_health
+    from drivefusion.core.health.smart import available as smart_available
+
+    with Catalog(args.catalog) as catalog:
+        drives = catalog.drives()
+        if not drives:
+            print("no drives known yet; add a scope root and scan first")
+            return 1
+
+        table = afr.load()
+        if args.dry_run:
+            print(f"would read health for {len(drives):,} drive(s)")
+            print(f"  smartctl: {'found' if smart_available() else 'not installed'}")
+            print(f"  rates:    {table.citation}")
+            print("nothing was read and nothing was recorded")
+            return 0
+
+        print(f"reading health for {len(drives):,} drive(s) ...")
+        result = collect_health(catalog, table=table)
+        print(f"  {result.summary()}")
+        for note in result.notes:
+            print(f"  note: {note}")
+        if table.is_generic:
+            print(
+                "\nFailure rates come from generic defaults, not published "
+                "fleet data.\nSee standards/README.md to load real per-model "
+                "figures."
+            )
+        return 0
+
+
+def cmd_health_show(args) -> int:
+    from drivefusion.core.analysis.exposure import RiskIndex
+    from drivefusion.core.health import afr
+
+    with Catalog(args.catalog) as catalog:
+        drives = catalog.drives()
+        if not drives:
+            print("no drives known yet; add a scope root and scan first")
+            return 1
+
+        table = afr.load()
+        index = RiskIndex(catalog, table=table)
+        print(f"rates: {table.citation}\n")
+
+        for row in drives:
+            drive = dict(row)
+            risk = index.risk_for(int(drive["id"]))
+            name = (
+                drive.get("nickname")
+                or drive.get("model")
+                or drive.get("serial")
+                or f"drive {drive['id']}"
+            )
+            print(f"[{drive['id']}] {name}")
+            print(
+                f"      {risk.annual_probability * 100:.2f}%/yr  "
+                f"({_confidence_note(risk.confidence)})"
+            )
+            if drive.get("purchase_date"):
+                print(f"      purchased: {drive['purchase_date']}")
+            if drive.get("location") or drive.get("disaster_zone"):
+                print(
+                    f"      location:  {drive.get('location') or '-'}"
+                    f" / zone {drive.get('disaster_zone') or '-'}"
+                )
+
+            health = catalog.latest_health(int(drive["id"]))
+            if health is not None:
+                counters = [
+                    f"{label} {health[column]}"
+                    for label, column in (
+                        ("pending", "pending"),
+                        ("reallocated", "reallocated"),
+                        ("uncorrectable", "uncorrectable"),
+                        ("CRC", "crc_errors"),
+                        ("hours", "power_on_hours"),
+                    )
+                    if health[column] is not None
+                ]
+                print(f"      counters:  {', '.join(counters) or 'none reported'}")
+                print(f"      observed:  {describe_age(health['observed_at'])}")
+            for reason in risk.reasons:
+                print(f"      · {reason}")
+            print()
+        return 0
+
+
+def cmd_health_set(args) -> int:
+    fields = {}
+    for name in (
+        "nickname", "purchase_date", "vendor", "warranty_end", "batch_key",
+        "role", "location", "disaster_zone", "smart_device", "media", "bus",
+        "purchase_price_cents",
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            fields[name] = value
+
+    if not fields:
+        print("nothing to set; pass at least one field", file=sys.stderr)
+        return 2
+
+    with Catalog(args.catalog) as catalog:
+        if catalog.drive(args.drive_id) is None:
+            print(f"drivefusion: no drive {args.drive_id}", file=sys.stderr)
+            return 1
+        catalog.update_drive(args.drive_id, **fields)
+        print(f"updated drive {args.drive_id}: {', '.join(sorted(fields))}")
+        if "purchase_date" in fields or "batch_key" in fields:
+            print(
+                "Purchase date and batch key feed the durability model: two "
+                "drives from one\norder are not two independent copies, and the "
+                "risk figures now say so."
+            )
+        return 0
 
 
 def cmd_gui(args) -> int:
@@ -581,6 +794,9 @@ def cmd_volumes(args) -> int:
     return 0
 
 
+#: Verbs that require an action, and print their own help without one.
+SUBCOMMAND_VERBS = ("scope", "health")
+
 DISPATCH = {
     ("scope", "add"): cmd_scope_add,
     ("scope", "list"): cmd_scope_list,
@@ -591,10 +807,22 @@ DISPATCH = {
     ("hash", None): cmd_hash,
     ("report", None): cmd_report,
     ("verify", None): cmd_verify,
+    ("health", "collect"): cmd_health_collect,
+    ("health", "show"): cmd_health_show,
+    ("health", "set"): cmd_health_set,
     ("gui", None): cmd_gui,
     ("status", None): cmd_status,
     ("volumes", None): cmd_volumes,
 }
+
+
+def _subparser(parser: argparse.ArgumentParser, name: str) -> argparse.ArgumentParser:
+    """The subparser registered for a verb, for printing its help."""
+    for action in parser._actions:
+        choices = getattr(action, "choices", None)
+        if choices and hasattr(choices, "get") and name in choices:
+            return choices[name]
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -620,11 +848,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if args.command == "scope" and not getattr(args, "scope_command", None):
-        parser.parse_args(["scope", "--help"])
+    # Verbs with their own subcommands store it under `<verb>_command`. Derived
+    # from the verb rather than hardcoded: `health show` silently fell through
+    # to the top-level help when only `scope_command` was consulted.
+    action = getattr(args, f"{args.command}_command", None)
+
+    if args.command in SUBCOMMAND_VERBS and not action:
+        # print_help() on the subparser rather than parse_args([verb, "--help"]),
+        # which raises SystemExit and made the return below unreachable.
+        _subparser(parser, args.command).print_help()
         return 0
 
-    handler = DISPATCH.get((args.command, getattr(args, "scope_command", None)))
+    handler = DISPATCH.get((args.command, action))
     if handler is None:
         parser.print_help()
         return 2

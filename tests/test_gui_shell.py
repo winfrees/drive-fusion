@@ -314,6 +314,85 @@ def test_dashboard_says_reclamation_is_an_observation(window) -> None:
     assert "never deletes" in window.dashboard.detail.text().lower()
 
 
+def test_the_drives_screen_never_shows_risk_without_its_confidence(window) -> None:
+    """A bare percentage makes a measurement and a guess look identical."""
+    from drivefusion.gui.screens.drives import COLUMNS
+
+    assert "Risk/yr" in COLUMNS
+    assert "Evidence" in COLUMNS
+
+    item = window.drives.tree.topLevelItem(0)
+    risk_column = COLUMNS.index("Risk/yr")
+    evidence_column = COLUMNS.index("Evidence")
+
+    confidence = item.text(evidence_column)
+    assert item.text(risk_column).endswith("%")
+    assert confidence in ("measured", "estimated", "unknown")
+    assert item.toolTip(risk_column), "the figure must carry its reasoning"
+
+    # The rule, stated for whichever confidence the environment produces: a
+    # figure that is not a measurement must say so in so many words, so it
+    # cannot be read as one.
+    explanation = item.toolTip(evidence_column).lower()
+    if confidence == "measured":
+        assert "smart counters" in explanation
+    else:
+        assert "not a measurement" in explanation or "placeholder" in explanation
+
+
+def test_the_drives_note_says_how_many_lack_counters(window) -> None:
+    """Fleet-wide, how much of the risk picture is estimate rather than fact."""
+    assert "estimate rather than a measurement" in window.drives.note.text()
+
+
+def test_drive_details_are_editable_but_the_serial_is_not(window, populated) -> None:
+    """Rewriting a serial would re-point a drive's health history at another disk."""
+    from drivefusion.gui.screens.drives import EDITABLE, DriveDetailsDialog
+
+    catalog = window.session.catalog()
+    drive_id = catalog.upsert_drive(serial="SER-GUI", model="Model X")
+    row = dict(catalog.drive(drive_id))
+
+    dialog = DriveDetailsDialog(row)
+    assert "serial" not in dialog._fields, "the serial must not be an input"
+    assert {name for name, _ in EDITABLE} <= set(dialog._fields)
+
+    # Only altered fields are written back; otherwise a dialog opened and saved
+    # would overwrite values set from the CLI with whatever was on screen.
+    assert dialog.changes() == {}
+
+    dialog._fields["nickname"].setText("ARCHIVE-7")
+    dialog._fields["disaster_zone"].setText("parents-house")
+    assert dialog.changes() == {
+        "nickname": "ARCHIVE-7",
+        "disaster_zone": "parents-house",
+    }
+
+    catalog.update_drive(drive_id, **dialog.changes())
+    assert catalog.drive(drive_id)["nickname"] == "ARCHIVE-7"
+
+
+def test_clearing_a_field_sets_it_back_to_unknown(window) -> None:
+    """An emptied box means "I do not know", which is NULL, not an empty string."""
+    from drivefusion.gui.screens.drives import DriveDetailsDialog
+
+    dialog = DriveDetailsDialog({"serial": "S", "nickname": "OLD"})
+    dialog._fields["nickname"].setText("")
+    assert dialog.changes() == {"nickname": None}
+
+
+def test_the_dashboard_never_shows_expected_loss_bare(window) -> None:
+    """The most authoritative-looking guess in the app, so it carries caveats."""
+    detail = window.dashboard.risk_detail.text().lower()
+    assert detail, "the expected-loss tile has no evidence line"
+    assert (
+        "no content has a hash" in detail
+        or "estimated from age" in detail
+        or "generic defaults" in detail
+        or "measured drive counters throughout" in detail
+    )
+
+
 def test_drives_screen_lists_the_scanned_volume(window) -> None:
     assert window.drives.tree.topLevelItemCount() == 1
     item = window.drives.tree.topLevelItem(0)

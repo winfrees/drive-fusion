@@ -110,6 +110,40 @@ WRITE_INTENT_FLAGS = frozenset(
 #: The only file mode the tool ever opens user data with.
 ALLOWED_OPEN_MODES = frozenset({"rb"})
 
+#: Modules permitted to start an external process, and what each one runs.
+#:
+#: An external program can change a drive in ways no filesystem-call rule would
+#: notice: ``smartctl -t long`` starts a multi-hour self-test, ``smartctl -s
+#: off`` disables SMART. Neither is a write() and neither would trip DF001-DF007,
+#: so process creation is confined to modules that constrain their own arguments
+#: — each of these holds an allowlist of the flags it will pass.
+PERMITTED_SUBPROCESS_MODULES = (
+    "drivefusion/core/enum/helper/client.py",   # spawns dfscan-helper, read-only
+    "drivefusion/core/health/smart.py",         # spawns smartctl, read-only flags
+    "drivefusion/core/discovery/windows.py",    # volume discovery
+)
+
+#: Ways to start a process. Spelled out rather than matched on the module name
+#: alone, because `os.system` and `Popen` arrive by several routes.
+PROCESS_STARTERS = frozenset(
+    {
+        "system",
+        "popen",
+        "Popen",
+        "run",
+        "call",
+        "check_call",
+        "check_output",
+        "spawn",
+        "spawnl",
+        "spawnv",
+        "execv",
+        "execvp",
+        "fork",
+        "posix_spawn",
+    }
+)
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -124,9 +158,12 @@ class Finding:
 
 
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, path: str, permit_raw_handles: bool) -> None:
+    def __init__(
+        self, path: str, permit_raw_handles: bool, permit_subprocess: bool = False
+    ) -> None:
         self.path = path
         self.permit_raw_handles = permit_raw_handles
+        self.permit_subprocess = permit_subprocess
         self.findings: list[Finding] = []
         # alias -> canonical module name
         self.module_aliases: dict[str, str] = {}
@@ -207,6 +244,20 @@ class _Visitor(ast.NodeVisitor):
                     )
 
         elif isinstance(func, ast.Attribute):
+            if (
+                func.attr in PROCESS_STARTERS
+                and isinstance(func.value, ast.Name)
+                and func.value.id in ("subprocess", "os")
+                and not self.permit_subprocess
+            ):
+                self._add(
+                    node,
+                    "DF008",
+                    f"starts an external process ({func.value.id}.{func.attr}); "
+                    "a subprocess can change a drive in ways the filesystem "
+                    "rules cannot see. Confine it to a module that allowlists "
+                    "its own arguments (see PERMITTED_SUBPROCESS_MODULES)",
+                )
             if func.attr in ALWAYS_BANNED:
                 self._add(
                     node,
@@ -290,7 +341,12 @@ def check_source(rel_path: str, source: str) -> list[Finding]:
         return [Finding(rel_path, exc.lineno or 0, exc.offset or 0, "DF999", str(exc))]
 
     permit_raw = rel_path in RAW_HANDLE_MODULES
-    visitor = _Visitor(rel_path, permit_raw_handles=permit_raw)
+    permit_subprocess = rel_path in PERMITTED_SUBPROCESS_MODULES
+    visitor = _Visitor(
+        rel_path,
+        permit_raw_handles=permit_raw,
+        permit_subprocess=permit_subprocess,
+    )
     visitor.visit(tree)
     findings = visitor.findings
 
@@ -341,14 +397,19 @@ def check_config() -> list[Finding]:
     next time someone recreates that path.
     """
     findings = []
-    for entry in RAW_HANDLE_MODULES:
-        if not (REPO_ROOT / entry).exists():
-            findings.append(
-                Finding(
-                    "tools/ro_lint.py", 0, 0, "DF000",
-                    f"RAW_HANDLE_MODULES lists {entry}, which does not exist",
+    for name, entries in (
+        ("RAW_HANDLE_MODULES", RAW_HANDLE_MODULES),
+        ("PERMITTED_SUBPROCESS_MODULES", PERMITTED_SUBPROCESS_MODULES),
+        ("PERMITTED_WRITER_PREFIXES", PERMITTED_WRITER_PREFIXES),
+    ):
+        for entry in entries:
+            if not (REPO_ROOT / entry).exists():
+                findings.append(
+                    Finding(
+                        "tools/ro_lint.py", 0, 0, "DF000",
+                        f"{name} lists {entry}, which does not exist",
+                    )
                 )
-            )
     return findings
 
 

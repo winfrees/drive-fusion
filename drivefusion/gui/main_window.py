@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
 
         self.scope = ScopeScreen(self.session, self.runner)
         self.dashboard = DashboardScreen(self.session, self.runner)
-        self.drives = DrivesScreen(self.session)
+        self.drives = DrivesScreen(self.session, self.runner)
         self.browser = BrowserScreen(self.session, self.runner)
 
         for name, screen in (
@@ -117,6 +117,9 @@ class MainWindow(QMainWindow):
         self.scope.scanRequested.connect(lambda body: self.run_task(body, "Scanning"))
         self.scope.catalogChanged.connect(self.refresh_all)
         self.dashboard.hashRequested.connect(lambda body: self.run_task(body, "Hashing"))
+        self.drives.healthRequested.connect(
+            lambda body: self.run_task(body, "Reading drive health")
+        )
         self.cancel_button.clicked.connect(self._cancel_current)
         self._current_task = None
 

@@ -6,9 +6,12 @@ hashed, and the coverage line says what share that is. A dashboard reading
 "0 bytes duplicated" over an unhashed catalog would be true and useless and read
 as reassuring — so when coverage is partial the panel says so first.
 
-Expected-loss-per-year and the scorecard distribution arrive with M5 and M6; the
-tiles for them are absent rather than showing a zero that would look like an
-answer.
+Expected loss per year arrives with M5 and is shown with the evidence under it,
+never as a bare number: most of it usually rests on age estimates rather than
+drive counters, and a tile reading "1.4 TB/yr" with no qualifier would be the
+most authoritative-looking guess in the application. The scorecard distribution
+arrives with M6; its tile is absent rather than showing a zero that would look
+like an answer.
 """
 
 from __future__ import annotations
@@ -100,6 +103,12 @@ class DashboardScreen(QWidget):
                 "Space with no durability benefit. A report, never an action — "
                 "Drive Fusion does not delete.",
             ),
+            "expected_loss": Tile(
+                "Expected loss per year",
+                "Size × probability that every copy is gone within a year. "
+                "Most of this usually rests on age estimates rather than SMART "
+                "counters; the line below says how much.",
+            ),
         }
         order = (
             "files",
@@ -108,10 +117,15 @@ class DashboardScreen(QWidget):
             "duplicate_overhead_bytes",
             "under_protected_bytes",
             "reclaimable_bytes",
+            "expected_loss",
         )
         for position, key in enumerate(order):
             grid.addWidget(self.tiles[key], position // 3, position % 3)
         layout.addLayout(grid)
+
+        self.risk_detail = QLabel()
+        self.risk_detail.setWordWrap(True)
+        layout.addWidget(self.risk_detail)
 
         self.detail = QLabel()
         self.detail.setWordWrap(True)
@@ -140,6 +154,8 @@ class DashboardScreen(QWidget):
         summary = redundancy_summary(catalog)
 
         self.tiles["files"].set_value(f"{counts['files']:,}")
+        # expected_loss is deliberately absent: it is not in `summary`, and is
+        # filled by _refresh_risk below along with the caveats it needs.
         for key in (
             "path_bytes",
             "unique_bytes",
@@ -172,12 +188,57 @@ class DashboardScreen(QWidget):
                 "file that can have an identity has one."
             )
 
+        self._refresh_risk(catalog)
+
         self.detail.setText(
             f"{summary['distinct_content']:,} distinct content items across "
             f"{summary['catalogued_paths']:,} paths · "
             f"{summary['under_protected_items']:,} items on fewer than 2 drives"
             "<br><i>Reclamation figures are observations. Drive Fusion never "
             "deletes and never emits a command that would.</i>"
+        )
+
+    def _refresh_risk(self, catalog) -> None:
+        """The expected-loss tile, and the evidence it rests on."""
+        from drivefusion.core.analysis.exposure import expected_bytes_lost_per_year
+
+        exposure = expected_bytes_lost_per_year(catalog)
+        total = exposure["expected_bytes_lost_per_year"]
+        self.tiles["expected_loss"].set_value(
+            f"{human_bytes(int(total))}/yr" if exposure["content_items"] else "—"
+        )
+
+        if not exposure["content_items"]:
+            self.risk_detail.setText(
+                "<i>No content has a hash yet, so there is nothing to put a "
+                "risk figure on. Identify content first, then read drive "
+                "health.</i>"
+            )
+            return
+
+        measured = exposure["by_confidence"].get("measured", 0)
+        items = exposure["content_items"]
+        caveats = []
+        if measured < items:
+            caveats.append(
+                f"{measured:,} of {items:,} items rest on drive counters; the "
+                "rest are estimated from age and media class"
+            )
+        if exposure["generic_rates"]:
+            caveats.append(
+                "failure rates are generic defaults, not published fleet data"
+            )
+        if exposure["unhashed_files"]:
+            caveats.append(
+                f"{exposure['unhashed_files']:,} files have no content identity "
+                "and are absent from the figure"
+            )
+
+        self.risk_detail.setText(
+            "<b>Expected loss evidence:</b> " + "; ".join(caveats)
+            if caveats
+            else "<b>Expected loss</b> computed from measured drive counters "
+            "throughout."
         )
 
     def request_hash(self) -> None:

@@ -23,10 +23,10 @@ disclaimer in the plan.
 
 ## Status
 
-**M4 complete — there is a window now.** The tool answers use cases 1 and 2 from either the
-command line or a desktop app: register scan scope, enumerate it, rescan incrementally, search
-it, establish content identity, browse the catalog, and get redundancy, duplication and fixity
-reports.
+**M5 complete — the reports now rank by risk, not just size.** The tool answers use cases 1
+and 2 from either the command line or a desktop app: register scan scope, enumerate it, rescan
+incrementally, search it, establish content identity, browse the catalog, read drive health,
+and get redundancy, duplication, fixity and expected-loss reports.
 
 | Milestone | State |
 |---|---|
@@ -35,7 +35,8 @@ reports.
 | **M2** Fast enumeration | **done** — parsers, journal logic, parallel walker, `dfscan-helper`, incremental rescan |
 | **M3** Identity & analysis | **done** — tiered hashing, duplicate groups, copies-per-drive, fixity |
 | **M4** GUI shell | **done** — Scope, Dashboard, Drives, Catalog; paged views, cancellable scans, UAC prompt |
-| M5–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M5** Health & risk | **done** — smartctl parsing, versioned AFR table, durability model, expected bytes lost/yr |
+| M6–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
 ```
 drivefusion scope add D:\Research
@@ -46,8 +47,24 @@ drivefusion hash                   # content identity; the only verb that reads 
 drivefusion report                 # duplication, durability, and fixity findings
 drivefusion verify                 # re-hash and report silent corruption
 drivefusion status
+drivefusion health collect         # read SMART; falls back to age estimates
+drivefusion health show            # per-drive failure risk, with its evidence
+drivefusion health set 1 --purchase-date 2021-03-04 --disaster-zone home-office
+drivefusion report risk            # expected bytes lost per year
 drivefusion gui                    # the desktop window (needs the [gui] extra)
 ```
+
+**Risk figures always carry their evidence.** A drive's failure probability is labelled
+`measured` (from its own SMART counters), `estimated` (age and media class only — common over
+USB bridges, which pass no SMART through) or `unknown`. A drive that reported nothing scores
+*worse* than one verified clean, because silence and a clean bill of health are not the same
+state. Failure rates live in [`standards/afr/`](standards/README.md) as a versioned file that
+declares itself generic rather than borrowing a citation it has not earned, and every report
+names the table version it used.
+
+The under-protected queue is ranked by **size × P(loss)**. Ranked by size alone the top of the
+list is whatever is biggest, usually video on a healthy drive; ranked by expected loss it is
+whatever sits on the drive with pending sectors. Only one of those is a work queue.
 
 The window has four screens — Scope, Dashboard, Drives and Catalog. Scans and hash passes run
 on a worker thread with a Cancel button that takes effect within a directory rather than at the
@@ -95,6 +112,12 @@ Nothing outside `drivefusion/core/store/` and `drivefusion/core/export/` may ref
 mutating filesystem call. `tools/ro_lint.py` enforces it, the test suite asserts it, and CI
 gates on it. If you find yourself needing to write to a catalogued volume, the answer is that
 the tool does not do that — it emits a plan describing what *you* might do.
+
+M5 added a second clause, because reading drive health meant running an external program for
+the first time: **starting a process is confined to modules that allowlist their own
+arguments** (lint code DF008). `smartctl -t long` begins a multi-hour self-test on a user's
+drive. That is not a filesystem write, so the gateway, the mutating-call rules and the
+no-touch test would all have missed it.
 
 ## Documentation
 

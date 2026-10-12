@@ -91,18 +91,68 @@ def duplicate_groups(catalog: Catalog, *, limit: int | None = None) -> list[Cont
 
 
 def under_protected(
-    catalog: Catalog, *, min_copies: int = 2, limit: int | None = None
+    catalog: Catalog,
+    *,
+    min_copies: int = 2,
+    limit: int | None = None,
+    by_risk: bool = True,
 ) -> list[ContentGroup]:
     """Content held on fewer distinct drives than the policy requires.
 
-    Ranked by size, which is the best available proxy until M5 supplies each
-    drive's failure probability and the ranking becomes size × P(loss).
+    Ranked by **size × P(loss)** since M5, which is a different list from the
+    one size alone produces: by size the top is whatever is biggest, usually
+    video on a healthy drive; by expected loss the top is whatever sits on the
+    drive with pending sectors, which may be far smaller and is the thing that
+    will actually be gone next month. Only one of those is a work queue.
+
+    ``by_risk=False`` falls back to the size ranking, and so does a catalog with
+    no health data — where every drive's probability is the same estimate, the
+    two orderings coincide anyway.
     """
     groups = _as_groups(
         _group_rows(catalog, f"COUNT(DISTINCT {DRIVE_KEY}) < ?", (min_copies,))
     )
-    groups.sort(key=lambda g: g.size_bytes * max(1, g.paths), reverse=True)
+
+    if by_risk and groups:
+        # Imported here: analysis.exposure imports the health package, which
+        # imports this module for DRIVE_KEY. Deferring the import keeps the
+        # cycle from forming at module load.
+        from drivefusion.core.analysis.exposure import RiskIndex
+
+        index = RiskIndex(catalog)
+        weights = _risk_weights(catalog, index, [g.content_id for g in groups])
+        groups.sort(
+            key=lambda g: g.size_bytes * weights.get(g.content_id, 1.0), reverse=True
+        )
+    else:
+        groups.sort(key=lambda g: g.size_bytes * max(1, g.paths), reverse=True)
+
     return groups[:limit] if limit else groups
+
+
+def _risk_weights(catalog: Catalog, index, content_ids: list[int]) -> dict[int, float]:
+    """P(loss) per content id, for ranking. One query, not one per row."""
+    if not content_ids:
+        return {}
+
+    placeholders = ",".join("?" * len(content_ids))
+    rows = catalog.conn.execute(
+        "SELECT f.content_id, "
+        f"  GROUP_CONCAT(DISTINCT {DRIVE_KEY}) AS drive_keys "
+        "FROM file f JOIN volume v ON v.id = f.volume_id "
+        f"WHERE f.vanished_at IS NULL AND f.content_id IN ({placeholders}) "
+        "GROUP BY f.content_id",
+        content_ids,
+    )
+
+    weights: dict[int, float] = {}
+    for row in rows:
+        keys = tuple(
+            int(part) for part in (row["drive_keys"] or "").split(",") if part.strip()
+        )
+        probability, _confidence = index.exposure_for(keys)
+        weights[int(row["content_id"])] = probability
+    return weights
 
 
 def reclamation_candidates(

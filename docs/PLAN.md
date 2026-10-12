@@ -579,7 +579,21 @@ f_d = base_afr(model_family)                # published fleet statistics, user-e
 A pending sector is a step change, not a nudge, and dominates when non-zero. Where SMART is
 unavailable — common over USB bridges, and you will have several — the estimate degrades to
 age and capacity heuristics and is labeled `confidence = estimated` rather than silently
-guessing. For content on drive set `D`:
+guessing.
+
+**Uncertainty is priced, not waved through.** M5 added one factor the formula above does not
+show: a drive that reported *no* counters is multiplied by `smart_factor.unverified` (1.35 in
+the shipped table). A drive verified clean and a drive that said nothing are not in the same
+state — the second could have fifty pending sectors with no way to tell — and pricing silence
+at 1.0 would rank an unverifiable drive alongside one known to be healthy. The first version
+of the test for this passed by *equality*, which is how the gap was found.
+
+**The rates themselves are data, not code.** `standards/afr/afr-defaults-v1.json` declares
+itself `"kind": "generic-defaults"`, and every report naming a number also names the table
+version it came from. Published per-model rates vary by an order of magnitude between drive
+families, so the shipped defaults are deliberately generic and labelled as such rather than
+carrying a citation they have not earned; `per_model` is there to be populated from a real
+source. For content on drive set `D`:
 
 ```
 P(loss) = Π f_d × corr(D)
@@ -793,7 +807,11 @@ Two further rules M4 settled in code:
   thumb drive to whichever machine the drives are attached to.
 - Migrations run on launch; the catalog is **copied, never replaced**, before any schema change.
 - Bundle `smartctl` (smartmontools) — on Windows it is far more reliable than WMI, especially
-  over USB bridges. Degrade to "health unknown" rather than failing.
+  over USB bridges. Degrade to "health unknown" rather than failing. M5 implements the
+  degradation and the parsing; the bundling itself waits for M8's installer. **Only read-only
+  smartctl arguments are ever passed**, enforced by an allowlist in `core/health/smart.py` and
+  by lint rule DF008: `smartctl -t long` would start a multi-hour self-test on a user's drive,
+  and that is not a filesystem write, so none of the other read-only mechanisms would see it.
 - **Authenticode signing** is the difference between "it runs" and "users can run it," and it
   matters more than usual here: an unsigned executable that reads raw volume handles is exactly
   what antivirus heuristics flag. Budget for a certificate before any external release.
@@ -876,7 +894,7 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 | **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
 | **M3** | Identity & analysis | **Done.** Tier 1 quick hash and tier 2 full hash with layout-ordered reads, content identity in the catalog, duplicate groups, copies counted over distinct physical drives, under-protected and reclamation reports, the `fixity_check` table and a `verify` pass covering **both** tiers (§8.1). `hash`/`report`/`verify` CLI verbs; the no-touch cycle extended to cover all of it. Deferred with reasons: retrieval-pointer read ordering (→ M4, measurable only against real fragmented NTFS volumes, and the batch walker's ordering already recovers most of the benefit); per-drive parallel hashing (→ M5, where drive health tells us which devices tolerate concurrent reads). |
 | **M4** | GUI shell | **Done.** PySide6 app: Scope, Dashboard, Drives and Catalog screens; per-thread catalog connections; cancellable background tasks with progress; a keyset-paged file table and lazily-expanded directory tree; asynchronous row counting; UAC elevation offered per scan (the M2 deferral, §6.5); `drivefusion gui`; two front ends from one build (windowed `DriveFusion.exe`, console `drivefusion.exe`). The no-touch cycle now includes the full browse traversal, and the read-only guarantee is asserted over the *widget tree* — no control may carry a destructive verb. Deferred with reasons: editable drive metadata and SMART sparklines (→ M5, where the durability model gives those fields meaning); retrieval-pointer read ordering (→ M5, measurable only against real fragmented NTFS). |
-| **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |
+| **M5** | Health & risk | **Done.** `core/health/`: smartctl JSON parsing for SATA/NVMe/bridge devices, a versioned AFR table under `standards/afr/`, the §8.2 durability model (age, duty, SMART, bus, correlation), and `drive_health` history as schema v5. `core/analysis/exposure.py` turns it into expected bytes lost per year and ranks drives by what their failure would cost. The under-protected queue is now ranked by **size × P(loss)**, fulfilling the ordering M3 deferred. `health collect|show|set` and `report risk` on the CLI; risk and confidence columns plus an editable drive-details dialog in the GUI. **New guardrail: lint code DF008** confines process creation to modules that allowlist their own arguments — `smartctl -t long` starts a multi-hour self-test, which no filesystem rule would have caught. Deferred with reasons: retrieval-pointer read ordering (→ M7, measurable only against real fragmented NTFS); bundling `smartctl` into the installer (→ M8, where signing and the installer are built). |
 | **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
 | **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |
 | **M8** | Exports & polish | RO-Crate/BagIt/DataCite, per-drive manifests, naming-template mappings, HTML/CSV reports, signed build |
@@ -905,7 +923,8 @@ would mean reworking the scan pipeline.
 | **Elevated helper becomes an attack surface** | Separate binary, read-only handle, enumerate-and-exit, no network or write code, same lint and tests as the main app |
 | **Antivirus flags raw-volume access** | Signed binaries, one-folder build, published hashes, documented exclusions |
 | **Hardlinks and NTFS dedup inflate apparent redundancy** | FRN-based physical-copy counting; logical vs. allocated size tracked separately |
-| **SMART unavailable over USB bridges** | Degrade to age/capacity heuristics, labeled `estimated`; never invent a number |
+| **SMART unavailable over USB bridges** | Degrade to age/capacity heuristics, labeled `estimated`; never invent a number. Silence is also *priced* (§8.2): an unverified drive scores worse than one verified clean |
+| **An external tool changes a drive** | `smartctl` can start a self-test or disable SMART; neither is a filesystem write. Read-only argument allowlist in `core/health/smart.py`, plus lint rule DF008 confining process creation to modules that constrain their own arguments |
 | **Published standards change mid-project** | Exactly what happened with the May 2026 DMS format; all rubrics are versioned data files naming their source, version, and retrieval date |
 | **The tool is mistaken for a compliance instrument** | Acknowledged disclaimer at first run and in every export (§1) |
 | **Optimizer output is unreviewable** | Placement units, per-step rationale, plain-language simulation |

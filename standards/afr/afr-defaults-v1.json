@@ -1,0 +1,98 @@
+{
+  "$comment": "See README.md in this directory for what these numbers are and are not.",
+  "id": "drivefusion-afr-defaults",
+  "version": "1.0.0",
+  "retrieved_at": "2026-09-28",
+  "kind": "generic-defaults",
+  "provenance": {
+    "summary": "Generic, conservative baseline failure rates by media class and age band. These are NOT vendor-published figures and are NOT attributed to any fleet study.",
+    "why_generic": "Per-model annualized failure rates vary by an order of magnitude between drive families, and a wrong number carrying a real citation is worse than an honest default. Published per-model data exists and can be loaded on top of this file; see per_model below.",
+    "recommended_source": {
+      "name": "Backblaze Drive Stats",
+      "url": "https://www.backblaze.com/cloud-storage/resources/hard-drive-test-data",
+      "note": "Publishes quarterly annualized failure rates per model. Enter the figures for your own models under per_model; each entry records its own source and retrieval date."
+    }
+  },
+  "base_afr": {
+    "$comment": "Annualized probability that a drive of this media class fails, before age, duty, SMART and bus adjustments.",
+    "hdd": 0.015,
+    "ssd": 0.008,
+    "nvme": 0.008,
+    "unknown": 0.02
+  },
+  "age_factor": {
+    "$comment": "Bathtub curve. Year 0 is elevated (infant mortality), years 1-3 are the floor, and risk climbs from year 4. Bands are [min_years, max_years, multiplier]; the last band applies to anything older.",
+    "bands": [
+      [0, 1, 1.4],
+      [1, 3, 0.8],
+      [3, 4, 1.0],
+      [4, 5, 1.6],
+      [5, 6, 2.4],
+      [6, 8, 3.5],
+      [8, null, 5.0]
+    ]
+  },
+  "duty_factor": {
+    "$comment": "HDD duty is power-on hours; SSD duty is bytes written against the endurance rating. Bands are [min, max, multiplier].",
+    "hdd_power_on_hours": [
+      [0, 8760, 1.0],
+      [8760, 26280, 1.1],
+      [26280, 43800, 1.3],
+      [43800, null, 1.8]
+    ],
+    "ssd_fraction_of_endurance": [
+      [0.0, 0.5, 1.0],
+      [0.5, 0.8, 1.3],
+      [0.8, 1.0, 2.0],
+      [1.0, null, 4.0]
+    ]
+  },
+  "smart_factor": {
+    "$comment": "A pending sector is a step change, not a nudge: the drive has data it cannot read and has not yet been able to relocate. Multipliers are applied together; see risk.py for the exact combination.",
+    "pending_sector": {
+      "any": 8.0,
+      "note": "Dominates when non-zero. One is enough to change the answer."
+    },
+    "uncorrectable": {
+      "any": 6.0
+    },
+    "reallocated": {
+      "bands": [
+        [0, 1, 1.0],
+        [1, 10, 1.6],
+        [10, 50, 2.5],
+        [50, null, 4.0]
+      ]
+    },
+    "crc_errors": {
+      "bands": [
+        [0, 1, 1.0],
+        [1, 100, 1.2],
+        [100, null, 1.5]
+      ],
+      "note": "Interface or cable errors rather than media errors. Real, but usually a bad cable or bridge rather than a dying platter."
+    },
+    "unverified": {
+      "multiplier": 1.35,
+      "note": "Applied when a drive reports no error counters at all. A drive verified clean and a drive that said nothing are not in the same state: the second could have fifty pending sectors and no way to tell. Uncertainty is a cost, and pricing it at 1.0 would rank an unverifiable drive alongside one known to be healthy."
+    }
+  },
+  "bus_factor": {
+    "$comment": "The enclosure and bridge are part of the failure unit: a USB bridge that dies takes access to the drive with it, and SMART is often unavailable through one.",
+    "sata": 1.0,
+    "nvme": 1.0,
+    "sas": 0.9,
+    "usb": 1.25,
+    "ieee1394": 1.4,
+    "unknown": 1.15
+  },
+  "correlation": {
+    "$comment": "Copies that fail together are not two copies. Applied to the joint loss probability of a set of drives.",
+    "same_batch_key": 3.0,
+    "same_disaster_zone": 2.0,
+    "note": "batch_key is manufacturer + model + purchase month. Two drives from one purchase order share a manufacturing batch, a shelf, an environment and a duty cycle; their failures are correlated well above independence."
+  },
+  "per_model": {
+    "$comment": "Populate from published fleet data. Each entry: {\"afr\": <float>, \"source\": \"<name>\", \"url\": \"<url>\", \"retrieved_at\": \"<YYYY-MM-DD>\"}. Matched on a normalised model string; takes precedence over base_afr."
+  }
+}

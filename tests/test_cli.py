@@ -212,6 +212,112 @@ def test_the_windowed_build_opens_a_window_instead_of_printing_help() -> None:
     assert not wants_window("DriveFusion.exe", frozen=False, has_command=False)
 
 
+def test_a_verb_with_subcommands_prints_its_own_help(cli, capsys) -> None:
+    """`health` and `scope` both need an action.
+
+    The dispatcher used to read only `scope_command`, so `health show` fell
+    through to the top-level help and looked like an unknown verb.
+    """
+    from drivefusion.cli.main import SUBCOMMAND_VERBS
+
+    for verb in SUBCOMMAND_VERBS:
+        assert cli(verb) == 0
+        assert verb in capsys.readouterr().out
+
+
+def test_health_subcommands_are_reachable(cli, tmp_path: Path, capsys) -> None:
+    tree = tmp_path / "media"
+    tree.mkdir()
+    payload = b"same size twice" * 40
+    (tree / "a.bin").write_bytes(payload)
+    (tree / "b.bin").write_bytes(payload)
+
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    assert cli("hash") == 0
+    capsys.readouterr()
+
+    assert cli("health", "show") == 0
+    shown = capsys.readouterr().out
+    assert "%/yr" in shown
+    assert "generic-defaults" in shown, "the rubric version must be named"
+
+    assert cli("health", "collect", "--dry-run") == 0
+    dry = capsys.readouterr().out
+    assert "nothing was read and nothing was recorded" in dry
+
+    assert cli("health", "collect") == 0
+    assert "estimated" in capsys.readouterr().out
+
+
+def test_health_set_records_what_only_the_user_knows(
+    cli, tmp_path: Path, capsys
+) -> None:
+    """Purchase date and zone cannot be discovered; they change the numbers."""
+    tree = tmp_path / "media"
+    tree.mkdir()
+    (tree / "a.bin").write_bytes(b"x" * 100)
+
+    assert cli("scope", "add", str(tree)) == 0
+    capsys.readouterr()
+
+    from drivefusion.core.store.catalog import Catalog
+
+    catalog_path = tmp_path / "catalog" / "catalog.db"
+    with Catalog(catalog_path) as catalog:
+        drives = catalog.drives()
+    if not drives:
+        pytest.skip("no physical drive identified in this environment")
+
+    drive_id = int(drives[0]["id"])
+    assert cli("health", "set", str(drive_id), "--nickname", "ARCHIVE-9") == 0
+    assert "updated drive" in capsys.readouterr().out
+
+    assert cli("health", "set", str(drive_id)) == 2
+    assert "nothing to set" in capsys.readouterr().err
+
+
+def test_health_set_rejects_an_unknown_drive(cli, capsys) -> None:
+    assert cli("health", "set", "999", "--nickname", "X") == 1
+    assert "no drive 999" in capsys.readouterr().err
+
+
+def test_risk_report_states_what_it_rests_on(cli, tmp_path: Path, capsys) -> None:
+    """A loss figure without its evidence and caveats is not reportable."""
+    tree = tmp_path / "media"
+    tree.mkdir()
+    payload = b"duplicated content" * 60
+    (tree / "a.bin").write_bytes(payload)
+    (tree / "b.bin").write_bytes(payload)
+
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    assert cli("hash") == 0
+    capsys.readouterr()
+
+    assert cli("report", "risk") == 0
+    report = capsys.readouterr().out
+    assert "expected loss" in report
+    assert "/year" in report
+    assert "generic defaults" in report, "a generic rate must be labelled as one"
+    assert "age-based estimates" in report, "the evidence base must be stated"
+
+
+def test_risk_report_on_an_unhashed_catalog_says_why_it_is_empty(
+    cli, tmp_path: Path, capsys
+) -> None:
+    tree = tmp_path / "media"
+    tree.mkdir()
+    (tree / "unique.bin").write_bytes(b"z" * 777)
+
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    capsys.readouterr()
+
+    assert cli("report", "risk") == 0
+    assert "nothing to put a risk figure on" in capsys.readouterr().out
+
+
 def test_scan_without_scope_is_an_error(cli, capsys) -> None:
     assert cli("scan") == 1
     assert "no scope roots" in capsys.readouterr().out
