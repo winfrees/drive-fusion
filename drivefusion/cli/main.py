@@ -36,9 +36,10 @@ DEFAULT_CATALOG = Path(
 )
 
 #: Verbs not yet implemented, and the milestone that lands each.
-PLANNED_VERBS = {
-    "export": ("write reports, manifests, and bundles to an export folder", "M8"),
-}
+#: Verbs not yet implemented, and the milestone that lands each. Empty since
+#: M8; kept because the dispatcher and its test are written against it, and a
+#: later milestone adding a verb should not have to re-invent the mechanism.
+PLANNED_VERBS: dict[str, tuple[str, str]] = {}
 
 
 #: Name of the windowed executable built by packaging/drivefusion.spec.
@@ -295,6 +296,49 @@ def build_parser() -> argparse.ArgumentParser:
     plan_sub.add_parser("list", help="plans stored in the catalog")
     plan_show = plan_sub.add_parser("show", help="a stored plan")
     plan_show.add_argument("plan_id", type=int)
+
+    export_parser = subparsers.add_parser(
+        "export",
+        help="write reports, manifests and metadata to a folder you choose",
+    )
+    export_sub = export_parser.add_subparsers(dest="export_command")
+
+    export_bundle = export_sub.add_parser(
+        "bundle", help="write a full export bundle"
+    )
+    export_bundle.add_argument(
+        "destination",
+        help="a folder OUTSIDE your archive; each export lands in a new "
+        "timestamped subfolder and no existing file is ever replaced",
+    )
+    export_bundle.add_argument(
+        "--plan",
+        type=int,
+        metavar="PLAN_ID",
+        help="include a saved plan (and mark it exported)",
+    )
+    export_bundle.add_argument(
+        "--rename-template",
+        metavar="TEMPLATE",
+        help="also propose a rename mapping, e.g. "
+        "'{collection}/{year}/{stem}{ext}'. A plan is written only when its "
+        "inverse can be written too.",
+    )
+    export_bundle.add_argument(
+        "--inventory-limit",
+        type=int,
+        default=500_000,
+        help="cap on rows in the file inventory (default 500,000)",
+    )
+
+    export_sub.add_parser("list", help="exports recorded in the catalog")
+    export_sub.add_parser(
+        "templates", help="the placeholders a rename template may use"
+    )
+    export_verify = export_sub.add_parser(
+        "verify", help="check a bundle against its own manifest"
+    )
+    export_verify.add_argument("bundle_path")
 
     subparsers.add_parser("gui", help="open the desktop window")
     subparsers.add_parser("status", help="catalog summary")
@@ -1292,6 +1336,142 @@ def cmd_plan_show(args) -> int:
     return 0
 
 
+def cmd_export_bundle(args) -> int:
+    from drivefusion.core.export import bundle as bundle_module
+    from drivefusion.core.export.writer import ExportError
+    from drivefusion.core.plan import document
+
+    with Catalog(args.catalog) as catalog:
+        plan = None
+        if args.plan is not None:
+            try:
+                stored = document.load(catalog, args.plan)
+            except ValueError as error:
+                print(f"plan {args.plan}: {error}", file=sys.stderr)
+                return 1
+            # Rebuilt rather than reconstructed from rows: the bundle needs the
+            # full document, and a plan is cheap to re-solve. The stored
+            # policy is reused so the exported plan is the one that was saved,
+            # not a fresh plan against today's defaults.
+            from drivefusion.core.policy import from_snapshot
+
+            plan = document.build(
+                catalog,
+                name=stored["plan"]["name"],
+                policy=from_snapshot(stored["plan"]["policy_snapshot"]),
+                use_cp_sat=False,
+            )
+            plan.plan_id = int(stored["plan"]["id"])
+
+        try:
+            result = bundle_module.build(
+                catalog,
+                args.destination,
+                plan=plan,
+                rename_template=args.rename_template,
+                inventory_limit=args.inventory_limit,
+            )
+        except ExportError as error:
+            print(f"export refused: {error}", file=sys.stderr)
+            return 2
+
+    print(f"Wrote {len(result.files)} file(s) to {result.root}")
+    print(f"  payload: {result.bag['payload_files']} file(s), "
+          f"oxum {result.bag['payload_oxum']}, {result.bag['algorithm']}")
+    print()
+    print("  Start with report.html. The folder describes your archive; it is")
+    print("  not a copy of it, and nothing in your archive was changed to make it.")
+
+    if result.warnings:
+        print()
+        print("  Warnings:")
+        for warning in result.warnings:
+            print(f"    - {warning}")
+
+    problems = _verify_bundle(result.root)
+    if problems:
+        print()
+        print("  The bundle does not validate against its own manifest:",
+              file=sys.stderr)
+        for problem in problems:
+            print(f"    - {problem}", file=sys.stderr)
+        return 1
+    print()
+    print("  Verified against its own manifest.")
+    return 0
+
+
+def _verify_bundle(root) -> list[str]:
+    from drivefusion.core.export import bagit
+
+    return bagit.validate(root)
+
+
+def cmd_export_list(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        rows = catalog.conn.execute(
+            "SELECT e.id, e.created_at, e.root_path, e.files_written, "
+            "       e.payload_oxum, e.plan_id, "
+            "       (SELECT COUNT(*) FROM export_collection x "
+            "        WHERE x.export_id = e.id) AS collections "
+            "FROM export e ORDER BY e.id DESC LIMIT 25"
+        ).fetchall()
+
+        if not rows:
+            print("No exports recorded. Run `export bundle <folder>`.")
+            return 1
+
+        for row in rows:
+            entry = dict(row)
+            plan = f"  plan {entry['plan_id']}" if entry["plan_id"] else ""
+            print(
+                f"[{entry['id']}] {entry['created_at'][:16]}  "
+                f"{entry['files_written']} files  "
+                f"{entry['collections']} collection(s){plan}"
+            )
+            print(f"      {entry['root_path']}")
+    return 0
+
+
+def cmd_export_templates(args) -> int:
+    from drivefusion.core.export import naming
+
+    print("Rename template placeholders")
+    print()
+    for placeholder, description in sorted(naming.PLACEHOLDERS.items()):
+        print(f"  {placeholder:<14} {description}")
+    print()
+    print(f"  Default: {naming.DEFAULT_TEMPLATE}")
+    print()
+    print("  {stem} is required: a name that drops the original filename")
+    print("  cannot be read back to what it was.")
+    print()
+    print("  A mapping is written only when its inverse can be written too.")
+    print("  Once files are renamed, the old names exist nowhere else — so a")
+    print("  template that gives two files the same name is refused rather")
+    print("  than exported.")
+    return 0
+
+
+def cmd_export_verify(args) -> int:
+    from pathlib import Path as _Path
+
+    root = _Path(args.bundle_path).expanduser()
+    if not root.is_dir():
+        print(f"{root} is not a directory", file=sys.stderr)
+        return 1
+
+    problems = _verify_bundle(root)
+    if problems:
+        print(f"{root.name} does NOT validate:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+
+    print(f"{root.name} validates against its own manifest.")
+    return 0
+
+
 def cmd_gui(args) -> int:
     """Open the window.
 
@@ -1373,7 +1553,7 @@ def cmd_volumes(args) -> int:
 
 
 #: Verbs that require an action, and print their own help without one.
-SUBCOMMAND_VERBS = ("scope", "health", "collections", "plan")
+SUBCOMMAND_VERBS = ("scope", "health", "collections", "plan", "export")
 
 DISPATCH = {
     ("scope", "add"): cmd_scope_add,
@@ -1401,6 +1581,10 @@ DISPATCH = {
     ("plan", "build"): cmd_plan_build,
     ("plan", "list"): cmd_plan_list,
     ("plan", "show"): cmd_plan_show,
+    ("export", "bundle"): cmd_export_bundle,
+    ("export", "list"): cmd_export_list,
+    ("export", "templates"): cmd_export_templates,
+    ("export", "verify"): cmd_export_verify,
     ("gui", None): cmd_gui,
     ("status", None): cmd_status,
     ("volumes", None): cmd_volumes,

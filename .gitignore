@@ -7,3 +7,8 @@ dist/
 .venv/
 venv/
 *.vhdx
+
+# Export bundles. These are generated output, and a stray one in the repo root
+# (from running `export bundle .` or a probe script) is easy to commit by
+# accident — it would carry a description of whoever's drives produced it.
+export-*/

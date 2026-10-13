@@ -90,7 +90,10 @@ def prepare_root(base: str | Path, *, label: str = "export", catalog=None) -> Pa
     root = timestamped_root(base, label=label)
 
     if catalog is not None:
-        _refuse_scanned_locations(root, catalog)
+        # Reported against the folder the user actually named, not the
+        # timestamped one inside it: the subfolder does not exist yet, and
+        # naming it in the error makes the message read like a bug report.
+        _refuse_scanned_locations(root, catalog, named=Path(base).expanduser())
 
     try:
         root.mkdir(parents=True, exist_ok=False)
@@ -99,7 +102,7 @@ def prepare_root(base: str | Path, *, label: str = "export", catalog=None) -> Pa
     return root
 
 
-def _refuse_scanned_locations(root: Path, catalog) -> None:
+def _refuse_scanned_locations(root: Path, catalog, named: Path | None = None) -> None:
     """Refuse an export root that sits inside a catalogued scope root.
 
     Only that direction is checked, and only that direction matters. A bundle
@@ -125,9 +128,9 @@ def _refuse_scanned_locations(root: Path, catalog) -> None:
 
         if _within(root, scanned_path):
             raise ExportError(
-                f"refusing to export into {root}: it is inside the scanned "
-                f"tree {scanned_path}. Drive Fusion does not write to the "
-                "media it catalogues — choose a destination outside your "
+                f"refusing to export into {named or root}: it is inside the "
+                f"scanned tree {scanned_path}. Drive Fusion does not write to "
+                "the media it catalogues — choose a destination outside your "
                 "archive."
             )
 

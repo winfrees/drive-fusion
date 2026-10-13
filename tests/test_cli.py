@@ -105,12 +105,44 @@ def test_unknown_scope_root_is_an_error(cli, capsys) -> None:
 
 
 def test_planned_verbs_report_their_milestone(cli, capsys) -> None:
+    """Empty since M8: every verb the CLI advertises is implemented.
+
+    The mechanism is still asserted, because a later milestone that announces
+    a verb before building it should say so rather than printing top-level help
+    and exiting zero.
+    """
     from drivefusion.cli.main import PLANNED_VERBS
 
-    assert PLANNED_VERBS, "nothing left to plan for; drop this test with M8"
     for verb, (_help, milestone) in PLANNED_VERBS.items():
         assert cli(verb) == 2
         assert milestone in capsys.readouterr().err
+
+
+def test_every_advertised_verb_actually_runs(cli, capsys) -> None:
+    """A verb in the help that falls through to top-level help is worse than
+    one that says "not yet": it looks like the user got it wrong."""
+    from drivefusion.cli.main import (
+        DISPATCH,
+        PLANNED_VERBS,
+        SUBCOMMAND_VERBS,
+        build_parser,
+    )
+
+    parser = build_parser()
+    verbs: set[str] = set()
+    for action in parser._actions:
+        choices = getattr(action, "choices", None)
+        if choices and hasattr(choices, "keys"):
+            verbs.update(choices.keys())
+
+    dispatched = {verb for verb, _action in DISPATCH}
+    unreachable = verbs - dispatched - set(PLANNED_VERBS) - set(SUBCOMMAND_VERBS)
+    assert not unreachable, f"verbs with no handler: {sorted(unreachable)}"
+
+    # Every subcommand verb prints its own help and exits zero.
+    for verb in SUBCOMMAND_VERBS:
+        assert cli(verb) == 0, f"`{verb}` with no action did not print help"
+        assert verb in capsys.readouterr().out
 
 
 def test_hash_report_and_verify(cli, tmp_path: Path, capsys) -> None:
@@ -634,3 +666,144 @@ def test_no_cp_sat_actually_skips_the_optimiser(
     assert cli("plan", "build") == 0
     capsys.readouterr()
     assert calls, "the optimiser was never attempted without the flag"
+
+
+# -- export -------------------------------------------------------------------
+
+def test_export_bundle_writes_and_verifies(cli, tmp_path: Path, capsys) -> None:
+    media = _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    destination = tmp_path / "exports"
+    assert cli("export", "bundle", str(destination)) == 0
+    out = capsys.readouterr().out
+
+    assert "Wrote" in out
+    assert "Verified against its own manifest" in out
+    assert "not a copy of it" in out
+
+    bundles = list(destination.iterdir())
+    assert len(bundles) == 1
+    assert (bundles[0] / "data" / "report.html").is_file()
+    assert (bundles[0] / "manifest-sha256.txt").is_file()
+    # And the archive is untouched.
+    assert sorted(p.name for p in (media / "project").iterdir())[:1] == ["f000.dat"]
+
+
+def test_export_refuses_a_destination_inside_the_archive(
+    cli, tmp_path: Path, capsys
+) -> None:
+    media = _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("export", "bundle", str(media / "exports")) == 2
+    error = capsys.readouterr().err
+    assert "inside the scanned tree" in error
+    assert "outside your archive" in error
+    assert not list(media.glob("exports")), "a folder was created anyway"
+
+
+def test_export_output_never_tells_the_user_to_delete_anything(
+    cli, tmp_path: Path, capsys
+) -> None:
+    from drivefusion.core import wording
+
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("export", "bundle", str(tmp_path / "exports")) == 0
+    wording.assert_safe(capsys.readouterr().out, what="export output")
+
+
+def test_export_list_shows_what_was_written(cli, tmp_path: Path, capsys) -> None:
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("export", "list") == 1
+    assert "No exports recorded" in capsys.readouterr().out
+
+    assert cli("export", "bundle", str(tmp_path / "exports")) == 0
+    capsys.readouterr()
+
+    assert cli("export", "list") == 0
+    listing = capsys.readouterr().out
+    assert "file" in listing
+    assert str(tmp_path / "exports") in listing
+
+
+def test_export_verify_catches_a_tampered_bundle(
+    cli, tmp_path: Path, capsys
+) -> None:
+    """A manifest nobody can fail is a manifest nobody has checked."""
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    destination = tmp_path / "exports"
+    assert cli("export", "bundle", str(destination)) == 0
+    capsys.readouterr()
+    root = next(destination.iterdir())
+
+    assert cli("export", "verify", str(root)) == 0
+    assert "validates against its own manifest" in capsys.readouterr().out
+
+    report = root / "data" / "report.html"
+    report.write_text(report.read_text() + " ")
+
+    assert cli("export", "verify", str(root)) == 1
+    error = capsys.readouterr().err
+    assert "does NOT validate" in error
+    assert "report.html" in error
+
+
+def test_export_verify_reports_a_missing_folder_without_a_traceback(
+    cli, tmp_path: Path, capsys
+) -> None:
+    assert cli("export", "verify", str(tmp_path / "nope")) == 1
+    assert "not a directory" in capsys.readouterr().err
+
+
+def test_export_templates_explains_the_placeholders_and_the_undo_rule(
+    cli, capsys
+) -> None:
+    assert cli("export", "templates") == 0
+    out = capsys.readouterr().out
+
+    assert "{stem}" in out and "{collection}" in out
+    assert "{stem} is required" in out
+    assert "inverse" in out
+    assert "refused rather" in out
+
+
+def test_export_with_a_plan_marks_it_exported(cli, tmp_path: Path, capsys) -> None:
+    from drivefusion.core.plan import document
+    from drivefusion.core.store.catalog import Catalog
+
+    catalog_path = tmp_path / "catalog" / "catalog.db"
+    _plannable(tmp_path, catalog_path)
+    capsys.readouterr()
+
+    assert cli("plan", "build", "--no-cp-sat", "--save") == 0
+    capsys.readouterr()
+
+    assert cli("export", "bundle", str(tmp_path / "exports"), "--plan", "1") == 0
+    capsys.readouterr()
+
+    with Catalog(catalog_path) as catalog:
+        assert document.load(catalog, 1)["plan"]["status"] == "exported"
+
+
+def test_export_reports_a_missing_plan_rather_than_exporting_without_one(
+    cli, tmp_path: Path, capsys
+) -> None:
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("export", "bundle", str(tmp_path / "exports"), "--plan", "99") == 1
+    assert "99" in capsys.readouterr().err
+    assert not (tmp_path / "exports").exists(), "a bundle was written anyway"
+
+
+def test_export_with_no_action_prints_its_own_help(cli, capsys) -> None:
+    assert cli("export") == 0
+    out = capsys.readouterr().out
+    assert "bundle" in out and "verify" in out and "templates" in out

@@ -1,0 +1,138 @@
+{
+  "id": "drivefusion-ndsa-levels",
+  "version": "2.0.0",
+  "retrieved_at": "2026-10-13",
+  "kind": "rubric",
+  "provenance": {
+    "framework": "NDSA Levels of Digital Preservation v2.0 (2019)",
+    "url": "https://ndsa.org/publications/levels-of-digital-preservation/",
+    "note": "The five functional areas and four levels are the published framework. The machine-checkable tests below are this tool's operationalisation of them for offline personal and lab archives, and are not part of the published standard. Several published rows cannot be checked from a catalog at all \u2014 staff training, written policy, succession planning \u2014 and are reported as 'not assessable here' rather than silently passed or failed. v2.0.0: the metadata-export check became assessable when export bundles shipped (M8); it previously reported that the capability had not been built."
+  },
+  "areas": {
+    "storage": {
+      "title": "Storage and geographic location",
+      "levels": {
+        "1": {
+          "check": "copies_at_least",
+          "value": 2,
+          "statement": "Two complete copies in separate locations"
+        },
+        "2": {
+          "check": "copies_at_least",
+          "value": 3,
+          "statement": "Three complete copies, at least one off-site"
+        },
+        "3": {
+          "check": "distinct_zones_at_least",
+          "value": 2,
+          "statement": "Copies in geographic locations with different disaster threats"
+        },
+        "4": {
+          "check": "distinct_zones_at_least",
+          "value": 3,
+          "statement": "Three or more copies in geographic locations with different disaster threats"
+        }
+      }
+    },
+    "integrity": {
+      "title": "Integrity",
+      "levels": {
+        "1": {
+          "check": "content_identified_share",
+          "value": 0.95,
+          "statement": "Checksums recorded for all content"
+        },
+        "2": {
+          "check": "fixity_checked_share",
+          "value": 0.5,
+          "statement": "Fixity checked on a schedule"
+        },
+        "3": {
+          "check": "fixity_checked_share",
+          "value": 0.9,
+          "statement": "Fixity checked in response to specific events and logged"
+        },
+        "4": {
+          "check": "fixity_incident_response",
+          "value": 1,
+          "statement": "Fixity information recorded and incidents acted on"
+        }
+      }
+    },
+    "control": {
+      "title": "Control",
+      "levels": {
+        "1": {
+          "check": "read_only_access",
+          "value": 1,
+          "statement": "Authorisation restricted; this tool holds read-only access by construction"
+        },
+        "2": {
+          "check": "read_only_access",
+          "value": 1,
+          "statement": "Access restrictions documented"
+        },
+        "3": {
+          "check": "not_assessable",
+          "value": 0,
+          "statement": "Documented policy for access and authorisation \u2014 not assessable from a catalog"
+        },
+        "4": {
+          "check": "not_assessable",
+          "value": 0,
+          "statement": "Audit of authorisation and access \u2014 not assessable from a catalog"
+        }
+      }
+    },
+    "metadata": {
+      "title": "Metadata",
+      "levels": {
+        "1": {
+          "check": "inventory_exists",
+          "value": 1,
+          "statement": "An inventory of content and its storage location"
+        },
+        "2": {
+          "check": "metadata_completeness",
+          "value": 0.5,
+          "statement": "Administrative, transformative and descriptive metadata"
+        },
+        "3": {
+          "check": "metadata_completeness",
+          "value": 0.8,
+          "statement": "Standard-conformant metadata"
+        },
+        "4": {
+          "check": "metadata_standard_export",
+          "value": 1,
+          "statement": "Metadata in a standard, machine-readable form"
+        }
+      }
+    },
+    "content": {
+      "title": "Content",
+      "levels": {
+        "1": {
+          "check": "formats_recorded",
+          "value": 1,
+          "statement": "File formats of content recorded"
+        },
+        "2": {
+          "check": "format_risk_known",
+          "value": 1,
+          "statement": "Format obsolescence risk assessed"
+        },
+        "3": {
+          "check": "not_assessable",
+          "value": 0,
+          "statement": "Monitoring for format obsolescence \u2014 not assessable from a catalog"
+        },
+        "4": {
+          "check": "not_assessable",
+          "value": 0,
+          "statement": "Migration paths performed as needed \u2014 out of scope; this tool never converts anything"
+        }
+      }
+    }
+  }
+}

@@ -88,6 +88,10 @@ class Plan:
     scorecards_after: list[dict] = field(default_factory=list)
     standards: dict = field(default_factory=dict)
     created_at: str = field(default_factory=utcnow)
+    #: Set by :func:`save`. An unsaved plan has none, and an export that
+    #: includes one can then mark exactly that row 'exported' (§3.3) rather
+    #: than guessing which stored plan it was.
+    plan_id: int | None = None
 
     @property
     def bytes_to_copy(self) -> int:
@@ -614,6 +618,8 @@ def save(catalog: Catalog, plan: Plan) -> int:
             for step in plan.steps
         ],
     )
+    catalog.conn.commit()
+    plan.plan_id = plan_id
     return plan_id
 
 

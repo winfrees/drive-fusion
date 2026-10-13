@@ -128,20 +128,79 @@ def test_not_for_sharing_is_a_clear_answer(catalog: Catalog, tmp_path: Path) -> 
 # -- not-applicable is not a pass ---------------------------------------------
 
 def test_unassessable_criteria_are_excluded_not_passed(
+    catalog: Catalog, tmp_path: Path, monkeypatch
+) -> None:
+    """A score over four of fourteen criteria must not look like a perfect one.
+
+    Driven through a rubric naming a check this build does not implement, which
+    is the case that still arises: a newer rubric version adds a criterion
+    before the code catches up. Every criterion in the *shipped* rubric is now
+    assessable — F3 and I1 became so when export bundles arrived in M8 — so
+    asserting on one of those would make this test fail for the right reason
+    and the wrong cause.
+    """
+    collection = filed_collection(catalog, tmp_path, **fully_described())
+    hash_pass(catalog)
+
+    import dataclasses
+
+    real = standards.fair_rubric()
+    patched = dataclasses.replace(
+        real,
+        document={
+            **real.document,
+            "criteria": [
+                *real.document["criteria"],
+                {
+                    "id": "X1",
+                    "principle": "Findable",
+                    "title": "Something a later rubric asks for",
+                    "check": "not_implemented_in_this_build",
+                    "weight": 5.0,
+                    "gap": "unknown",
+                    "remedy": "upgrade Drive Fusion",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(scorecard.standards, "fair_rubric", lambda *a, **k: patched)
+
+    card = scorecard.score(catalog, collection.id)
+
+    assert card.not_assessed, "nothing was reported as unassessable"
+    assert [result.id for result in card.not_assessed] == ["X1"]
+    assert card.assessed < len(patched.document["criteria"])
+    assert all(r.status != scorecard.PASS for r in card.not_assessed)
+    assert f"of {card.assessed} assessed criteria" in card.summary(), (
+        "the summary must say how many criteria the score covers"
+    )
+    # A weight-5 criterion nobody can score must not drag the grade down
+    # either: excluded means excluded from both sides of the fraction. Compared
+    # against the unpatched rubric, where that criterion does not exist at all.
+    monkeypatch.setattr(scorecard.standards, "fair_rubric", lambda *a, **k: real)
+    assert card.score == scorecard.score(catalog, collection.id).score
+
+
+def test_every_shipped_criterion_can_actually_be_scored(
     catalog: Catalog, tmp_path: Path
 ) -> None:
-    """A score over four of fourteen criteria must not look like a perfect one."""
+    """A criterion the code cannot evaluate is silently excluded from the
+    denominator, so a typo in a rubric's check name would quietly raise every
+    grade instead of failing loudly."""
     collection = filed_collection(catalog, tmp_path, **fully_described())
     hash_pass(catalog)
 
     card = scorecard.score(catalog, collection.id)
-    rubric_total = len(standards.fair_rubric()["criteria"])
-
-    assert card.not_assessed, "nothing was reported as unassessable"
-    assert card.assessed < rubric_total
-    assert all(r.status != scorecard.PASS for r in card.not_assessed)
-    assert f"of {card.assessed} assessed criteria" in card.summary(), (
-        "the summary must say how many criteria the score covers"
+    unimplemented = [
+        f"{result.id}: {result.detail}"
+        for result in card.results
+        if "no check implemented" in result.detail
+    ]
+    assert not unimplemented, (
+        f"the rubric names checks with no implementation: {unimplemented}"
+    )
+    assert card.assessed == len(standards.fair_rubric()["criteria"]), (
+        "every criterion in the shipped rubric should now be assessable"
     )
 
 
@@ -163,7 +222,11 @@ def test_the_score_names_its_rubric_version(catalog: Catalog, tmp_path: Path) ->
     collection = filed_collection(catalog, tmp_path)
     card = scorecard.score(catalog, collection.id)
     assert "drivefusion-fair-rubric" in card.rubric
-    assert "v1.0.0" in card.rubric
+    # Derived from the shipped file, not hard-coded: the rubric is versioned
+    # data, and the point of the citation is that it tracks the file rather
+    # than a number written down in a test.
+    assert f"v{standards.fair_rubric().version}" in card.rubric
+    assert standards.fair_rubric().retrieved_at in card.rubric
 
 
 # -- the measures behind the criteria -----------------------------------------
@@ -391,11 +454,11 @@ def test_a_malformed_rubric_is_an_error_not_a_default(
 
     broken = tmp_path / "standards" / "fair"
     broken.mkdir(parents=True)
-    (broken / "fair-rubric-v1.json").write_text('{"id": "x"}')
+    (broken / standards.FAIR_RUBRIC.split("/")[-1]).write_text('{"id": "x"}')
     with pytest.raises(standards.StandardsError, match="provenance"):
         standards.fair_rubric()
 
-    (broken / "fair-rubric-v1.json").write_text("not json at all")
+    (broken / standards.FAIR_RUBRIC.split("/")[-1]).write_text("not json at all")
     standards.load.cache_clear()
     with pytest.raises(standards.StandardsError, match="not valid JSON"):
         standards.fair_rubric()

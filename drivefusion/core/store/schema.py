@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -350,6 +350,42 @@ CREATE TABLE IF NOT EXISTS plan_step (
 );
 CREATE INDEX IF NOT EXISTS ix_step_plan ON plan_step(plan_id, seq);
 
+-- Exports written (docs/PLAN.md §10, §12). Recorded because two FAIR criteria
+-- are about whether a machine-readable description exists at all — F3, metadata
+-- that references the data, and I1, a formal shared representation — and until
+-- M8 those were excluded from scoring as "not assessable" rather than failed.
+-- They are assessable now, and the evidence is that a bundle was written.
+--
+-- The root path is stored because this is the local catalog, where knowing
+-- where your last export went is useful. It is deliberately *not* carried into
+-- a bundle, which is a thing people share: see bundle._stats.
+CREATE TABLE IF NOT EXISTS export (
+    id              INTEGER PRIMARY KEY,
+    created_at      TEXT NOT NULL,
+    root_path       TEXT NOT NULL,
+    tool_version    TEXT,
+    plan_id         INTEGER REFERENCES plan(id),
+    files_written   INTEGER,
+    payload_oxum    TEXT,           -- BagIt: octetcount.filecount
+    manifest_algo   TEXT,
+    bundle_json     TEXT            -- what was in it, for the audit trail
+);
+
+-- Which collections an export described, and in what form. One row per
+-- collection per export: a collection added after an export was taken is not
+-- covered by it, and must not score as though it were.
+CREATE TABLE IF NOT EXISTS export_collection (
+    id              INTEGER PRIMARY KEY,
+    export_id       INTEGER NOT NULL REFERENCES export(id),
+    collection_id   INTEGER NOT NULL REFERENCES collection(id),
+    has_manifest    INTEGER NOT NULL DEFAULT 0,   -- FAIR F3
+    has_ro_crate    INTEGER NOT NULL DEFAULT 0,   -- FAIR I1
+    has_datacite    INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(export_id, collection_id)
+);
+CREATE INDEX IF NOT EXISTS ix_export_collection
+    ON export_collection(collection_id);
+
 -- Drive health over time, one row per smartctl reading (docs/PLAN.md §8.2).
 -- History rather than a snapshot on the drive row: a reallocated count that
 -- went from 0 to 3 last month is a different fact from one that has been 3 for
@@ -447,6 +483,8 @@ MIGRATIONS: dict[int, tuple] = {
     6: (),
     # v7 adds the plan tables, which the DDL creates.
     7: (),
+    # v8 adds the export tables, likewise.
+    8: (),
 }
 
 

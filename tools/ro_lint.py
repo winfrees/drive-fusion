@@ -99,8 +99,13 @@ EXPORT_WRITE_ENTRYPOINT = "drivefusion/core/export/writer.py"
 
 #: Ways to create a file, banned everywhere in the export package but its
 #: entrypoint.
+#:
+#: ``open`` is handled separately, by mode: the export package legitimately
+#: reads files it wrote itself — a BagIt manifest is checksums over the payload,
+#: and computing them means opening it — so a read-only open is allowed and
+#: anything that can create or modify is not.
 EXPORT_FILE_CREATORS = frozenset(
-    {"open", "write_text", "write_bytes", "touch", "mkdir", "makedirs", "mkstemp"}
+    {"write_text", "write_bytes", "touch", "mkdir", "makedirs", "mkstemp"}
 )
 
 #: Modules permitted to call raw Win32 handle APIs. Enumeration backends join
@@ -314,6 +319,8 @@ class _Visitor(ast.NodeVisitor):
             if func.id in OPEN_LIKE:
                 if not self.writer_mode:
                     self._check_open(node, qualified=func.id)
+                elif self.is_export and not self.is_export_entrypoint:
+                    self._check_export_read_only_open(node, func.id)
             elif func.id in RAW_HANDLE_APIS and not self.permit_raw_handles:
                 self._add(
                     node,
@@ -395,6 +402,13 @@ class _Visitor(ast.NodeVisitor):
 
             if self.writer_mode and func.attr in EXPORT_FILE_CREATORS:
                 self._check_writer_creation(node, func.attr)
+            elif (
+                self.writer_mode
+                and self.is_export
+                and not self.is_export_entrypoint
+                and func.attr in OPEN_LIKE
+            ):
+                self._check_export_read_only_open(node, f"{func.attr}")
             elif func.attr in OPEN_LIKE and not (
                 func.attr == "open"
                 and isinstance(func.value, ast.Name)
@@ -422,6 +436,46 @@ class _Visitor(ast.NodeVisitor):
                 )
 
         self.generic_visit(node)
+
+    def _check_export_read_only_open(self, node: ast.Call, name: str) -> None:
+        """In the export package, only writer.py may open a file for writing.
+
+        Reading is allowed and needed: the BagIt manifest is checksums over the
+        payload, so the module that writes it has to read it back. Creating is
+        not, because that would be a write bypassing the inside-the-root and
+        does-not-exist assertions the guarantee rests on.
+        """
+        mode_node: ast.AST | None = None
+        positional = node.args[1:] if name == "open" else node.args
+        if positional:
+            mode_node = positional[0]
+        for keyword in node.keywords:
+            if keyword.arg == "mode":
+                mode_node = keyword.value
+
+        readable = (
+            isinstance(mode_node, ast.Constant)
+            and isinstance(mode_node.value, str)
+            and mode_node.value in ALLOWED_OPEN_MODES
+        )
+        if readable:
+            return
+
+        shown = (
+            repr(mode_node.value)
+            if isinstance(mode_node, ast.Constant)
+            else "a non-literal mode"
+            if mode_node is not None
+            else "no mode"
+        )
+        self._add(
+            node,
+            "DF010",
+            f"{name}() with {shown} outside {EXPORT_WRITE_ENTRYPOINT}; the "
+            'export package may open a file "rb" to checksum what it wrote, '
+            "and every write must go through writer.write(), which checks the "
+            "target is inside the chosen root and does not already exist",
+        )
 
     def _check_writer_creation(self, node: ast.Call, name: str) -> None:
         """In the export package, only the single entrypoint may create a file.

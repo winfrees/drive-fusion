@@ -128,9 +128,14 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
     from drivefusion.gui.main_window import PLANNED
 
     built = window.stack.count()
-    assert built == 6, "Scope, Dashboard, Drives, Catalog, Collections, Plan"
+    assert built == 7, (
+        "Scope, Dashboard, Drives, Catalog, Collections, Plan, Exports"
+    )
     assert window.nav.count() == built + len(PLANNED)
 
+    # Empty since M8: every announced screen is built. The mechanism is still
+    # asserted, so a later milestone that announces one before building it gets
+    # the same treatment rather than a nav entry that silently does nothing.
     for offset, (name, milestone) in enumerate(PLANNED):
         item = window.nav.item(built + offset)
         assert name in item.text()

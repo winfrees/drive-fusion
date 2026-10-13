@@ -23,10 +23,12 @@ disclaimer in the plan.
 
 ## Status
 
-**M7 complete — the archive can now be planned.** On top of cataloging, redundancy, risk and
-curation, Drive Fusion produces a consolidation plan: a numbered checklist that says what to
-copy where, why, what it will cost, and what it buys. It is a document, not an operation.
-There is no Apply button, because there is nothing behind one.
+**M8 complete — all eight milestones are done.** Drive Fusion catalogs ~20 drives and tens of
+millions of files without writing to any of them, reports what is duplicated and what is at
+risk, proposes and scores collections against FAIR and the NDSA levels, plans consolidation as
+a reviewable checklist, and exports the whole description as a BagIt bundle with RO-Crate,
+DataCite and PREMIS metadata. It is a planning tool throughout: there is no Apply button,
+because there is nothing behind one.
 
 | Milestone | State |
 |---|---|
@@ -38,7 +40,7 @@ There is no Apply button, because there is nothing behind one.
 | **M5** Health & risk | **done** — smartctl parsing, versioned AFR table, durability model, expected bytes lost/yr |
 | **M6** Curation & FAIR | **done** — collection inference and review queue, membership rules, FAIR + NDSA scorecards |
 | **M7** Planner | **done** — NDSA-derived policy, cluster-exact footprints, add-only solver, checklist with reasons |
-| M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M8** Exports | **done** — BagIt bundles, RO-Crate/DataCite/PREMIS, per-drive manifests, reversible rename plans |
 
 ```
 drivefusion scope add D:\Research
@@ -59,6 +61,9 @@ drivefusion score                  # FAIR and NDSA scorecards, with remedies
 drivefusion plan build --level 2   # a checklist; nothing is copied or moved for you
 drivefusion plan build --save      # keep it in the catalog, status: draft, forever
 drivefusion plan show 1            # read a saved plan back
+drivefusion export bundle E:\out   # a folder of documents; refuses a path inside your archive
+drivefusion export verify E:\out\export-...   # check a bundle against its own manifest
+drivefusion export templates       # the rename placeholders, and the undo rule
 drivefusion gui                    # the desktop window (needs the [gui] extra)
 ```
 
@@ -85,6 +90,24 @@ appendix, as evidence for you to act on with your own tools.
 occupy 26× their byte count on an exFAT volume with 128 KiB clusters. Estimating from logical
 bytes produces plans that overflow the drive partway through a copy, so every step states the
 space it actually needs and names the cluster size when the two differ.
+
+**An export is a description, not a copy.** The bundle holds reports, metadata and per-drive
+manifests; the files it describes stay on your drives. It is packaged as a BagIt bag so it can
+be verified intact years later, and `bag-info.txt` says plainly that the payload is the
+description — a bag whose manifest implied it contained the archive would verify as incomplete
+everywhere it was taken. Every export goes into a new timestamped folder, no existing file is
+ever replaced, and a destination inside a catalogued drive is refused with the reason.
+
+**A rename plan ships only with the table that undoes it.** Once four thousand files are
+renamed, the old names exist nowhere else — so a mapping whose collisions would make it
+irreversible is refused rather than exported, and `rename-plan.csv` always has
+`rename-undo.csv` beside it.
+
+**Nothing Drive Fusion writes tells you to delete anything.** The code cannot delete; that did
+not stop it from *saying* to, and a checklist is followed by hand. So every generated document
+is read against a denylist before it is handed over, and refused if it contains an instruction
+to remove data — a check narrow enough that the tool's own disclaimers still pass, which is
+tested in both directions.
 
 **Inference proposes; you decide.** There is no directory convention to import, so collections
 are scored out of the tree — size, file-type homogeneity, how tightly the modification dates

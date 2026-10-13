@@ -26,9 +26,19 @@ Two consequences visible in every report:
 - A score names the rubric version it was computed against, so a changed interpretation shows
   up as a changed version rather than as a mysteriously different grade.
 - Criteria the tool cannot assess are **excluded from the denominator and listed**, never
-  passed. `fair/` marks export-dependent criteria (F3, I1) this way until M8 ships bundles, and
-  `ndsa/` marks every row about written policy, staff training or succession planning, which a
-  catalog cannot see.
+  passed. `ndsa/` marks every row about written policy, staff training or succession planning,
+  which a catalog cannot see. `fair/` marked F3 and I1 that way until export bundles existed;
+  from rubric v2.0.0 they are assessed against whether a bundle describing the collection has
+  been written, so they fail before an export and pass after. The exclusion mechanism remains
+  for the case it is actually for: a newer rubric naming a check the running build does not
+  implement.
+
+### Superseded versions
+
+`fair-rubric-v1.json` and `ndsa-levels-v2-v1.json` are kept, not deleted. An export written
+against one cites it by version, and a citation that resolves to nothing is worse than an old
+file sitting beside a new one. The loader points at the current version; see
+`drivefusion/core/standards.py`.
 
 ## `afr/` — annualized failure rates
 

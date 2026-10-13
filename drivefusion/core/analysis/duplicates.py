@@ -24,7 +24,21 @@ from drivefusion.core.store.catalog import Catalog
 
 #: A volume whose physical drive is unknown is treated as its own device.
 #: Negating the volume id keeps it from colliding with a real drive id.
+#:
+#: Written against the alias ``v``. Use :func:`drive_key` for any query that
+#: aliases the volume table differently — notably a subquery. Dropping this
+#: constant into a subquery that calls its volume ``v2`` leaves the expression
+#: pointing at the *outer* ``v``, and an aggregate whose arguments all come
+#: from the outer query is evaluated as an aggregate *of* the outer query:
+#: SQLite silently collapses the whole result to one row. That cost an
+#: afternoon, and the inventory CSV it broke had one line where it should have
+#: had thirty-six.
 DRIVE_KEY = "COALESCE(v.drive_id, -v.id)"
+
+
+def drive_key(alias: str = "v") -> str:
+    """The copy-counting drive key, against a given volume alias."""
+    return f"COALESCE({alias}.drive_id, -{alias}.id)"
 
 _LIVE = "f.vanished_at IS NULL AND f.content_id IS NOT NULL"
 

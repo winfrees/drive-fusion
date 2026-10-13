@@ -137,7 +137,22 @@ def _check(name: str, target, measures: dict) -> tuple[str, str]:
         )
 
     if name == "metadata_standard_export":
-        return NOT_ASSESSABLE, "standard metadata export arrives with M8"
+        # Assessable since M8. A bundle writes RO-Crate and DataCite, which is
+        # metadata in a standard machine-readable form — so the honest answer
+        # is now whether one has been written, not that the tool cannot say.
+        exported = measures.get("exports") or []
+        standard = [entry for entry in exported if entry.get("has_ro_crate")]
+        if standard:
+            return "pass", (
+                f"RO-Crate and DataCite written in the export of "
+                f"{standard[0]['created_at'][:10]}"
+            )
+        if exported:
+            return "fail", "the latest export contains no RO-Crate description"
+        return "fail", (
+            "no export bundle describes this collection; run "
+            "`drivefusion export bundle <folder>`"
+        )
 
     if name == "formats_recorded":
         return (

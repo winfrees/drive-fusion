@@ -35,6 +35,7 @@ from drivefusion import __version__
 from drivefusion.gui import elevation
 from drivefusion.gui.screens.browser import BrowserScreen
 from drivefusion.gui.screens.collections import CollectionsScreen
+from drivefusion.gui.screens.exports import ExportsScreen
 from drivefusion.gui.screens.plan import PlanScreen
 from drivefusion.gui.screens.dashboard import DashboardScreen
 from drivefusion.gui.screens.drives import DrivesScreen
@@ -45,9 +46,9 @@ from drivefusion.gui.workers import TaskRunner
 READ_ONLY_NOTICE = "Read-only — nothing on your drives is ever modified"
 
 #: Screens the plan defines but this milestone does not ship, and their milestone.
-PLANNED = (
-    ("Exports", "M8"),
-)
+#: Screens announced but not yet built. Empty since M8. The mechanism stays:
+#: a nav entry that is visibly pending beats one that silently does nothing.
+PLANNED: tuple[tuple[str, str], ...] = ()
 
 
 class MainWindow(QMainWindow):
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         self.browser = BrowserScreen(self.session, self.runner)
         self.collections = CollectionsScreen(self.session, self.runner)
         self.plan = PlanScreen(self.session, self.runner)
+        self.exports = ExportsScreen(self.session, self.runner)
 
         for name, screen in (
             ("Scope", self.scope),
@@ -99,6 +101,7 @@ class MainWindow(QMainWindow):
             ("Catalog", self.browser),
             ("Collections", self.collections),
             ("Plan", self.plan),
+            ("Exports", self.exports),
         ):
             self.nav.addItem(QListWidgetItem(name))
             self.stack.addWidget(screen)
@@ -130,6 +133,10 @@ class MainWindow(QMainWindow):
         self.plan.planRequested.connect(
             lambda body: self._run_plan(body)
         )
+        self.exports.exportRequested.connect(
+            lambda body: self._run_export(body)
+        )
+        self.exports.catalogChanged.connect(self.refresh_all)
         self.cancel_button.clicked.connect(self._cancel_current)
         self._current_task = None
 
@@ -146,6 +153,7 @@ class MainWindow(QMainWindow):
         self.browser.refresh()
         self.collections.refresh()
         self.plan.refresh()
+        self.exports.refresh()
 
     # -- background work ----------------------------------------------------
 
@@ -192,6 +200,26 @@ class MainWindow(QMainWindow):
     def _show_plan(self, plan) -> None:
         if plan is not None:
             self.plan.show_plan(plan)
+
+    def _run_export(self, body) -> None:
+        """Write a bundle on a worker thread, then render the result here.
+
+        A refused export — a destination inside the catalogued archive — is an
+        answer the screen shows in place, not a traceback, so the failure path
+        is routed to the screen rather than to the generic error dialog.
+        """
+        task = self.run_task(body, "Writing the export")
+        if task is None:
+            return
+        task.signals.finished.connect(self._show_export)
+        task.signals.failed.connect(self._export_failed)
+
+    def _show_export(self, result) -> None:
+        if result is not None:
+            self.exports.show_result(result)
+
+    def _export_failed(self, message: str, _traceback: str) -> None:
+        self.exports.show_refusal(RuntimeError(message))
 
     def _on_progress(self, progress) -> None:
         self.progress_label.setText(progress.message)

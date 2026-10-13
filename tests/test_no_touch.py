@@ -62,9 +62,8 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     M5: plus the durability model and the risk reports over the catalog.
     M6: plus collection inference, confirmation, and both scorecards.
     M7: plus solving and writing a plan, over the same fixture.
-    M8 export extends this function in turn, rather than being tested
-    separately, so the guarantee is always asserted over the whole pipeline
-    rather than the parts wired up first.
+    M8: plus writing a complete export bundle — into the temporary working
+    directory, never into the tree under test.
 
     The catalog is deliberately created outside the tree under test: writing it
     inside would be a change to the thing being observed.
@@ -142,7 +141,14 @@ def run_full_cycle(root: Path) -> dict[str, str]:
             # covers both halves of the guarantee: building the document
             # disturbs nothing, and the document itself never says to remove
             # anything.
-            _plan_and_check_wording(catalog)
+            plan = _plan_and_check_wording(catalog)
+
+            # M8: write a real export bundle. This is the only part of the tool
+            # that creates files at all, which makes it the one stage where
+            # "nothing was touched" is a claim about restraint rather than
+            # about incapacity — so it runs against the same fixture as
+            # everything else, and the caller's digests cover it.
+            _export_and_check_bundle(catalog, workdir, plan)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -217,6 +223,58 @@ def _plan_and_check_wording(catalog) -> None:
     plan = document.build(catalog, use_cp_sat=False)
     for entry in plan.reclamation_appendix:
         assert "does not delete" in entry["note"]
+    return plan
+
+
+def _export_and_check_bundle(catalog, workdir, plan) -> None:
+    """Write a full bundle, and read every word of it.
+
+    The export package is the only code in Drive Fusion that creates files, so
+    this is the one stage of the cycle where the no-touch guarantee depends on
+    the code choosing not to write rather than on it being unable to. Both
+    halves are checked: the caller's digests prove the fixture is untouched,
+    and everything written here is read back and must contain no instruction to
+    remove anything.
+
+    The destination is inside the temporary working directory — deliberately
+    not inside the tree under test, which would be a change to the thing being
+    observed, and which the writer refuses anyway.
+    """
+    from drivefusion.core.export import bagit, bundle as bundle_module
+
+    result = bundle_module.build(
+        catalog,
+        workdir / "exports",
+        plan=plan,
+        rename_template="{collection}/{year}/{stem}{ext}",
+    )
+
+    assert result.files, "the export wrote nothing"
+    assert bagit.validate(result.root) == [], "the bundle does not match its manifest"
+
+    checked = 0
+    for path in sorted(result.root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        wording.assert_safe(text, what=f"bundle file {path.name}")
+        checked += 1
+    assert checked > 10, "the bundle walk found almost nothing to read"
+
+    # A rename plan ships only with the table that undoes it. Checked here as
+    # well as in the export suite, because this is the cycle that runs over a
+    # fixture tree with real filenames in it.
+    for forward in result.root.rglob("rename-plan.csv"):
+        assert (forward.parent / "rename-undo.csv").is_file(), (
+            f"{forward} has no undo table"
+        )
+
+    # And the per-drive manifests stayed in the bundle.
+    for name in ("_DRIVE-FUSION.json", "_CATALOG.md"):
+        assert sorted(result.root.rglob(name)), f"{name} was not written"
 
 
 def _browse_everything(catalog) -> None:

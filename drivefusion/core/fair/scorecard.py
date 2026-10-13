@@ -11,10 +11,14 @@ anyone else, whatever else is in place, so R1.1 is blocking: the grade is capped
 at "incomplete" however well the rest scores. "Not for sharing" is a clear
 answer and passes; blank does not.
 
-**Not-applicable is not a pass.** Criteria this tool cannot assess — export
-formats before M8 ships them — are excluded from the denominator and listed, so
-a score of 1.0 over four of fourteen criteria cannot masquerade as a perfect
-score.
+**Not-applicable is not a pass.** A criterion this build cannot assess is
+excluded from the denominator and listed, so a score of 1.0 over four of
+fourteen criteria cannot masquerade as a perfect one. Every criterion in the
+shipped rubric is assessable as of v2.0.0: F3 and I1 were the last two
+excluded, and they became answerable once export bundles existed — they fail
+before a bundle is written and pass after. The remaining case is a newer
+rubric naming a check this build does not implement, which is why the
+mechanism stays.
 
 **A score names its rubric version.** The criteria below are this tool's
 operationalisation of the published principles, not the principles themselves,
@@ -22,6 +26,8 @@ and a changed interpretation must be visible as a changed version.
 """
 
 from __future__ import annotations
+
+import sqlite3
 
 from dataclasses import dataclass, field
 
@@ -86,6 +92,28 @@ class Scorecard:
             ids = ", ".join(r.id for r in self.blocking_failures)
             line += f" — blocked on {ids}"
         return line
+
+
+def _exports(catalog: Catalog, collection_id: int) -> list[dict]:
+    """Export records covering this collection, newest first.
+
+    Read here rather than imported from ``core.export`` so that scoring a
+    collection never pulls the export package in — the scorecard is a reader,
+    and the export package is the one thing in the tool that writes files.
+    """
+    try:
+        rows = catalog.conn.execute(
+            "SELECT e.id, e.created_at, x.has_manifest, x.has_ro_crate, "
+            "       x.has_datacite "
+            "FROM export_collection x JOIN export e ON e.id = x.export_id "
+            "WHERE x.collection_id = ? ORDER BY e.created_at DESC, e.id DESC",
+            (collection_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # A catalog from before schema v8 has no export tables. Treated as "no
+        # exports", which is the truthful answer for it.
+        return []
+    return [dict(row) for row in rows]
 
 
 def _measures(catalog: Catalog, collection) -> dict:
@@ -175,6 +203,9 @@ def _measures(catalog: Catalog, collection) -> dict:
         "license_controlled": collection.license in licence_ids,
         "data_type_controlled": collection.data_type in type_ids,
         "relations": len(collections_module.relations(catalog, collection.id)),
+        # Exports describing this collection, newest first. The evidence F3 and
+        # I1 are scored on since M8.
+        "exports": _exports(catalog, collection.id),
         "at_risk_files": at_risk_files,
         "at_risk_bytes": at_risk_bytes,
         "at_risk_share": (at_risk_bytes / stats["bytes"]) if stats["bytes"] else 0.0,
@@ -256,9 +287,37 @@ def _evaluate(criterion: dict, collection, measures: dict) -> tuple[str, str]:
         )
 
     if check in ("manifest_linkage", "export_format"):
-        # Honest about what is not built: excluded from the denominator rather
-        # than failed, so the score is not depressed by a missing milestone.
-        return NOT_ASSESSABLE, "export bundles arrive with M8"
+        # Assessable since M8. Before bundles existed these were excluded from
+        # the denominator rather than failed, so a missing milestone did not
+        # depress anyone's grade. Now the question has an answer, and it is a
+        # fact about this catalog: has a bundle been written that describes
+        # this collection?
+        exported = measures.get("exports") or []
+        if not exported:
+            return FAIL, "no export bundle describes this collection yet"
+
+        latest = exported[0]
+        if check == "manifest_linkage":
+            if latest.get("has_manifest"):
+                return (
+                    PASS,
+                    f"described by the export of {latest['created_at'][:10]}, "
+                    "which binds the identifier to checksums, paths and drives",
+                )
+            return FAIL, "the latest export contains no content inventory"
+
+        if latest.get("has_ro_crate") and latest.get("has_datacite"):
+            return (
+                PASS,
+                f"RO-Crate and DataCite written in the export of "
+                f"{latest['created_at'][:10]}",
+            )
+        missing = []
+        if not latest.get("has_ro_crate"):
+            missing.append("RO-Crate")
+        if not latest.get("has_datacite"):
+            missing.append("DataCite")
+        return FAIL, f"the latest export is missing {' and '.join(missing)}"
 
     if threshold is not None and check in measures:
         value = measures[check]

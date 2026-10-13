@@ -98,8 +98,8 @@ def load(relative: str) -> Standard:
         ) from exc
 
 
-FAIR_RUBRIC = "fair/fair-rubric-v1.json"
-NDSA_LEVELS = "ndsa/ndsa-levels-v2-v1.json"
+FAIR_RUBRIC = "fair/fair-rubric-v2.json"
+NDSA_LEVELS = "ndsa/ndsa-levels-v2-v2.json"
 VOCABULARIES = "vocab/vocabularies-v1.json"
 
 

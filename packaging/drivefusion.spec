@@ -37,6 +37,7 @@ analysis = Analysis(
         "drivefusion.gui.screens.browser",
         "drivefusion.gui.screens.collections",
         "drivefusion.gui.screens.dashboard",
+        "drivefusion.gui.screens.exports",
         "drivefusion.gui.screens.drives",
         "drivefusion.gui.screens.plan",
         "drivefusion.gui.screens.scope",
