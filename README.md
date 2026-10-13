@@ -23,9 +23,10 @@ disclaimer in the plan.
 
 ## Status
 
-**M6 complete — the archive can now describe itself.** On top of cataloging, redundancy and
-risk, Drive Fusion proposes collections out of the directory tree, lets you confirm or decline
-each one, and scores the confirmed ones against FAIR and the NDSA preservation levels.
+**M7 complete — the archive can now be planned.** On top of cataloging, redundancy, risk and
+curation, Drive Fusion produces a consolidation plan: a numbered checklist that says what to
+copy where, why, what it will cost, and what it buys. It is a document, not an operation.
+There is no Apply button, because there is nothing behind one.
 
 | Milestone | State |
 |---|---|
@@ -36,7 +37,8 @@ each one, and scores the confirmed ones against FAIR and the NDSA preservation l
 | **M4** GUI shell | **done** — Scope, Dashboard, Drives, Catalog; paged views, cancellable scans, UAC prompt |
 | **M5** Health & risk | **done** — smartctl parsing, versioned AFR table, durability model, expected bytes lost/yr |
 | **M6** Curation & FAIR | **done** — collection inference and review queue, membership rules, FAIR + NDSA scorecards |
-| M7–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+| **M7** Planner | **done** — NDSA-derived policy, cluster-exact footprints, add-only solver, checklist with reasons |
+| M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
 
 ```
 drivefusion scope add D:\Research
@@ -54,6 +56,9 @@ drivefusion report risk            # expected bytes lost per year
 drivefusion collections propose    # proposes groupings; confirms nothing
 drivefusion collections accept 1   # confirmation is always an explicit act
 drivefusion score                  # FAIR and NDSA scorecards, with remedies
+drivefusion plan build --level 2   # a checklist; nothing is copied or moved for you
+drivefusion plan build --save      # keep it in the catalog, status: draft, forever
+drivefusion plan show 1            # read a saved plan back
 drivefusion gui                    # the desktop window (needs the [gui] extra)
 ```
 
@@ -68,6 +73,18 @@ names the table version it used.
 The under-protected queue is ranked by **size × P(loss)**. Ranked by size alone the top of the
 list is whatever is biggest, usually video on a healthy drive; ranked by expected loss it is
 whatever sits on the drive with pending sectors. Only one of those is a work queue.
+
+**A plan can only add copies.** Every current location is pinned before the solver starts, and
+nothing in its representation can express a unit *not* being on a drive it is already on — so
+no plan can imply a deletion, because no reachable state describes one. When no drive can take
+another copy the answer is "you need about 2.5 TB more storage", which is the honest answer and
+also the only one available. Duplication that buys no durability is reported in a segregated
+appendix, as evidence for you to act on with your own tools.
+
+**Space on the destination is counted in clusters, not bytes.** Forty thousand small files
+occupy 26× their byte count on an exFAT volume with 128 KiB clusters. Estimating from logical
+bytes produces plans that overflow the drive partway through a copy, so every step states the
+space it actually needs and names the cluster size when the two differ.
 
 **Inference proposes; you decide.** There is no directory convention to import, so collections
 are scored out of the tree — size, file-type homogeneity, how tightly the modification dates

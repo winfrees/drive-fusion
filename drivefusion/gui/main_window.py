@@ -35,6 +35,7 @@ from drivefusion import __version__
 from drivefusion.gui import elevation
 from drivefusion.gui.screens.browser import BrowserScreen
 from drivefusion.gui.screens.collections import CollectionsScreen
+from drivefusion.gui.screens.plan import PlanScreen
 from drivefusion.gui.screens.dashboard import DashboardScreen
 from drivefusion.gui.screens.drives import DrivesScreen
 from drivefusion.gui.screens.scope import ScopeScreen
@@ -45,8 +46,6 @@ READ_ONLY_NOTICE = "Read-only — nothing on your drives is ever modified"
 
 #: Screens the plan defines but this milestone does not ship, and their milestone.
 PLANNED = (
-    ("Duplicates & Versions", "M7"),
-    ("Plan", "M7"),
     ("Exports", "M8"),
 )
 
@@ -91,6 +90,7 @@ class MainWindow(QMainWindow):
         self.drives = DrivesScreen(self.session, self.runner)
         self.browser = BrowserScreen(self.session, self.runner)
         self.collections = CollectionsScreen(self.session, self.runner)
+        self.plan = PlanScreen(self.session, self.runner)
 
         for name, screen in (
             ("Scope", self.scope),
@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
             ("Drives", self.drives),
             ("Catalog", self.browser),
             ("Collections", self.collections),
+            ("Plan", self.plan),
         ):
             self.nav.addItem(QListWidgetItem(name))
             self.stack.addWidget(screen)
@@ -126,6 +127,9 @@ class MainWindow(QMainWindow):
             lambda body: self.run_task(body, "Looking for collections")
         )
         self.collections.catalogChanged.connect(self.refresh_all)
+        self.plan.planRequested.connect(
+            lambda body: self._run_plan(body)
+        )
         self.cancel_button.clicked.connect(self._cancel_current)
         self._current_task = None
 
@@ -141,6 +145,7 @@ class MainWindow(QMainWindow):
         self.drives.refresh()
         self.browser.refresh()
         self.collections.refresh()
+        self.plan.refresh()
 
     # -- background work ----------------------------------------------------
 
@@ -171,6 +176,22 @@ class MainWindow(QMainWindow):
         )
         task.signals.failed.connect(self._task_failed)
         return task
+
+    def _run_plan(self, body) -> None:
+        """Solve on a worker thread, then render on the UI thread.
+
+        The plan object has to come back to this thread before it is shown: the
+        screen reads it to build widgets, and the solve holds the worker's own
+        catalog connection, which must not be touched from here.
+        """
+        task = self.run_task(body, "Building a plan")
+        if task is None:
+            return
+        task.signals.finished.connect(self._show_plan)
+
+    def _show_plan(self, plan) -> None:
+        if plan is not None:
+            self.plan.show_plan(plan)
 
     def _on_progress(self, progress) -> None:
         self.progress_label.setText(progress.message)

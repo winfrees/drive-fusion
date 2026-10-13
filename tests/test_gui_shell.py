@@ -128,7 +128,7 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
     from drivefusion.gui.main_window import PLANNED
 
     built = window.stack.count()
-    assert built == 5, "Scope, Dashboard, Drives, Catalog, Collections"
+    assert built == 6, "Scope, Dashboard, Drives, Catalog, Collections, Plan"
     assert window.nav.count() == built + len(PLANNED)
 
     for offset, (name, milestone) in enumerate(PLANNED):
@@ -612,3 +612,31 @@ def _drain() -> None:
     for _ in range(10):
         QCoreApplication.processEvents()
         time.sleep(0.01)
+
+
+def test_every_gui_screen_is_declared_in_the_packaging_spec() -> None:
+    """A screen missing from the spec is a frozen build that fails on a click.
+
+    It would not show up in CI: the build succeeds, the smoke test does not
+    open every screen, and the first person to click the tab gets an import
+    error. Derived from the files on disk rather than a hand-kept list, because
+    a hand-kept list is exactly what went stale.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "packaging" / "drivefusion.spec").read_text()
+
+    screens = sorted(
+        path.stem
+        for path in (root / "drivefusion" / "gui" / "screens").glob("*.py")
+        if path.stem != "__init__"
+    )
+    assert screens, "no screens found; the glob is wrong"
+
+    missing = [
+        name
+        for name in screens
+        if f"drivefusion.gui.screens.{name}" not in spec
+    ]
+    assert not missing, f"screens not collected into the frozen build: {missing}"

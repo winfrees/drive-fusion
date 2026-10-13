@@ -37,7 +37,6 @@ DEFAULT_CATALOG = Path(
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
-    "plan": ("build a consolidation plan", "M7"),
     "export": ("write reports, manifests, and bundles to an export folder", "M8"),
 }
 
@@ -249,6 +248,53 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         health_set.add_argument(f"--{field}")
     health_set.add_argument("--purchase-price-cents", type=int)
+
+    plan_parser = subparsers.add_parser(
+        "plan", help="build a consolidation plan (a checklist; nothing is moved)"
+    )
+    plan_sub = plan_parser.add_subparsers(dest="plan_command")
+
+    plan_build = plan_sub.add_parser("build", help="solve and show a plan")
+    plan_build.add_argument("--name", help="a name for this plan")
+    plan_build.add_argument(
+        "--level",
+        type=int,
+        default=None,
+        choices=(1, 2, 3, 4),
+        help="NDSA level to plan against (default 1: two copies)",
+    )
+    plan_build.add_argument(
+        "--copies", type=int, help="override the copy target from the level"
+    )
+    plan_build.add_argument(
+        "--zones", type=int, help="override the number of locations required"
+    )
+    plan_build.add_argument(
+        "--reserve",
+        type=float,
+        help="fraction of each drive to leave free (default 0.10)",
+    )
+    plan_build.add_argument(
+        "--exclude-drive",
+        type=int,
+        action="append",
+        default=[],
+        metavar="DRIVE_ID",
+        help="never place copies on this drive (repeatable)",
+    )
+    plan_build.add_argument(
+        "--no-cp-sat",
+        action="store_true",
+        help="skip the optional optimiser and use the greedy plan",
+    )
+    plan_build.add_argument(
+        "--save", action="store_true", help="store the plan in the catalog"
+    )
+    plan_build.add_argument("--json", action="store_true", help="emit JSON")
+
+    plan_sub.add_parser("list", help="plans stored in the catalog")
+    plan_show = plan_sub.add_parser("show", help="a stored plan")
+    plan_show.add_argument("plan_id", type=int)
 
     subparsers.add_parser("gui", help="open the desktop window")
     subparsers.add_parser("status", help="catalog summary")
@@ -1097,6 +1143,155 @@ def cmd_health_set(args) -> int:
         return 0
 
 
+def _policy_from_args(args):
+    """A policy from the command line, starting from the NDSA level."""
+    from drivefusion.core.policy import Policy
+
+    overrides = {}
+    if args.copies is not None:
+        overrides["min_copies"] = max(1, args.copies)
+    if args.zones is not None:
+        overrides["min_zones"] = max(1, args.zones)
+    if args.reserve is not None:
+        overrides["reserve_fraction"] = min(0.9, max(0.0, args.reserve))
+    if args.exclude_drive:
+        overrides["excluded_drives"] = tuple(sorted(set(args.exclude_drive)))
+    return Policy.for_level(args.level or 1, **overrides)
+
+
+def _print_plan(plan, *, verbose: bool = True) -> None:
+    print(f"{plan.name}")
+    print(f"  policy: {plan.policy.describe()}")
+    print(f"  solver: {plan.solver}")
+    print()
+
+    if not plan.steps:
+        print("  Nothing to do: every unit already meets the policy.")
+    for step in plan.steps:
+        depends = (
+            f" (after step {', '.join(str(d) for d in step.depends_on)})"
+            if step.depends_on
+            else ""
+        )
+        print(f"  {step.seq:3}. [{step.kind}]{depends}")
+        print(f"       {step.rationale}")
+
+    simulation = plan.simulation
+    if simulation:
+        print()
+        print("  If you follow this plan:")
+        print(f"    data to copy:        {_human_bytes(simulation['bytes_to_copy'])}")
+        print(f"    estimated time:      {simulation['estimated_hours']:.1f} hours")
+        print(f"       ({simulation['throughput_assumption']})")
+        print(
+            f"    expected loss:       {_human_bytes(simulation['expected_loss_before'])}"
+            f"/year  ->  {_human_bytes(simulation['expected_loss_after'])}/year"
+        )
+        for entry in simulation.get("per_drive", []):
+            print(
+                f"    {entry['name']:<24} free {_human_bytes(entry['free_before'])}"
+                f"  ->  {_human_bytes(entry['free_after'])}"
+            )
+
+    if plan.objective:
+        print()
+        print(
+            f"  Objective (lower is better): {plan.objective['weighted']:.4f}, "
+            f"durability valued over {plan.objective['horizon_years']} years"
+        )
+        if plan.objective.get("correlated_copies"):
+            print(
+                f"    {plan.objective['correlated_copies']} unit(s) have all "
+                "their copies in one purchase batch or one location"
+            )
+
+    if verbose and plan.reclamation_appendix:
+        print()
+        print("  Appendix: space that duplication is using (evidence only)")
+        print("  Drive Fusion does not delete anything, and no step below acts")
+        print("  on this. It is here so you can see where the space went.")
+        for entry in plan.reclamation_appendix[:20]:
+            print(
+                f"    {_human_bytes(entry['reclaimable_bytes'])} reclaimable: "
+                f"{entry['physical_copies']} copies of "
+                f"{_human_bytes(entry['size_bytes'])} on one drive"
+            )
+            for location in entry["locations"][:3]:
+                print(f"      {location}")
+
+    if verbose and plan.scorecards_after:
+        print()
+        print("  Projected scorecards (a forecast, not a measurement)")
+        for entry in plan.scorecards_after:
+            print(f"    {entry['title']}: {entry['summary']}")
+
+
+def cmd_plan_build(args) -> int:
+    from drivefusion.core.plan import document
+
+    with Catalog(args.catalog) as catalog:
+        policy = _policy_from_args(args)
+        plan = document.build(
+            catalog,
+            name=args.name,
+            policy=policy,
+            use_cp_sat=not args.no_cp_sat,
+        )
+
+        if args.json:
+            print(plan.to_json())
+        else:
+            _print_plan(plan)
+
+        if args.save:
+            plan_id = document.save(catalog, plan)
+            if not args.json:
+                print()
+                print(f"  Saved as plan {plan_id} (status: draft).")
+                print("  Drive Fusion will not carry it out; it is a checklist.")
+    return 0
+
+
+def cmd_plan_list(args) -> int:
+    from drivefusion.core.plan import document
+
+    with Catalog(args.catalog) as catalog:
+        rows = document.plans(catalog)
+        if not rows:
+            print("No saved plans. Run `plan build --save`.")
+            return 1
+        for row in rows:
+            print(
+                f"[{row['id']}] {row['name']}  {row['status']}  "
+                f"{row['created_at'][:16]}  solver={row['solver']}"
+            )
+    return 0
+
+
+def cmd_plan_show(args) -> int:
+    from drivefusion.core.plan import document
+    from drivefusion.core.policy import from_snapshot
+
+    with Catalog(args.catalog) as catalog:
+        try:
+            stored = document.load(catalog, args.plan_id)
+        except ValueError as error:
+            print(f"plan {args.plan_id}: {error}", file=sys.stderr)
+            return 1
+
+        row = stored["plan"]
+        policy = from_snapshot(row["policy_snapshot"])
+        print(f"[{row['id']}] {row['name']}  ({row['status']})")
+        print(f"  created: {row['created_at']}")
+        print(f"  policy:  {policy.describe()}")
+        print(f"  solver:  {row['solver']}")
+        print()
+        for step in stored["steps"]:
+            print(f"  {step['seq']:3}. [{step['kind']}]")
+            print(f"       {step['rationale']}")
+    return 0
+
+
 def cmd_gui(args) -> int:
     """Open the window.
 
@@ -1178,7 +1373,7 @@ def cmd_volumes(args) -> int:
 
 
 #: Verbs that require an action, and print their own help without one.
-SUBCOMMAND_VERBS = ("scope", "health", "collections")
+SUBCOMMAND_VERBS = ("scope", "health", "collections", "plan")
 
 DISPATCH = {
     ("scope", "add"): cmd_scope_add,
@@ -1203,6 +1398,9 @@ DISPATCH = {
     ("health", "collect"): cmd_health_collect,
     ("health", "show"): cmd_health_show,
     ("health", "set"): cmd_health_set,
+    ("plan", "build"): cmd_plan_build,
+    ("plan", "list"): cmd_plan_list,
+    ("plan", "show"): cmd_plan_show,
     ("gui", None): cmd_gui,
     ("status", None): cmd_status,
     ("volumes", None): cmd_volumes,

@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -311,6 +311,45 @@ CREATE TABLE IF NOT EXISTS collection_candidate (
 );
 CREATE INDEX IF NOT EXISTS ix_candidate_status ON collection_candidate(status);
 
+-- Plans are documents (docs/PLAN.md §3.3). A plan's terminal state is
+-- "exported", never "applied": there is no executor, and no step kind that
+-- removes anything. The solver pins every existing copy, so a plan cannot even
+-- represent a state where something was deleted.
+CREATE TABLE IF NOT EXISTS plan (
+    id                  INTEGER PRIMARY KEY,
+    created_at          TEXT NOT NULL,
+    name                TEXT NOT NULL,
+    policy_snapshot     TEXT,       -- the rules this plan was solved against
+    standards_version   TEXT,       -- rubric versions, so a plan is reproducible
+    objective_json      TEXT,       -- weights and the solved objective breakdown
+    simulation_json     TEXT,       -- before/after: free space, risk, wall clock
+    solver              TEXT,       -- greedy | cp-sat
+    status              TEXT NOT NULL DEFAULT 'draft'   -- draft|exported|superseded
+);
+
+CREATE TABLE IF NOT EXISTS plan_step (
+    id              INTEGER PRIMARY KEY,
+    plan_id         INTEGER NOT NULL REFERENCES plan(id),
+    seq             INTEGER NOT NULL,
+    -- copy|organize|describe|verify|review-candidate|acquire. There is
+    -- deliberately no move, delete or dedupe kind: the vocabulary itself
+    -- cannot express a destructive action.
+    kind            TEXT NOT NULL,
+    rationale       TEXT NOT NULL,
+    src_volume_id   INTEGER REFERENCES volume(id),
+    src_dir_id      INTEGER REFERENCES dir(id),
+    dst_volume_id   INTEGER REFERENCES volume(id),
+    dst_path        TEXT,
+    content_id      INTEGER REFERENCES content(id),
+    collection_id   INTEGER REFERENCES collection(id),
+    unit_key        TEXT,
+    bytes           INTEGER,
+    footprint_bytes INTEGER,        -- bytes on the destination, cluster-rounded
+    depends_on      TEXT,
+    risk_delta      REAL
+);
+CREATE INDEX IF NOT EXISTS ix_step_plan ON plan_step(plan_id, seq);
+
 -- Drive health over time, one row per smartctl reading (docs/PLAN.md §8.2).
 -- History rather than a snapshot on the drive row: a reallocated count that
 -- went from 0 to 3 last month is a different fact from one that has been 3 for
@@ -406,6 +445,8 @@ MIGRATIONS: dict[int, tuple] = {
     5: (add_column("drive", "smart_device", "TEXT"),),
     # v6 adds only new tables and indexes.
     6: (),
+    # v7 adds the plan tables, which the DDL creates.
+    7: (),
 }
 
 

@@ -105,7 +105,10 @@ def test_unknown_scope_root_is_an_error(cli, capsys) -> None:
 
 
 def test_planned_verbs_report_their_milestone(cli, capsys) -> None:
-    for verb, milestone in (("plan", "M7"), ("export", "M8")):
+    from drivefusion.cli.main import PLANNED_VERBS
+
+    assert PLANNED_VERBS, "nothing left to plan for; drop this test with M8"
+    for verb, (_help, milestone) in PLANNED_VERBS.items():
         assert cli(verb) == 2
         assert milestone in capsys.readouterr().err
 
@@ -443,3 +446,191 @@ def test_rejecting_a_candidate_is_remembered(cli, tmp_path: Path, capsys) -> Non
 def test_scan_without_scope_is_an_error(cli, capsys) -> None:
     assert cli("scan") == 1
     assert "no scope roots" in capsys.readouterr().out
+
+
+# -- plan ---------------------------------------------------------------------
+
+def _plannable(tmp_path: Path, catalog_path: Path) -> Path:
+    """A tree on one drive, with two more drives available to copy to."""
+    from drivefusion.core.scan import scan_root
+    from drivefusion.core.store.catalog import Catalog
+
+    tree = tmp_path / "media" / "project"
+    tree.mkdir(parents=True)
+    for index in range(40):
+        (tree / f"f{index:03}.dat").write_bytes(b"x" * 5000)
+
+    with Catalog(catalog_path) as catalog:
+        source = catalog.upsert_drive(serial="CLI-SRC", nickname="SOURCE")
+        catalog.update_drive(source, disaster_zone="office")
+        volume_id = catalog.upsert_volume(
+            volume_guid="cli:src",
+            drive_id=source,
+            fs_type="ntfs",
+            cluster_bytes=4096,
+            capacity_bytes=500 * 1024 ** 3,
+            free_bytes=400 * 1024 ** 3,
+        )
+        root_id = catalog.add_scope_root(volume_id, str(tmp_path / "media"))
+        scan_root(
+            catalog,
+            root_path=str(tmp_path / "media"),
+            root_id=root_id,
+            volume_id=volume_id,
+        )
+        for name, fs, cluster, zone in (
+            ("ARCHIVE", "exfat", 131072, "office"),
+            ("OFFSITE", "ntfs", 4096, "parents"),
+        ):
+            drive_id = catalog.upsert_drive(serial=f"CLI-{name}", nickname=name)
+            catalog.update_drive(drive_id, disaster_zone=zone)
+            catalog.upsert_volume(
+                volume_guid=f"cli:{name}",
+                drive_id=drive_id,
+                fs_type=fs,
+                cluster_bytes=cluster,
+                capacity_bytes=500 * 1024 ** 3,
+                free_bytes=500 * 1024 ** 3,
+            )
+    return tmp_path / "media"
+
+
+def test_plan_build_shows_a_checklist_with_reasons(cli, tmp_path: Path, capsys) -> None:
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("plan", "build", "--no-cp-sat") == 0
+    out = capsys.readouterr().out
+
+    assert "[copy]" in out
+    assert "[verify]" in out
+    assert "reduces expected loss" in out
+    assert "data to copy" in out
+    # The space a copy needs on exFAT is not its size, and the plan must say so
+    # rather than leaving an unexplained discrepancy.
+    assert "clusters" in out
+
+
+def test_plan_build_says_nothing_will_be_carried_out(
+    cli, tmp_path: Path, capsys
+) -> None:
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("plan", "build", "--no-cp-sat", "--save") == 0
+    out = capsys.readouterr().out
+    assert "draft" in out
+    assert "will not carry it out" in out
+
+
+def test_plan_output_never_tells_the_user_to_delete_anything(
+    cli, tmp_path: Path, capsys
+) -> None:
+    """The CLI's own rendering, not just the plan object it rendered from."""
+    from drivefusion.core import wording
+
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("plan", "build", "--no-cp-sat") == 0
+    wording.assert_safe(capsys.readouterr().out, what="plan output")
+
+
+def test_plan_build_honours_the_level_and_exclusions(
+    cli, tmp_path: Path, capsys
+) -> None:
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("plan", "build", "--no-cp-sat", "--level", "2") == 0
+    assert "3 copies" in capsys.readouterr().out
+
+    # Excluding every destination leaves nowhere to copy to, which is an
+    # acquire finding and not an error.
+    assert cli(
+        "plan", "build", "--no-cp-sat",
+        "--exclude-drive", "2", "--exclude-drive", "3",
+    ) == 0
+    out = capsys.readouterr().out
+    assert "[acquire]" in out
+    assert "will not propose deleting" in out
+    assert "[copy]" not in out
+
+
+def test_plan_build_emits_json_on_request(cli, tmp_path: Path, capsys) -> None:
+    import json
+
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("plan", "build", "--no-cp-sat", "--json") == 0
+    parsed = json.loads(capsys.readouterr().out)
+
+    assert parsed["steps"]
+    assert parsed["policy"]["min_copies"] == 2
+    assert "no executor" in parsed["note"]
+
+
+def test_plan_list_and_show_round_trip(cli, tmp_path: Path, capsys) -> None:
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    assert cli("plan", "list") == 1, "no plans saved yet"
+    assert "No saved plans" in capsys.readouterr().out
+
+    assert cli("plan", "build", "--no-cp-sat", "--save", "--name", "Spring tidy") == 0
+    capsys.readouterr()
+
+    assert cli("plan", "list") == 0
+    listing = capsys.readouterr().out
+    assert "Spring tidy" in listing
+    assert "draft" in listing
+
+    assert cli("plan", "show", "1") == 0
+    shown = capsys.readouterr().out
+    assert "Spring tidy" in shown
+    assert "[copy]" in shown
+    assert "2 copies on distinct drives" in shown
+
+
+def test_plan_show_reports_a_missing_plan_without_a_traceback(
+    cli, tmp_path: Path, capsys
+) -> None:
+    assert cli("plan", "show", "404") == 1
+    assert "404" in capsys.readouterr().err
+
+
+def test_plan_with_no_action_prints_its_own_help(cli, capsys) -> None:
+    assert cli("plan") == 0
+    out = capsys.readouterr().out
+    assert "build" in out and "list" in out and "show" in out
+
+
+def test_no_cp_sat_actually_skips_the_optimiser(
+    cli, tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """The flag's effect is invisible in the output when CP-SAT fails to beat
+    the baseline, which it often does — so the wiring is asserted directly
+    rather than inferred from a plan that would look the same either way.
+    """
+    from drivefusion.core.plan import solver as solver_module
+
+    _plannable(tmp_path, tmp_path / "catalog" / "catalog.db")
+    capsys.readouterr()
+
+    calls = []
+    real = solver_module._solve_cp_sat
+
+    def recording(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(solver_module, "_solve_cp_sat", recording)
+
+    assert cli("plan", "build", "--no-cp-sat") == 0
+    capsys.readouterr()
+    assert not calls, "--no-cp-sat still ran the optimiser"
+
+    assert cli("plan", "build") == 0
+    capsys.readouterr()
+    assert calls, "the optimiser was never attempted without the flag"

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from drivefusion.core import fsio
+from drivefusion.core import fsio, wording
 from drivefusion.core.analysis.browse import (
     PAGE_ROWS,
     child_dirs,
@@ -61,9 +61,10 @@ def run_full_cycle(root: Path) -> dict[str, str]:
     M4: plus the full browse traversal the GUI performs.
     M5: plus the durability model and the risk reports over the catalog.
     M6: plus collection inference, confirmation, and both scorecards.
-    M7 planning and M8 export extend this function in turn, rather than being
-    tested separately, so the guarantee is always asserted over the whole
-    pipeline rather than the parts wired up first.
+    M7: plus solving and writing a plan, over the same fixture.
+    M8 export extends this function in turn, rather than being tested
+    separately, so the guarantee is always asserted over the whole pipeline
+    rather than the parts wired up first.
 
     The catalog is deliberately created outside the tree under test: writing it
     inside would be a change to the thing being observed.
@@ -135,10 +136,87 @@ def run_full_cycle(root: Path) -> dict[str, str]:
             # the catalog and writes only to it; asserted here rather than
             # argued from the absence of a write path.
             _curate_and_score(catalog)
+
+            # M7: solve and write a plan. The planner is the first part of the
+            # tool whose *output* describes changing the archive, so this stage
+            # covers both halves of the guarantee: building the document
+            # disturbs nothing, and the document itself never says to remove
+            # anything.
+            _plan_and_check_wording(catalog)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
     return digests
+
+
+def _plan_and_check_wording(catalog) -> None:
+    """Build a plan over the fixture, and read what it says.
+
+    Two assertions in one place on purpose. Building the plan must not touch the
+    source tree — covered by the digests the caller compares. And the plan's own
+    text must not tell the user to remove anything: the tool's promise is about
+    what the *document* recommends as much as about what the process does, and
+    nothing in the code would stop a rationale being phrased as a deletion.
+
+    The denylist itself lives in ``core.wording`` and runs inside ``build()``,
+    so it covers every wording the product can emit rather than only the ones
+    this fixture happens to reach. ``tests/test_wording.py`` checks it in both
+    directions.
+    """
+    from drivefusion.core.plan import document
+    from drivefusion.core.policy import Policy
+
+    # Destination drives, so the plan actually contains copy steps. Without
+    # them the planner has nowhere to place anything, every wording assertion
+    # below reads an almost empty document, and the check passes by vacuity —
+    # which is how a denylist comes to be trusted without ever having run.
+    # These are catalog rows describing drives, not drives: nothing is written
+    # to any filesystem by creating them.
+    for name, zone, batch in (
+        ("nt-office", "office", "WD|RED|2021-03"),
+        ("nt-sibling", "office", "WD|RED|2021-03"),
+        ("nt-offsite", "parents", "HGST|DC|2024-01"),
+    ):
+        drive_id = catalog.upsert_drive(serial=f"no-touch-{name}", nickname=name)
+        catalog.update_drive(drive_id, batch_key=batch, disaster_zone=zone)
+        catalog.upsert_volume(
+            volume_guid=f"no-touch-vol:{name}",
+            drive_id=drive_id,
+            fs_type="exfat" if "offsite" in name else "ntfs",
+            cluster_bytes=131072 if "offsite" in name else 4096,
+            capacity_bytes=4 * 1024 ** 4,
+            free_bytes=4 * 1024 ** 4,
+        )
+
+    for use_cp_sat in (False, True):
+        plan = document.build(
+            catalog, policy=Policy.for_level(2), use_cp_sat=use_cp_sat
+        )
+        assert plan.copy_steps, (
+            "the planner produced no copy steps, so the wording checks below "
+            "would assert nothing"
+        )
+        assert any(
+            step.kind == "verify" for step in plan.steps
+        ), "no verify step to check the wording of"
+        plan_id = document.save(catalog, plan)
+        stored = document.load(catalog, plan_id)
+        assert stored["plan"]["status"] == "draft"
+
+        # The same check the product runs, over the whole rendered document.
+        # Asserted here as well as inside build() so the guarantee is stated
+        # where the rest of the no-touch guarantee lives.
+        wording.assert_safe(plan.to_json(), what="plan")
+
+        for step in plan.steps:
+            assert step.kind in document.STEP_KINDS
+            assert step.kind not in {"move", "delete", "remove"}
+
+    # The reclamation appendix names duplicated bytes, which is the one place a
+    # removal could plausibly creep in. It is evidence, and must read as such.
+    plan = document.build(catalog, use_cp_sat=False)
+    for entry in plan.reclamation_appendix:
+        assert "does not delete" in entry["note"]
 
 
 def _browse_everything(catalog) -> None:
