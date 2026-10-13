@@ -40,6 +40,69 @@ PERMITTED_WRITER_PREFIXES = (
     "drivefusion/core/export",
 )
 
+#: Calls a writer package may not make either (DF009).
+#:
+#: Being allowed to *create* files is not being allowed to destroy or move
+#: them. §3.2 says the export package "has no delete function"; until this rule
+#: existed nothing enforced that, because a permitted writer was exempt from
+#: every check and could have grown an ``shutil.rmtree`` without the lint
+#: noticing. A writer may bring files into existence and nothing else.
+WRITER_BANNED = {
+    "os": frozenset(
+        {
+            "remove", "unlink", "rmdir", "removedirs", "rename", "renames",
+            "replace", "truncate", "ftruncate", "chmod", "chown", "utime",
+        }
+    ),
+    "shutil": frozenset({"rmtree", "move", "copystat", "copymode", "unpack_archive"}),
+    "pathlib": frozenset(
+        {"unlink", "rmdir", "rename", "replace", "chmod", "lchmod"}
+    ),
+}
+
+#: Method names banned in a writer package whatever they are called on.
+#:
+#: Unambiguous names only, the same discipline ALWAYS_BANNED follows: ``remove``
+#: is also a list method, ``replace`` and ``copy`` are str and dict methods, and
+#: ``rename`` belongs to half the libraries in Python. Those are caught by
+#: qualified name through WRITER_BANNED instead, so that ``text.replace("a", "b")``
+#: inside an export module is not reported as a filesystem write.
+WRITER_BANNED_METHODS = frozenset(
+    {
+        "rmtree", "rmdir", "removedirs", "unlink", "copystat", "copymode",
+        "ftruncate", "chmod", "lchmod", "fchmod", "chown", "fchown", "utime",
+        "unpack_archive", "removexattr", "lremovexattr", "renames", "rename",
+    }
+)
+
+#: Copying is banned in the export package and allowed in the store package.
+#:
+#: The distinction is whose file it is. ``core/store`` copies Drive Fusion's own
+#: catalog aside before a schema migration, which is how that migration is made
+#: safe. ``core/export`` writes documents it generated and must never open a
+#: user's file for any purpose: copying the archive is the user's job, from a
+#: checklist, with their own tools. A copy routine here would also be the one
+#: plausible way bytes of user data could end up somewhere the tool put them.
+#: Matched as ``shutil.<name>`` only, never as a bare ``.copy()``: a dict copy
+#: is not a file copy, and a lint that cannot tell them apart gets ignored.
+EXPORT_BANNED_COPIERS = frozenset(
+    {"copy", "copy2", "copyfile", "copytree", "copyfileobj", "make_archive"}
+)
+
+#: The one module in the export package permitted to create a file (DF010).
+#:
+#: §3.2 promises that *every* write routes through a single function asserting
+#: the target is inside the chosen root and does not already exist. A second
+#: module calling ``open`` or ``Path.write_text`` directly would be a write
+#: that skipped those assertions while the guarantee still claimed otherwise.
+EXPORT_WRITE_ENTRYPOINT = "drivefusion/core/export/writer.py"
+
+#: Ways to create a file, banned everywhere in the export package but its
+#: entrypoint.
+EXPORT_FILE_CREATORS = frozenset(
+    {"open", "write_text", "write_bytes", "touch", "mkdir", "makedirs", "mkstemp"}
+)
+
 #: Modules permitted to call raw Win32 handle APIs. Enumeration backends join
 #: this list at M2; each addition is a deliberate review point.
 RAW_HANDLE_MODULES = (
@@ -73,6 +136,12 @@ ALWAYS_BANNED = frozenset(
         "fchmod", "fchown", "utime", "truncate", "ftruncate",
         "renames", "setxattr", "removexattr", "lremovexattr",
         "make_archive", "unpack_archive",
+        # Added after probing the checker rather than reading it: a rename is a
+        # modification of catalogued media, and ``Path(p).rename(q)`` was
+        # caught by nothing — the qualified rule needs the receiver to be a
+        # name bound to the module, which ``pathlib.Path(p)`` is not. Neither
+        # name collides with a common method of another type.
+        "rename", "touch",
     }
 )
 
@@ -109,6 +178,11 @@ WRITE_INTENT_FLAGS = frozenset(
 
 #: The only file mode the tool ever opens user data with.
 ALLOWED_OPEN_MODES = frozenset({"rb"})
+
+#: Functions that open a file and take a mode. ``os.fdopen`` was missing, and
+#: with it an ``os.open`` on a descriptor could have been wrapped into a
+#: writable text handle without the mode ever being checked.
+OPEN_LIKE = frozenset({"open", "fdopen"})
 
 #: Modules permitted to start an external process, and what each one runs.
 #:
@@ -159,11 +233,20 @@ class Finding:
 
 class _Visitor(ast.NodeVisitor):
     def __init__(
-        self, path: str, permit_raw_handles: bool, permit_subprocess: bool = False
+        self,
+        path: str,
+        permit_raw_handles: bool,
+        permit_subprocess: bool = False,
+        writer_mode: bool = False,
     ) -> None:
         self.path = path
         self.permit_raw_handles = permit_raw_handles
         self.permit_subprocess = permit_subprocess
+        #: A package allowed to create files. Creation passes; destruction,
+        #: moving and re-permissioning still do not.
+        self.writer_mode = writer_mode
+        self.is_export = path.startswith("drivefusion/core/export")
+        self.is_export_entrypoint = path == EXPORT_WRITE_ENTRYPOINT
         self.findings: list[Finding] = []
         # alias -> canonical module name
         self.module_aliases: dict[str, str] = {}
@@ -228,8 +311,9 @@ class _Visitor(ast.NodeVisitor):
         func = node.func
 
         if isinstance(func, ast.Name):
-            if func.id == "open":
-                self._check_open(node)
+            if func.id in OPEN_LIKE:
+                if not self.writer_mode:
+                    self._check_open(node, qualified=func.id)
             elif func.id in RAW_HANDLE_APIS and not self.permit_raw_handles:
                 self._add(
                     node,
@@ -242,6 +326,9 @@ class _Visitor(ast.NodeVisitor):
                     self._add(
                         node, "DF001", f"calls mutating {module}.{func.id}"
                     )
+
+        if isinstance(func, ast.Name) and self.writer_mode:
+            self._check_writer_creation(node, func.id)
 
         elif isinstance(func, ast.Attribute):
             if (
@@ -258,25 +345,115 @@ class _Visitor(ast.NodeVisitor):
                     "rules cannot see. Confine it to a module that allowlists "
                     "its own arguments (see PERMITTED_SUBPROCESS_MODULES)",
                 )
-            if func.attr in ALWAYS_BANNED:
+            banned_methods = (
+                WRITER_BANNED_METHODS if self.writer_mode else ALWAYS_BANNED
+            )
+            mutators = WRITER_BANNED if self.writer_mode else MODULE_MUTATORS
+            code = "DF009" if self.writer_mode else "DF002"
+
+            module = (
+                self.module_aliases.get(func.value.id)
+                if isinstance(func.value, ast.Name)
+                else None
+            )
+
+            if func.attr in banned_methods:
                 self._add(
                     node,
-                    "DF002",
-                    f"calls mutating method {func.attr}(); Drive Fusion never "
-                    "modifies catalogued media",
+                    code,
+                    f"calls mutating method {func.attr}(); "
+                    + (
+                        "a writer package may only bring files into existence"
+                        if self.writer_mode
+                        else "Drive Fusion never modifies catalogued media"
+                    ),
                 )
-            elif isinstance(func.value, ast.Name):
-                module = self.module_aliases.get(func.value.id)
-                if module and func.attr in MODULE_MUTATORS[module]:
-                    self._add(
-                        node,
-                        "DF001",
-                        f"calls mutating {module}.{func.attr}()",
-                    )
-            if func.attr == "open" and self._is_pathlib_receiver(func.value):
-                self._check_open(node, qualified="Path.open")
+            elif module and func.attr in mutators.get(module, ()):
+                self._add(
+                    node,
+                    "DF009" if self.writer_mode else "DF001",
+                    f"calls mutating {module}.{func.attr}()"
+                    + (
+                        "; a writer package may only bring files into existence"
+                        if self.writer_mode
+                        else ""
+                    ),
+                )
+            elif (
+                self.is_export
+                and module == "shutil"
+                and func.attr in EXPORT_BANNED_COPIERS
+            ):
+                self._add(
+                    node,
+                    "DF009",
+                    f"calls shutil.{func.attr}(); the export package writes "
+                    "only documents it generated and never opens a user's "
+                    "file. Copying the archive is the user's job, from a "
+                    "checklist, with their own tools",
+                )
+
+            if self.writer_mode and func.attr in EXPORT_FILE_CREATORS:
+                self._check_writer_creation(node, func.attr)
+            elif func.attr in OPEN_LIKE and not (
+                func.attr == "open"
+                and isinstance(func.value, ast.Name)
+                and self.module_aliases.get(func.value.id) == "os"
+            ):
+                # os.open takes flags, not a mode string, and has its own rule
+                # (WRITE_INTENT_FLAGS). os.fdopen does take a mode, so it stays.
+                # Any receiver, not only one recognisable as a Path. The check
+                # used to require the receiver to be a name bound to pathlib,
+                # so `target = Path(x); target.open("w")` passed — the single
+                # most likely way a write path gets reintroduced by accident.
+                receiver = (
+                    func.value.id if isinstance(func.value, ast.Name) else "…"
+                )
+                self._check_open(
+                    node, qualified=f"{receiver}.{func.attr}", drops_path=True
+                )
+            elif func.attr == "replace" and self._is_path_replace(node):
+                self._add(
+                    node,
+                    "DF009" if self.writer_mode else "DF002",
+                    "calls replace() with one argument, which is "
+                    "Path.replace() — it overwrites the target. str.replace "
+                    "takes two arguments and is not flagged",
+                )
 
         self.generic_visit(node)
+
+    def _check_writer_creation(self, node: ast.Call, name: str) -> None:
+        """In the export package, only the single entrypoint may create a file.
+
+        §3.2 promises that *every* write routes through one function that
+        checks the target is inside the chosen root and does not already exist.
+        A second module calling ``open`` or ``Path.write_text`` would be a
+        write that skipped both checks while the guarantee still claimed
+        otherwise.
+        """
+        if not self.is_export or self.is_export_entrypoint:
+            return
+        if name not in EXPORT_FILE_CREATORS:
+            return
+        self._add(
+            node,
+            "DF010",
+            f"{name}() creates a file outside {EXPORT_WRITE_ENTRYPOINT}; every "
+            "export write must go through writer.write(), which checks the "
+            "target is inside the chosen root and does not already exist",
+        )
+
+    def _is_path_replace(self, node: ast.Call) -> bool:
+        """Whether a ``.replace()`` call is ``Path.replace``, not ``str.replace``.
+
+        Told apart by arity, which is exact: ``str.replace`` needs the old and
+        the new substring, ``Path.replace`` takes the target alone. The name
+        could not simply be banned — ``text.replace("a", "b")`` appears all
+        over this codebase — and leaving it unchecked left a call that silently
+        overwrites a file.
+        """
+        return len(node.args) == 1 and not node.keywords
 
     def _is_pathlib_receiver(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -285,10 +462,13 @@ class _Visitor(ast.NodeVisitor):
             return self.module_aliases.get(node.id) == "pathlib"
         return False
 
-    def _check_open(self, node: ast.Call, qualified: str = "open") -> None:
+    def _check_open(
+        self, node: ast.Call, qualified: str = "open", drops_path: bool = False
+    ) -> None:
         mode_node: ast.AST | None = None
-        # open(path, mode) / Path.open(mode)
-        positional = node.args[1:] if qualified == "open" else node.args
+        # open(path, mode) and os.fdopen(fd, mode) take the mode second;
+        # Path.open(mode) and file-like .open(mode) take it first.
+        positional = node.args if drops_path else node.args[1:]
         if positional:
             mode_node = positional[0]
         for keyword in node.keywords:
@@ -334,7 +514,10 @@ def is_permitted_writer(rel_path: str) -> bool:
 def check_source(rel_path: str, source: str) -> list[Finding]:
     """Check one module's source. Exposed for the checker's own tests."""
     if is_permitted_writer(rel_path):
-        return []
+        # Not exempt, narrowed: a writer may create files and may not destroy,
+        # move or re-permission them, and in the export package only the single
+        # write entrypoint may create one at all.
+        return check_writer_source(rel_path, source)
     try:
         tree = ast.parse(source, filename=rel_path)
     except SyntaxError as exc:
@@ -353,6 +536,42 @@ def check_source(rel_path: str, source: str) -> list[Finding]:
     if permit_raw:
         findings.extend(_check_write_access_tokens(rel_path, source))
     return findings
+
+
+def check_writer_source(rel_path: str, source: str) -> list[Finding]:
+    """The narrowed check for a package allowed to write (DF009, DF010).
+
+    Runs the same visitor as everything else, with the name sets swapped: a
+    writer may create files, and may not destroy, move or re-permission them.
+    Reusing the visitor rather than walking the tree separately matters because
+    it is the visitor that tracks import aliases, and without that the check
+    cannot tell ``os.remove(p)`` from ``items.remove(x)``.
+    """
+    try:
+        tree = ast.parse(source, filename=rel_path)
+    except SyntaxError as exc:
+        return [Finding(rel_path, exc.lineno or 0, exc.offset or 0, "DF999", str(exc))]
+
+    visitor = _Visitor(
+        rel_path,
+        permit_raw_handles=rel_path in RAW_HANDLE_MODULES,
+        permit_subprocess=rel_path in PERMITTED_SUBPROCESS_MODULES,
+        writer_mode=True,
+    )
+    visitor.visit(tree)
+    return visitor.findings
+
+
+def _qualified_name(node: ast.AST) -> str:
+    """A dotted name for a call target, as far back as it can be read."""
+    parts: list[str] = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if isinstance(current, ast.Name):
+        parts.append(current.id)
+    return ".".join(reversed(parts))
 
 
 def _check_write_access_tokens(rel_path: str, source: str) -> list[Finding]:
@@ -401,6 +620,7 @@ def check_config() -> list[Finding]:
         ("RAW_HANDLE_MODULES", RAW_HANDLE_MODULES),
         ("PERMITTED_SUBPROCESS_MODULES", PERMITTED_SUBPROCESS_MODULES),
         ("PERMITTED_WRITER_PREFIXES", PERMITTED_WRITER_PREFIXES),
+        ("EXPORT_WRITE_ENTRYPOINT", (EXPORT_WRITE_ENTRYPOINT,)),
     ):
         for entry in entries:
             if not (REPO_ROOT / entry).exists():
