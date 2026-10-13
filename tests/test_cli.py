@@ -807,3 +807,45 @@ def test_export_with_no_action_prints_its_own_help(cli, capsys) -> None:
     assert cli("export") == 0
     out = capsys.readouterr().out
     assert "bundle" in out and "verify" in out and "templates" in out
+
+
+def test_save_survives_a_closed_stdout(cli, tmp_path: Path, capsys) -> None:
+    """Piping into `head` closes stdout partway through the listing.
+
+    That raises BrokenPipeError, which the CLI handles as the normal thing it
+    is — and with the save happening after the printing, the plan the user
+    explicitly asked to keep was silently dropped while the command still
+    exited zero. Found by piping the real command into `head`, not by reading
+    the code.
+    """
+    import io
+    import sys
+
+    from drivefusion.core.plan import document
+    from drivefusion.core.store.catalog import Catalog
+
+    catalog_path = tmp_path / "catalog" / "catalog.db"
+    _plannable(tmp_path, catalog_path)
+    capsys.readouterr()
+
+    class _ClosedAfterFirstWrite(io.StringIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self._writes = 0
+
+        def write(self, text: str) -> int:
+            self._writes += 1
+            if self._writes > 1:
+                raise BrokenPipeError(32, "Broken pipe")
+            return super().write(text)
+
+    original = sys.stdout
+    sys.stdout = _ClosedAfterFirstWrite()
+    try:
+        exit_code = cli("plan", "build", "--no-cp-sat", "--save")
+    finally:
+        sys.stdout = original
+
+    assert exit_code == 0, "a closed pipe is not an error"
+    with Catalog(catalog_path) as catalog:
+        assert document.plans(catalog), "the plan was not saved"

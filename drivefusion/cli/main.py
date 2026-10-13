@@ -1282,14 +1282,18 @@ def cmd_plan_build(args) -> int:
             use_cp_sat=not args.no_cp_sat,
         )
 
+        # Saved *before* anything is printed. Piping into `head` closes
+        # stdout partway through the listing, which raises BrokenPipeError —
+        # a normal way to use a CLI, and handled as such — and with the save
+        # afterwards the plan the user explicitly asked to keep was silently
+        # dropped while the command still exited zero.
+        plan_id = document.save(catalog, plan) if args.save else None
+
         if args.json:
             print(plan.to_json())
         else:
             _print_plan(plan)
-
-        if args.save:
-            plan_id = document.save(catalog, plan)
-            if not args.json:
+            if plan_id is not None:
                 print()
                 print(f"  Saved as plan {plan_id} (status: draft).")
                 print("  Drive Fusion will not carry it out; it is a checklist.")

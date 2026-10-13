@@ -821,3 +821,49 @@ def test_every_rubric_shipped_is_loadable_and_names_its_provenance() -> None:
         for field in ("id", "version", "retrieved_at", "kind"):
             assert field in document, f"{path.name} has no {field}"
         assert document.get("provenance"), f"{path.name} names no provenance"
+
+
+def test_every_drive_folder_identifies_its_subject(tmp_path: Path) -> None:
+    """A volume label a path cannot carry sanitises to nothing.
+
+    ``/`` is a real label on POSIX and a Windows label can be stranger, and the
+    first version fell back to a bare "drive" — so two such volumes would land
+    in ``drive/`` and ``drive-2/`` with nothing to say which was which.
+    """
+    from drivefusion.core.export import manifests
+
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "a.bin").write_bytes(b"a" * 100)
+
+    with Catalog(tmp_path / "cat" / "catalog.db") as catalog:
+        # Two volumes whose labels both sanitise away entirely.
+        first = catalog.upsert_volume(volume_guid="dev:65024", fs_type="ext4")
+        catalog.conn.execute(
+            "UPDATE volume SET label = ? WHERE id = ?", ("/", first)
+        )
+        second = catalog.upsert_volume(volume_guid="dev:65025", fs_type="ext4")
+        catalog.conn.execute(
+            "UPDATE volume SET label = ? WHERE id = ?", ("???", second)
+        )
+        root_id = catalog.add_scope_root(first, str(media))
+        scan_root(
+            catalog, root_path=str(media), root_id=root_id, volume_id=first
+        )
+
+        folders = [entry["dir_name"] for entry in manifests.drives(catalog)]
+
+    assert len(folders) == len(set(folders)), f"folder names collide: {folders}"
+    assert "drive" not in folders, "a folder name says nothing about its drive"
+    assert all(folder for folder in folders)
+    # And each one still carries something traceable to the volume.
+    assert any("65024" in folder for folder in folders)
+
+
+def test_a_degenerate_label_falls_back_through_guid_then_volume_id() -> None:
+    from drivefusion.core.export import manifests
+
+    assert manifests._safe_name("/", fallback="dev-65024") == "dev-65024"
+    assert manifests._safe_name("", fallback="volume-7") == "volume-7"
+    assert manifests._safe_name("ARCHIVE", fallback="unused") == "ARCHIVE"
+    assert manifests._safe_name("a/b:c", fallback="x") == "a-b-c"

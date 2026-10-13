@@ -1223,3 +1223,56 @@ def test_each_extra_copy_claims_less_than_the_one_before(
     assert len(gains) >= 2
     assert gains == sorted(gains, reverse=True)
     assert gains[1] < gains[0], "the second copy claimed as much as the first"
+
+
+def test_a_tiny_durability_gain_is_described_rather_than_rounded_to_zero(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """"reduces expected loss by about 0 bytes/year" reads as a step that
+    achieves nothing, and invites the obvious question of why it is in the plan.
+
+    The answer is usually that the policy asks for the copy, so the rationale
+    says that instead of printing a rounded-down number.
+    """
+    from drivefusion.core.plan.document import _gain_phrase
+
+    assert "about 5,000 bytes/year" in _gain_phrase(5000.4)
+    assert "about 1 bytes/year" in _gain_phrase(1.0)
+
+    for tiny in (0.9, 0.001, 1e-9):
+        phrase = _gain_phrase(tiny)
+        assert "less than a byte" in phrase
+        assert "policy asks for it" in phrase
+        assert "about 0" not in phrase
+
+    none = _gain_phrase(0.0)
+    assert "does not measurably reduce" in none
+    assert "about 0" not in none
+
+
+def test_no_copy_step_claims_a_gain_of_about_zero(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """End to end over a fixture that produces one: a tiny leftover unit copied
+    to a big-cluster destination buys almost nothing, and that is exactly the
+    step whose wording was wrong."""
+    source = tmp_path / "source"
+    (source / "project").mkdir(parents=True)
+    for index in range(30):
+        (source / "project" / f"big{index}.bin").write_bytes(b"x" * 40_000)
+    # A couple of bytes sitting directly in the scanned root, which becomes its
+    # own tiny unit.
+    (source / "stray.txt").write_text("hi")
+
+    _, volume = add_volume(catalog, "A")
+    scan_into(catalog, volume, source)
+    add_volume(catalog, "EXFAT", cluster_bytes=131072, fs_type="exfat",
+               disaster_zone="office")
+    add_volume(catalog, "OFFSITE", cluster_bytes=4096, disaster_zone="parents")
+    hash_pass(catalog)
+
+    plan = document.build(catalog, policy=Policy.for_level(2), use_cp_sat=False)
+    assert plan.copy_steps
+
+    for step in plan.copy_steps:
+        assert "about 0 bytes/year" not in step.rationale, step.rationale

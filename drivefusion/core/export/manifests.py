@@ -34,13 +34,20 @@ MACHINE_MANIFEST = "_DRIVE-FUSION.json"
 HUMAN_MANIFEST = "_CATALOG.md"
 
 
-def _safe_name(text: str) -> str:
-    """A directory name for a drive. Conservative: this becomes a path."""
+def _safe_name(text: str, *, fallback: str = "drive") -> str:
+    """A directory name for a drive. Conservative: this becomes a path.
+
+    The fallback matters more than it looks. A label made entirely of
+    characters a path cannot carry — ``/`` is a real volume label on POSIX,
+    and a Windows label can be stranger — sanitises to nothing, and two such
+    volumes would land in ``drive/`` and ``drive-2/`` with nothing to say
+    which was which. So callers pass something that identifies the volume.
+    """
     keep = []
-    for character in str(text or "drive"):
+    for character in str(text or ""):
         keep.append(character if character.isalnum() or character in "-_." else "-")
-    cleaned = "".join(keep).strip("-.") or "drive"
-    return cleaned[:64]
+    cleaned = "".join(keep).strip("-.")
+    return (cleaned or fallback)[:64]
 
 
 def drives(catalog: Catalog) -> list[dict]:
@@ -65,7 +72,14 @@ def drives(catalog: Catalog) -> list[dict]:
             or entry["label"]
             or entry["volume_guid"]
         )
-        entry["dir_name"] = _safe_name(entry["name"])
+        # Named for the drive where that is possible, and for the volume
+        # otherwise, so every folder in the bundle identifies its subject.
+        entry["dir_name"] = _safe_name(
+            entry["name"],
+            fallback=_safe_name(
+                entry["volume_guid"], fallback=f"volume-{entry['volume_id']}"
+            ),
+        )
         out.append(entry)
 
     # Two drives with the same nickname would otherwise share a directory and

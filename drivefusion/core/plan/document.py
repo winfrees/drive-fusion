@@ -242,6 +242,29 @@ def from_solution(
     return plan
 
 
+def _gain_phrase(gain: float) -> str:
+    """How much durability a copy buys, in words that stay true when rounded.
+
+    Formatting a small positive number with no decimals produces "reduces
+    expected loss by about 0 bytes/year", which reads as a step that achieves
+    nothing — and then invites the obvious question of why it is in the plan.
+    The answer is usually that the policy asks for the copy, so that is what it
+    says.
+    """
+    if gain >= 1:
+        return f"reduces expected loss by about {gain:,.0f} bytes/year"
+    if gain > 0:
+        return (
+            "reduces expected loss by less than a byte per year — this copy is "
+            "here because the policy asks for it, not because the arithmetic "
+            "demands it"
+        )
+    return (
+        "does not measurably reduce expected loss; it is here because the "
+        "policy asks for the copy"
+    )
+
+
 def _drive_key_for(volume_id: int, by_volume: dict, fallback: set[int]) -> int:
     """The drive key a destination volume contributes a copy to."""
     destination = by_volume.get(volume_id)
@@ -308,8 +331,7 @@ def _add_copy_steps(
         else:
             rationale = (
                 f"{unit.label} is on {unit.copies} drive(s); policy asks for "
-                f"{required}. Copying it to {name} reduces expected loss by "
-                f"about {gain:,.0f} bytes/year."
+                f"{required}. Copying it to {name} {_gain_phrase(gain)}."
             )
         if slack_bytes > unit.bytes * 0.1:
             # Named rather than left as an unexplained discrepancy between the
