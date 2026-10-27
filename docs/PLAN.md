@@ -8,6 +8,36 @@ produces **plans** for consolidating that content into a traceable, FAIR-aligned
 your data.** Its only outputs are a local catalog database and export documents. See §3 —
 this is enforced by construction and tested, not merely promised.
 
+> **How to read this document.** This is the design. Where the code at M4 differs from it,
+> an **As built** note says so in place. [REVIEW.md](REVIEW.md) traces every safety-relevant
+> requirement to its implementation and test, and lists open findings (F-01 … F-16).
+
+```mermaid
+flowchart LR
+    subgraph user["Your machine"]
+        subgraph media["Catalogued media — read only"]
+            NT[("NTFS volumes")]
+            EX[("exFAT volumes")]
+        end
+        subgraph df["Drive Fusion (runs as invoker)"]
+            CORE["core: scope · scan · identity · analysis"]
+            CAT[("catalog.db")]
+            EXP["export folder (M8)"]
+        end
+        HELP["dfscan-helper.exe<br/>elevated, read-only"]
+    end
+    NT -- read --> CORE
+    EX -- read --> CORE
+    NT -- "volume handle (admin)" --> HELP
+    HELP -- "framed records" --> CORE
+    CORE -- write --> CAT
+    CORE -- "write (new folder only)" --> EXP
+    NET(["Network"]) -.-x df
+```
+
+*Figure 1 — System context. Solid arrows are the only data flows; the tool makes no network
+connections.*
+
 ---
 
 ## 1. Scope and targets
@@ -37,6 +67,9 @@ of these numbers and would be over-built without them.
 > and legal requirements remains with you.
 
 First run requires explicit acknowledgement, recorded in the audit log with a timestamp.
+
+> **As built (M4):** not yet implemented. There is no first-run screen, and the `audit` table
+> exists but is never written.
 
 ---
 
@@ -87,11 +120,30 @@ volume is opened **read-only and nothing else**.
 |---|---|
 | **Single gateway** | All access to catalogued volumes goes through `core/fsio.py`, whose entire public surface is `scandir()`, `stat()`, and `open_read()`. It opens with `GENERIC_READ` only and `FILE_SHARE_READ \| FILE_SHARE_WRITE \| FILE_SHARE_DELETE`, so the tool can never block or alter another process's file, and returns handles that raise on any write method. There is no `open_write` to call. |
 | **Raw-volume handles are read-only** | The fast enumeration path (§6.3) opens `\\.\X:` with `GENERIC_READ` alone. A volume handle opened without write access cannot write, at the OS level, regardless of what the code above it does. |
-| **Build-time lint** | A custom AST checker fails CI if any module outside `core/store/` and `core/export/` references `os.remove`, `os.unlink`, `os.rmdir`, `os.rename`, `os.replace`, `os.truncate`, `shutil.rmtree`, `shutil.move`, `shutil.copy*`, `Path.unlink`, `Path.rename`, `Path.write_*`, `os.chmod`, `os.utime`, or `open()` with any mode but `"rb"`. Required status check on every commit. |
+| **Build-time lint** | A custom AST checker fails CI if any module outside `core/store/` and `core/export/` references `os.remove`, `os.unlink`, `os.rmdir`, `os.rename`, `os.replace`, `os.truncate`, `shutil.rmtree`, `shutil.move`, `shutil.copy*`, `Path.unlink`, `Path.rename`, `Path.write_*`, `os.chmod`, `os.utime`, or `open()` with any mode but `"rb"`. Required status check on every commit. **Not covered (REVIEW F-08):** `subprocess`/`os.system`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators other than `CreateFileW`/`DeviceIoControl` via `ctypes`, `sqlite3.connect`, `getattr` indirection. |
 | **Export-path assertion** | `core/export/` is the only writer of user-facing files. Every write routes through one function asserting the target resolves inside the chosen export root and does not already exist. It has no delete function. |
 | **No hydration of cloud placeholders** | OneDrive-style dehydrated files are detected by attribute and **never opened** (§6.7). Reading one would trigger a download — a state change, and potentially gigabytes of it. |
-| **No-touch regression test** | The suite builds a fixture tree, records a Merkle hash of every path, size, timestamp, and byte, runs a **full** scan → analysis → plan → export cycle, and re-hashes. The assertion is byte-and-metadata identity, including access times. If any code ever touches source data, this test fails. |
+| **No-touch regression test** | The suite builds a fixture tree, records a Merkle hash of every path, size, timestamp, and byte, runs a **full** scan → analysis → plan → export cycle, and re-hashes. The assertion is byte-and-metadata identity; access times are asserted on POSIX where `O_NOATIME` is permitted, and not on Windows. It covers every path the cycle calls. The elevated helper and the USN delta need a real NTFS volume handle and are **not** exercised. |
 | **Denylist on generated text** | Plan exports may include *copy-only* command previews (`robocopy` without `/MIR` or `/PURGE`, `rsync` without `--delete`) for you to review and run yourself. A linter rejects any generated string containing `del`, `rm`, `rmdir`, `erase`, `format`, `diskpart`, `unlink`, `/MIR`, `/PURGE`, `--delete`. The tool will not so much as *print* a destructive command. |
+
+```mermaid
+flowchart TB
+    code["Any code in drivefusion/"] --> lint{"ro_lint<br/>(CI, static)"}
+    lint -- "known mutator" --> fail1["build fails"]
+    lint -- "passes" --> gw{"Uses fsio gateway?"}
+    gw -- "yes" --> os["OS handle: GENERIC_READ,<br/>OPEN_EXISTING — cannot write"]
+    gw -- "no (bypass)" --> nt{"Exercised by the<br/>no-touch cycle?"}
+    nt -- "yes" --> fail2["test fails"]
+    nt -- "no" --> gap["**uncaught** — lint is<br/>the only defence"]
+```
+
+*Figure 2 — How the layers combine. They are complementary, not independent: a mutation that
+the lint doesn't recognise, outside the gateway, on a path the no-touch cycle doesn't call,
+would get through. REVIEW F-08 lists those classes.*
+
+> **As built:** the catalog location (`--catalog` / `DRIVEFUSION_CATALOG`) isn't checked
+> against the scan scope, so a catalog placed inside a scope root is written there (REVIEW
+> F-03). Keep the catalog off catalogued volumes until that check lands.
 
 ### 3.3 What this changes about the design
 
@@ -114,10 +166,17 @@ exists to look at.
 
 - **Add a volume** by drive letter or by its stable volume GUID path. The tool records
   identity (§5) so the entry survives a letter change or a reconnect.
+  **As built:** the volume GUID is recorded, but the root is stored and scanned as its
+  drive-letter path, and nothing checks the GUID before a scan, hash or verify. A different
+  drive mounted at the same letter would be catalogued as the original (REVIEW F-01).
 - **Add roots within a volume** — you may catalog `D:\Research` without touching `D:\Games`.
-- **Include/exclude globs** per root, plus a default exclusion list applied to every scope:
-  `C:\Windows`, `C:\Program Files*`, `$Recycle.Bin`, `System Volume Information`,
-  `pagefile.sys` / `hiberfil.sys` / `swapfile.sys`, `AppData\Local\Temp`, and package caches.
+- **Include/exclude globs** per root, plus a default exclusion list applied to every scope.
+  As built (`core/scope/registry.py`): by name at any depth, `$Recycle.Bin`,
+  `System Volume Information`, `pagefile.sys` / `hiberfil.sys` / `swapfile.sys`,
+  `DumpStack.log*`, `*.tmp`, `~$*` (Office lock files), `.Trash-*`, `.Spotlight-V100`,
+  `$WinREAgent` and `Config.Msi`; and, on Windows, the prefixes `C:\Windows`,
+  `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData\Package Cache` and
+  `C:\$WinREAgent`. `AppData\Local\Temp` is not yet excluded.
   These are excluded because they are churn, not content — and at 50M files, not enumerating
   10M pieces of noise is a performance feature as much as a scoping one.
 - **Reparse-point policy**: junctions, symlinks, and volume mount points are recorded but
@@ -130,36 +189,60 @@ exists to look at.
 
 ## 5. Architecture
 
+Legend: **✓** exists at M4 · **◐** stub or partial · **○** planned (milestone).
+
 ```
 drivefusion/
 ├── core/
-│   ├── fsio.py           # THE read-only gateway (§3.2) — the only reader of user media
-│   ├── model.py          # dataclasses: Drive, Volume, Dir, FileRecord, Content, Collection, Plan
-│   ├── store/            # SQLite schema, migrations, staging+merge loader, DAOs
-│   ├── scope/            # user-defined scan scope registry, globs, preview
-│   ├── discovery/
-│   │   └── windows.py    # IOCTL_STORAGE_QUERY_PROPERTY for serials; volume GUID paths;
-│   │                     # Get-Disk/Get-Partition/Get-Volume as fallback
+│   ├── fsio.py           ✓ THE read-only gateway (§3.2) — scandir · stat · open_read
+│   ├── errors.py         ✓ ReadOnlyViolation, DehydratedFileError, UnreadableError
+│   ├── store/            ✓ SQLite schema v4, migrations, staging+merge loader, queries
+│   ├── scope/            ✓ scan-scope registry, exclusion globs (preview lives in scan/)
+│   ├── discovery/        ✓ windows.py (IOCTL serials, volume GUIDs), posix.py (dev/test)
 │   ├── enum/
-│   │   ├── backend.py    # per-volume strategy selection by filesystem + privilege
-│   │   ├── usn.py        # NTFS: FSCTL_ENUM_USN_DATA full enum, READ_USN_JOURNAL delta
-│   │   ├── batchwalk.py  # exFAT: GetFileInformationByHandleEx batch directory reads
-│   │   ├── layout.py     # read-ordering keys: FRN, or extents via retrieval pointers
-│   │   └── helper/       # dfscan-helper.exe — narrow elevated enumerator (§6.5)
-│   ├── health/           # smartctl --json parsing, risk scoring, AFR tables
-│   ├── scan/             # pipeline, checkpointing, fixity, layout-ordered hashing
-│   ├── identity/         # content identity, tiered hashing, hardlink/dedup handling
-│   ├── analysis/         # duplicate groups, version sets, redundancy, integrity drift
-│   ├── curate/           # collections, controlled vocabularies, metadata completeness
-│   ├── fair/             # FAIR + NDSA scorecards, gap findings, remediation advice
-│   ├── policy/           # preservation rules: copy targets, diversity, NDSA levels
-│   ├── planner/          # placement solver → recommended-step documents (no execution)
-│   └── export/           # THE only writer of user-facing files (§3.2)
-├── standards/            # versioned rubric files, each with source URL + retrieval date
-├── cli/                  # drivefusion scope|scan|report|score|plan|export  (no mutating verbs)
-├── gui/                  # PySide6 views + Qt worker threads
-└── packaging/            # PyInstaller spec, manifest, icons, CI build
+│   │   ├── backend.py    ✓ per-volume strategy selection and staleness wording
+│   │   ├── journal.py    ✓ USN journal validity decision, IOCTL input builders
+│   │   ├── records.py    ✓ USN and directory-info buffer parsers (pure)
+│   │   ├── winio.py      ✓ read-only volume/directory handles, paged IOCTLs
+│   │   ├── dirinfo.py    ✓ GetFileInformationByHandleEx batch directory reads
+│   │   ├── batchwalk.py  ✓ parallel walker (used by every scan)
+│   │   ├── pathtree.py   ✓ FRN → path reconstruction
+│   │   ├── delta.py      ◐ incremental rescan — tested, not called by CLI or GUI
+│   │   └── helper/       ◐ dfscan-helper.exe + framed protocol — not launched by the app
+│   ├── scan/             ✓ scan pipeline, checkpointing, dry-run preview
+│   ├── identity/         ✓ tiered hashing, content identity, fixity verify
+│   ├── analysis/         ✓ duplicate groups, redundancy, integrity, browse queries
+│   ├── export/           ◐ docstring only — the only future writer of user-facing files (M8)
+│   ├── health/           ○ smartctl, AFR, risk (M5)
+│   ├── curate/ fair/     ○ collections, vocabularies, scorecards (M6)
+│   └── policy/ planner/  ○ preservation rules, placement solver (M7)
+├── standards/            ○ versioned rubric files (M6)
+├── cli/                  ✓ scope|scan|find|hash|report|verify|status|volumes|gui
+├── gui/                  ✓ PySide6 screens, per-thread catalog, workers; elevation.py ◐
+└── packaging/            ✓ PyInstaller spec (three executables), manifest
 ```
+
+```mermaid
+flowchart LR
+    cli["cli/"] --> scan["core/scan"]
+    gui["gui/"] --> scan
+    cli --> identity["core/identity"]
+    gui --> identity
+    cli --> analysis["core/analysis"]
+    gui --> analysis
+    scan --> enum["core/enum<br/>batchwalk · dirinfo"]
+    enum --> fsio["core/fsio<br/>(gateway)"]
+    enum --> winio["enum/winio<br/>(raw handles)"]
+    identity --> fsio
+    scan --> store[("core/store")]
+    identity --> store
+    analysis --> store
+    cli --> discovery["core/discovery"]
+    delta["enum/delta"] -. "not yet called" .-> scan
+    helper["enum/helper"] -. "not yet launched" .-> winio
+```
+
+*Figure 3 — Module dependencies as built. Dotted edges are implemented but not connected.*
 
 **Threading rule:** the GUI thread never does I/O. Scans, hashing, scoring, and planning run
 in `QThread` workers reporting progress via signals. The catalog has a single writer thread
@@ -230,6 +313,22 @@ ran is recorded on the scan, so a report can always explain how its numbers were
   tool detects it and falls back to full enumeration — correctness never depends on the journal
   being intact.
 
+```mermaid
+flowchart TD
+    A{"Volume supports USN?"} -- no --> W["walk (full re-walk)"]
+    A -- yes --> B{"Elevated?"}
+    B -- no --> W
+    B -- yes --> C{"Journal queryable<br/>and cursor stored?"}
+    C -- no --> F["usn-full"]
+    C -- yes --> D{"journal_id matches,<br/>lowest ≤ cursor ≤ next?"}
+    D -- no --> F
+    D -- yes --> X["usn-delta"]
+```
+
+*Figure 4 — `core/enum/journal.decide()`: any doubt about the cursor falls back to a full
+pass. **As built:** the CLI and GUI always pass `elevated=False`, so the result is always
+`walk`, and `apply_delta` isn't called.*
+
 ### 6.4 exFAT: make the walk as cheap as a walk can be
 
 Half the fleet gets no MFT and no journal, so **every exFAT rescan is a full re-walk**. That is
@@ -283,14 +382,17 @@ the exFAT half of the fleet:
   audited in one sitting. It forwards raw IOCTL buffers rather than re-serialising records, so
   the parent parses them with the same tested functions a same-process read would use and there
   is no second decoder to keep in step.
-- **How the helper gets its rights, as built at M2:** it is spawned directly and inherits the
-  parent's token, so it works when Drive Fusion is already running elevated and reports a clear
-  reason when it is not. Prompting from a non-elevated process needs `ShellExecuteEx` with the
-  `runas` verb plus a named pipe to carry output back; that lands with the GUI at M4, which has
-  somewhere to host the prompt. Writing it blind now would put untested Win32 plumbing on the
-  privileged path.
-- The helper is covered by the same AST lint and no-touch test as the main application.
-- Elevation is requested per scan, and the consent is recorded in the audit log.
+- **How the helper gets its rights.** `helper/client.run_helper` spawns it directly, so it
+  inherits the parent's token: it works when Drive Fusion already runs elevated and reports a
+  clear reason when it doesn't. **As built at M4:** `gui/elevation.py` decides what to offer
+  and has a `ShellExecuteW("runas")` launcher, but no screen calls it, and there's no named
+  pipe to carry output back. Before it is wired up, the launcher must verify the helper's
+  signature or a pinned hash, quote its parameters, and use an ACL-restricted pipe
+  (REVIEW F-07).
+- The helper is covered by the same AST lint as the main application. The no-touch test
+  doesn't exercise it, because it needs a real NTFS volume handle; its protocol is tested
+  against a stand-in child process.
+- *Planned:* elevation is requested per scan, and consent is recorded in the audit log.
 
 ### 6.6 Tiered hashing, ordered by physical layout
 
@@ -322,6 +424,20 @@ differs by filesystem:
   those volumes and the exFAT hashing budget in §13 must be re-measured. This is called out as a
   task rather than assumed, because the whole exFAT hashing budget rests on it.
 
+```mermaid
+flowchart LR
+    f["catalogued file<br/>read_state = ok"] --> s{"size shared with<br/>another file?"}
+    s -- no --> u["never opened<br/>(unique ⇒ single copy)"]
+    s -- yes --> q["Tier 1 quick hash<br/>size + 3 × 64 KiB<br/>(whole file ≤ 192 KiB)"]
+    q --> c{"quick hash shared<br/>and file > 192 KiB?"}
+    c -- no --> id["content identity"]
+    c -- yes --> full["Tier 2 full hash"]
+    full --> id
+```
+
+*Figure 5 — Tiered hashing as built. Tier 0 is the merge itself: a file whose size and mtime
+are unchanged keeps its `content_id`.*
+
 Concurrency for **body reads** is set per device from the discovered media type: **1–2 readers
 for HDD** (more only adds seek thrash), **4–8 for SSD/NVMe** — distinct from the metadata
 enumeration pool in §6.4. Scans checkpoint continuously, so an unplugged cable costs seconds,
@@ -331,7 +447,7 @@ not a pass.
 
 | Reality | Handling |
 |---|---|
-| **Cloud placeholders** (OneDrive et al.) | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` / `RECALL_ON_OPEN` / `OFFLINE` → recorded as `dehydrated`, **never opened**. Opening one downloads it. They are catalogued by metadata and excluded from hashing, with a clear report line |
+| **Cloud placeholders** (OneDrive et al.) | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` / `RECALL_ON_OPEN` / `OFFLINE` → recorded as `dehydrated`, **never opened**. Opening one downloads it. They are catalogued by metadata and excluded from hashing, with a clear report line. **As built:** the scanner tests the reparse attribute first, so a placeholder that exposes `FILE_ATTRIBUTE_REPARSE_POINT` is counted as a link and not catalogued (REVIEW F-11) |
 | **Long paths** | All paths use the `\\?\` prefix; the app manifest also declares long-path awareness. A tool that dies at 260 characters is useless on an archive drive |
 | **Hardlinks** | NTFS `NumberOfLinks` + File Reference Number; entries sharing an FRN on a volume are **one physical copy**. Counting them twice would inflate redundancy — a correctness bug, not a cosmetic one. exFAT has no hardlinks, so the question does not arise there |
 | **Sparse / compressed files** | Record logical size *and* allocated size; report both, since capacity planning needs allocated and dedup needs logical |
@@ -349,6 +465,12 @@ not a pass.
 ## 7. Data model at 50M rows
 
 Naive schemas fall over here, so the storage design is driven by row-count arithmetic.
+
+> **As built:** the DDL in this section and §7.3 is the *target* model. The live schema is
+> `core/store/schema.py` (version 4). It implements `drive`, `volume`, `scope_root`, `scan`,
+> `dir`, `dir_rollup` (files/bytes/subtree counts only), `content`, `file`, `stage_file`,
+> `stage_dir`, `fixity_check` and `audit` (unused). The collection, similarity, version,
+> health and plan tables arrive with M5–M7.
 
 ### 7.1 Path interning is mandatory
 
@@ -548,18 +670,24 @@ FTS5 over 50M full paths would add several GB and a long build. Instead:
 ### 8.1 Redundancy and duplication
 
 - **`copies(content)`** — distinct *drives* holding it; not paths, not hardlinks.
+  **As built:** a volume whose drive serial couldn't be read counts as its own drive, which
+  overstates copies when two such volumes share one disk (REVIEW F-05).
 - **Under-protected set** — `copies < policy.min_copies`, ranked by `size × P(loss)`. The queue
-  that actually matters, and the first screen you should look at.
+  that actually matters, and the first screen you should look at. **As built:** ranked by
+  size, and limited to hashed content, so files of unique size, which are certainly single
+  copies, are missing from it (REVIEW F-04).
 - **Reclamation candidates** — content above the copy target, or duplicated *within* one drive
   (zero durability gain, real space cost), with reclaimable byte totals. **A report, never an
   action** (§3.3).
 - **Version sets** — near-duplicates grouped by perceptual/text similarity, with a *proposed*
   preferred member under configurable keep-rules. Proposed and exported, never applied.
-- **Integrity drift** — content whose hash changed while its mtime did not (silent corruption),
+- **Integrity drift** — content whose hash changed while its mtime did not (silent corruption).
+  **As built:** `verify` doesn't yet compare size or mtime, so a file edited since the last
+  scan is reported as a mismatch (REVIEW F-06). Also tracked:
   files now unreadable, and content that has vanished since a prior scan. Each incident names
   the other drives holding a verified copy that could repair it — a repair *you* perform.
-  **Verification covers both hash tiers.** A full hash is exact by definition; below
-  `SMALL_FILE_BYTES` the quick hash also read every byte, so it is an equally valid witness.
+  **Verification covers both hash tiers.** A full hash is exact by definition; at or
+  below `SMALL_FILE_BYTES` the quick hash also read every byte, so it is an equally valid witness.
   Checking only full hashes would skip most of a real catalog by file count while still
   reporting "0 mismatches" — a fixity result that silently excludes the majority of the data
   is worse than none, because it reads as a clean bill of health. Files whose size is unique
@@ -758,9 +886,11 @@ because no such capability exists behind them.
 thread that created it, so the GUI keeps **one catalog per thread** — never one shared
 connection, and never `check_same_thread=False`, which converts a loud failure into silently
 interleaved transactions. WAL mode lets the UI thread read while a worker writes, which is what
-keeps the browser scrolling during a scan. Cancellation is cooperative and checked *per
-directory* rather than per root: a root can take hours, and a Cancel button that only takes
-effect when the work finishes is a lie.
+keeps the browser scrolling during a scan. Cancellation is cooperative and should be checked
+*per directory* rather than per root: a root can take hours, and a Cancel button that only
+takes effect when the work finishes is a lie. **As built:** it is checked in the scanner's
+progress callback, which fires every 10,000 staged files, so small roots can't be cancelled
+mid-scan (REVIEW F-13).
 
 **Virtualization rules, non-negotiable at 50M rows:** models fetch pages on demand via
 `canFetchMore`/`fetchMore`; **keyset pagination** (`WHERE (dir_id, name) > (?, ?) LIMIT 200`),
@@ -790,8 +920,15 @@ Two further rules M4 settled in code:
   you choose a fast scan.
 - Catalog, logs, and config in `platformdirs.user_data_dir("DriveFusion")`, with a **portable
   mode** keeping the catalog beside the executable so the tool and its catalog can travel on a
-  thumb drive to whichever machine the drives are attached to.
+  thumb drive to whichever machine the drives are attached to. **As built:** the catalog is
+  `~/.drivefusion/catalog.db`, overridable with `--catalog` or `DRIVEFUSION_CATALOG`; there is
+  no portable mode yet. A portable mode must refuse a catalog on a catalogued volume (REVIEW
+  F-03), and must not put `dfscan-helper.exe` in a user-writable directory without verifying
+  it before elevation (REVIEW F-07).
 - Migrations run on launch; the catalog is **copied, never replaced**, before any schema change.
+  **As built:** the copy is a plain file copy taken while the database is in WAL mode, so it
+  can miss committed transactions. It should use SQLite's backup API or `VACUUM INTO`
+  (REVIEW F-10).
 - Bundle `smartctl` (smartmontools) — on Windows it is far more reliable than WMI, especially
   over USB bridges. Degrade to "health unknown" rather than failing.
 - **Authenticode signing** is the difference between "it runs" and "users can run it," and it
@@ -835,8 +972,11 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 
 - **The no-touch test (§3.2) is the highest-priority test in the suite** and gates every commit:
   Merkle hash of the fixture tree before and after a full cycle, asserting byte *and* metadata
-  identity including access times.
-- **AST lint** for forbidden calls, as a required CI status check, covering `dfscan-helper` too.
+  identity, plus access times on POSIX where `O_NOATIME` is permitted.
+- **AST lint** for forbidden calls, as a CI step, covering `dfscan-helper` too.
+- *To add (from REVIEW):* tests for a missing or unlistable root not tombstoning its contents
+  (F-02), a catalog path inside scope being refused (F-03), unique-size files counting as
+  under-protected (F-04), and a placeholder with both reparse and recall attributes (F-11).
 - **Synthetic VHDX fixtures in both filesystems**, attached in CI: an NTFS image with known
   duplicate, version, hardlink, sparse, compressed, reparse-point, and long-path structure, and
   an **exFAT image with a large cluster size** carrying many small files. VHDX matters because
@@ -873,9 +1013,9 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 |---|---|---|
 | **M0** | Skeleton **and guardrails** | repo layout, `core/fsio.py`, AST lint in CI, no-touch test, VHDX fixture harness, PyInstaller build. *The safety mechanism ships before any code that reads user media.* |
 | **M1** | Catalog core | scope registry, Windows discovery, unprivileged walker, interned-path schema, staging+merge loader, `scope`/`scan`/`find` CLI. **Benchmark gate: single-DB vs. sharded decision (§7.2)** |
-| **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
+| **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. **As built:** these are libraries with tests; neither the CLI nor the GUI calls the helper or `apply_delta`, so user scans are always full walks. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
 | **M3** | Identity & analysis | **Done.** Tier 1 quick hash and tier 2 full hash with layout-ordered reads, content identity in the catalog, duplicate groups, copies counted over distinct physical drives, under-protected and reclamation reports, the `fixity_check` table and a `verify` pass covering **both** tiers (§8.1). `hash`/`report`/`verify` CLI verbs; the no-touch cycle extended to cover all of it. Deferred with reasons: retrieval-pointer read ordering (→ M4, measurable only against real fragmented NTFS volumes, and the batch walker's ordering already recovers most of the benefit); per-drive parallel hashing (→ M5, where drive health tells us which devices tolerate concurrent reads). |
-| **M4** | GUI shell | **Done.** PySide6 app: Scope, Dashboard, Drives and Catalog screens; per-thread catalog connections; cancellable background tasks with progress; a keyset-paged file table and lazily-expanded directory tree; asynchronous row counting; UAC elevation offered per scan (the M2 deferral, §6.5); `drivefusion gui`; two front ends from one build (windowed `DriveFusion.exe`, console `drivefusion.exe`). The no-touch cycle now includes the full browse traversal, and the read-only guarantee is asserted over the *widget tree* — no control may carry a destructive verb. Deferred with reasons: editable drive metadata and SMART sparklines (→ M5, where the durability model gives those fields meaning); retrieval-pointer read ordering (→ M5, measurable only against real fragmented NTFS). |
+| **M4** | GUI shell | **Done.** PySide6 app: Scope, Dashboard, Drives and Catalog screens; per-thread catalog connections; cancellable background tasks with progress; a keyset-paged file table and lazily-expanded directory tree; asynchronous row counting; the UAC elevation launcher (`gui/elevation.py`, implemented and unit-tested but **not yet offered by any screen**; §6.5); `drivefusion gui`; two front ends from one build (windowed `DriveFusion.exe`, console `drivefusion.exe`). The no-touch cycle now includes the full browse traversal, and the read-only guarantee is asserted over the *widget tree* — no control may carry a destructive verb. Deferred with reasons: editable drive metadata and SMART sparklines (→ M5, where the durability model gives those fields meaning); retrieval-pointer read ordering (→ M5, measurable only against real fragmented NTFS). |
 | **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |
 | **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
 | **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |
@@ -901,7 +1041,10 @@ would mean reworking the scan pipeline.
 | **Inferred collections get silently wrong** | Inference proposes, never assigns; every candidate carries its evidence; confirmation is explicit; unfiled content is a first-class reported state (§8.4) |
 | **Hashing is seek-bound on external HDDs** | Tiered hashing plus reads ordered by File Reference Number; per-media concurrency limits; fully resumable |
 | **Cloud placeholders silently hydrate** | Detected by attribute and never opened; asserted by test |
-| **A future change reintroduces a write path** | Structural enforcement (§3.2): gateway with no writer, read-only volume handles, CI lint, no-touch test. A regression must defeat four independent mechanisms |
+| **A future change reintroduces a write path** | Structural enforcement (§3.2): gateway with no writer, read-only volume handles, CI lint, no-touch test. The layers are complementary rather than independent; the lint's blind spots (REVIEW F-08) should be closed so that no class of mutation depends on a single layer |
+| **The wrong drive is mounted at a remembered letter** | Bind every scan, hash and verify to the recorded volume GUID and refuse on mismatch (REVIEW F-01, open) |
+| **An unreadable directory is mistaken for a deleted one** | Tombstone only inside directories a scan actually listed, as the delta path already does (REVIEW F-02, open) |
+| **The catalog is written onto catalogued media** | Refuse catalog and export paths inside any scope root (REVIEW F-03, open) |
 | **Elevated helper becomes an attack surface** | Separate binary, read-only handle, enumerate-and-exit, no network or write code, same lint and tests as the main app |
 | **Antivirus flags raw-volume access** | Signed binaries, one-folder build, published hashes, documented exclusions |
 | **Hardlinks and NTFS dedup inflate apparent redundancy** | FRN-based physical-copy counting; logical vs. allocated size tracked separately |
