@@ -57,7 +57,7 @@ its catalog.*
 | **M2** Fast enumeration | **library done, not wired** | parallel batch walker is used by every scan. The NTFS change-journal path (`dfscan-helper`, journal logic, incremental delta) is implemented and unit-tested but **not called by `scan` or the GUI**, so every rescan is currently a full walk |
 | **M3** Identity and analysis | done | `hash`, `report`, `verify` |
 | **M4** GUI shell | done, with one gap | `gui`: Scope, Dashboard, Drives and Catalog screens; background scans and hashing with Cancel. The UAC elevation launcher exists but **no screen offers it yet** |
-| M5–M8 | planned | health and risk, curation and FAIR scorecards, the planner, exports. See [PLAN §15](docs/PLAN.md#15-milestones) |
+| M5–M8 | planned | health and risk, curation and FAIR scorecards, the planner, exports. See [PLAN §15](docs/PLAN.md#15-milestones) and the [roadmap](docs/ROADMAP.md) |
 
 Not yet implemented, though described in the plan: first-run disclaimer acknowledgement, the
 hash-chained audit log, and portable mode.
@@ -162,7 +162,9 @@ pyinstaller packaging/drivefusion.spec --noconfirm --clean
 * The VHDX volume tests need Windows and administrator rights (they call `diskpart`). They
   run on the Windows CI runner and skip elsewhere.
 * The GUI tests run headless with `QT_QPA_PLATFORM=offscreen`. CI asserts that Qt can start,
-  so a skipped GUI suite can't pass as green.
+  so a skipped GUI suite can't pass as green. Locally on Linux they **skip** unless the Qt
+  runtime libraries are installed (`libegl1 libdbus-1-3 libxkbcommon0 libfontconfig1`), so
+  check the skip count.
 * CI runs the lint and tests on Windows and Linux, then builds and smoke-tests three Windows
   executables: windowed `DriveFusion.exe`, console `drivefusion.exe`, and `dfscan-helper.exe`.
 
@@ -195,4 +197,5 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 |---|---|
 | [docs/PLAN.md](docs/PLAN.md) | The build plan: read-only design, scan scope, Windows enumeration, data model and budgets at 50M files, durability scoring, FAIR/NDSA, planner, milestones |
 | [docs/REVIEW.md](docs/REVIEW.md) | Safety, file-integrity and security review: user needs → requirements → specification traceability, findings with reproductions, recommended order of fixes |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Plan addendum: milestone status, what the finished milestones still owe, and the ordered plan to M5–M8 |
 | [docs/VV.md](docs/VV.md) | Verification & validation: testable requirements traced to the plan, randomized drive datasets (simulated or physical), the oracle, and the V&V tests |

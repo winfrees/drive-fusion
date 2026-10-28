@@ -11,6 +11,8 @@ this is enforced by construction and tested, not merely promised.
 > **How to read this document.** This is the design. Where the code at M4 differs from it,
 > an **As built** note says so in place. [REVIEW.md](REVIEW.md) traces every safety-relevant
 > requirement to its implementation and test, and lists open findings (F-01 … F-16).
+> [ROADMAP.md](ROADMAP.md) (Plan Addendum A, 2026-10-28) records where the code stands against
+> §15, what the milestones marked done still owe, and the order of work for M5–M8.
 
 ```mermaid
 flowchart LR
@@ -1067,6 +1069,11 @@ copies. It is fixed in `Catalog.quick_hash_collisions()`, with regression tests 
 | **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
 | **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |
 | **M8** | Exports & polish | RO-Crate/BagIt/DataCite, per-drive manifests, naming-template mappings, HTML/CSV reports, signed build |
+
+> **Status at 2026-10-28:** M0–M4 are delivered, but each still owes items: open REVIEW
+> findings F-05 … F-16, the unwired USN path (M2), the unhardened elevation launcher (M4), and
+> the §13 budgets that haven't been measured. [ROADMAP.md](ROADMAP.md) §2–§3 lists them, and §4
+> plans a correctness close-out (Track A) before M5.
 
 M1 alone answers use case 1 from the CLI; M3 answers use case 2; M7–M8 deliver use case 3.
 M2 is scheduled early and deliberately — everything downstream assumes a catalog that can be
