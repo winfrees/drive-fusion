@@ -17,7 +17,7 @@ runtime libraries installed, so the GUI suite ran rather than skipping.
 | Check | Result |
 |---|---|
 | `python tools/ro_lint.py` | clean, 54 files |
-| `python -m pytest -q` | **336 passed, 5 skipped** (Windows-only) on most runs. **One run of the first ~20 had 1 failure** that hasn't reproduced since; see §3.4 |
+| `python -m pytest -q` | **336 passed, 5 skipped** (Windows-only) on most runs. **One run of the first ~20 had 1 failure** that hasn't reproduced in 55 full runs since; see §3.4 |
 | `python tools/review_repro.py` | R1–R4 `NOT FOUND` (F-01 to F-04 fixed). R5–R12 **`FOUND`**: F-05, F-06, F-08 (7 probes), F-10, F-11, F-12, F-13, F-14 are still present |
 | `python -m vv all` (simulated, 3, 6 and 9 drives, fresh seeds) | **PASS** on every run: 37 PASS, 1 N/A (VV-CAT-06, unreadable files can't be planted as root), 1 DEFERRED (VV-VER-01, M6) |
 | GitHub | No open pull requests or issues |
@@ -103,8 +103,8 @@ These are in PLAN but not attached to any milestone. This addendum assigns them.
 ### 3.4 Test-suite health
 
 * **One intermittent failure.** In about 20 full runs, one ended `1 failed, 335 passed`. It
-  wasn't captured in detail, and it hasn't reproduced in more than 50 runs since, including 80
-  isolated runs of the suspected bench test. The V&V bench tests draw a fresh random seed on
+  wasn't captured in detail, and it hasn't reproduced since: 55 more full-suite runs (40 of
+  them in one unattended loop) and 80 isolated runs of the suspected bench test all passed. The V&V bench tests draw a fresh random seed on
   every run, so a seed-dependent defect would look exactly like this. **Action C0:** make
   `tests/test_vv.py` print its seed on failure, as the generator already does, and keep a log
   of seeds that fail. Treat any recurrence as a real defect. VV.md's own rule is that
