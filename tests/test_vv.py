@@ -154,12 +154,8 @@ def test_a_full_run_has_no_errors_and_a_clean_baseline(completed_run) -> None:
             assert r["verdict"] in (ev.PASS, ev.NA), f"seed {seed}: {test_id}@{phase}: {r['details']}"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Known defect found by this bench: a new or moved copy of large content that was "
-    "already fully hashed attaches to the orphaned quick-hash-only content row and is "
-    "split from its twins (docs/VV.md §6). Strict: when the fix lands, this XPASSes and "
-    "the marker must go."))
 def test_a_full_run_passes_the_rescan(completed_run) -> None:
+    """Failed on every dataset before the identity fix of docs/VV.md §7."""
     manifest, _observed, results = completed_run
     failing = [f"{r['id']}: {r['details'][:1]}" for r in results
                if r["phase"] == "rescan" and r["verdict"] not in (ev.PASS, ev.NA)]

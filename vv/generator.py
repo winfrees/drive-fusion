@@ -558,7 +558,9 @@ class Builder:
     def _copy_holders(self, min_paths: int = 2, large: bool | None = None) -> dict[str, list]:
         holders: dict[str, list] = {}
         for k, f in self.files.items():
-            if f.get("link_group") or f.get("unreadable"):
+            # Empty files are never hashed, so they have no identity a copy
+            # set, a move, or a corruption could be judged by.
+            if f.get("link_group") or f.get("unreadable") or not self.contents[f["content"]]["size"]:
                 continue
             holders.setdefault(f["content"], []).append(k)
         return {c: ks for c, ks in holders.items() if len(ks) >= min_paths

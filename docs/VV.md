@@ -286,7 +286,7 @@ for `verify`, `checked`, `mismatched` and `incidents` as
 `[{drive, path, result, other_copies}]`. Paths are relative to the drive root with `/`
 separators. The harness adds `no_touch` diffs and any `errors`.
 
-## 7. First results: Drive Fusion 0.1.0
+## 7. First results: Drive Fusion 0.1.0 (defect since fixed)
 
 Sweeps of 20 fresh datasets (1–10 simulated drives) and a physical-mode run across two
 real filesystems give the same picture:
@@ -310,12 +310,17 @@ a full-hash row, leaving the quick-only row with no files. On the next pass,
 `Catalog.quick_hash_collisions()` only looks at quick-only rows holding more than one live
 file, so the lone file is never fully hashed and never meets its twins.
 
-**Evidence that this is the tool and not the bench.** The same datasets, restored with
-`reset`, were run against a copy of Drive Fusion with one change to
-`quick_hash_collisions()`: also treat a quick-only row as ambiguous when another live
-content row shares its size and quick hash. Every test passed. `tests/test_vv.py` carries
-this as a **strict xfail**: the suite stays green today, and turns red the moment a fix
-lands without the marker being removed.
+**Evidence that this is the tool and not the bench.** Before any fix, the same datasets
+(restored with `reset`) were run against a scratch copy of Drive Fusion carrying only the
+candidate change below. Every test passed.
+
+**Fixed.** `quick_hash_collisions()` now also treats a quick-only row as ambiguous when
+another content row with live files shares its size and quick hash, so the late file is
+fully read and meets its twins. A file with the same sampled blocks but different bytes
+still gets content of its own. The extra check is two indexed lookups, made only for
+single-file groups. Regression tests: `tests/test_identity.py`
+(`test_a_new_copy_…`, `test_a_moved_copy_…`, `test_a_late_lookalike_…`) and
+`test_a_full_run_passes_the_rescan` in `tests/test_vv.py`.
 
 ## 8. The bench's own safety
 

@@ -690,13 +690,26 @@ class Catalog:
         Only these need a full read. A group is ambiguous when several *files*
         with different bytes could share the sampled blocks; a group whose
         quick hash covered the whole file is already exact.
+
+        A group of one is ambiguous too when another content row with live
+        files shares its size and quick hash. That other row is always one the
+        full pass already resolved: once a group is fully hashed its files move
+        to full-hash rows and the quick-only row is left empty, and the next
+        file with those sampled blocks lands on it alone. Unless it is fully
+        read as well, it never meets the content it may be identical to, and a
+        third copy of something reads as a first copy of something else
+        (docs/VV.md §7).
         """
         return list(
             self.conn.execute(
                 "SELECT c.id, c.size_bytes, COUNT(f.id) AS files "
                 "FROM content c JOIN file f ON f.content_id = c.id "
                 "WHERE c.full_hash IS NULL AND f.vanished_at IS NULL "
-                "GROUP BY c.id HAVING COUNT(f.id) > 1"
+                "GROUP BY c.id HAVING COUNT(f.id) > 1 OR EXISTS ("
+                "  SELECT 1 FROM content o JOIN file g ON g.content_id = o.id "
+                "  WHERE o.size_bytes = c.size_bytes "
+                "    AND o.quick_hash = c.quick_hash "
+                "    AND o.id != c.id AND g.vanished_at IS NULL)"
             )
         )
 

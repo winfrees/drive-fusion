@@ -890,8 +890,10 @@ tool as a whole gives a *user* true answers on drives that look like theirs. Ful
   one exFAT device, plus a simulated run of 10 drives. N/A is not a pass: any requirement left
   N/A by one run's hardware must be covered by another.
 
-The first runs against 0.1.0 found a defect no unit test had: after a rescan, a new or moved copy
-of already fully hashed large content is split from its twins, under-counting copies (VV.md §7).
+The first runs against 0.1.0 found a defect no unit test had caught: after a rescan, a new or
+moved copy of already fully hashed large content was split from its twins, under-counting
+copies. It is fixed in `Catalog.quick_hash_collisions()`, with regression tests at both levels
+(VV.md §7).
 
 ---
 

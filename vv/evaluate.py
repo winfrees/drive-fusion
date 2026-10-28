@@ -338,6 +338,8 @@ class Evaluator:
                 continue
             if src not in obs.vanished:
                 r.fail(f"old location not tombstoned: {_fmt(src)}")
+            if dst not in exp["identified"]:
+                continue  # nothing the spec says to hash; VV-ID-03 covers that side
             sib_cids = {obs.cid(k) for k in siblings}
             if obs.cid(dst) is None or (siblings and sib_cids != {obs.cid(dst)}):
                 r.fail(f"{_fmt(dst)} not recognized as the content still held at "
