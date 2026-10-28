@@ -42,7 +42,12 @@ def _tree_digest(manifest: dict) -> dict[str, str]:
         for path in sorted(Path(d["root"]).rglob("*")):
             if path.is_file() and not path.is_symlink():
                 rel = f"{d['id']}/{path.relative_to(d['root']).as_posix()}"
-                out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+                try:
+                    out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+                except PermissionError:
+                    # The unreadable-file scenario, planted wherever the
+                    # filesystem allows it (non-root POSIX).
+                    out[rel] = "<unreadable>"
     return out
 
 

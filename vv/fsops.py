@@ -298,7 +298,12 @@ def snapshot(roots: list[str]) -> dict[str, list]:
                 entries = sorted(it, key=lambda e: e.name)
             for entry in entries:
                 full = os.path.join(directory, entry.name)
-                st = entry.stat(follow_symlinks=False)
+                # Not entry.stat(): on Windows that is the copy of the metadata
+                # held in the *parent's* directory index, which NTFS refreshes
+                # lazily. A folder that just had files written into it reports
+                # a stale mtime there that later corrects itself, which reads
+                # as the tool having touched it. lstat reads the entry itself.
+                st = os.lstat(os_path(full))
                 if entry.is_symlink():
                     record = ["link", 0, st.st_mtime_ns, st.st_mode, os.readlink(os_path(full))]
                 elif entry.is_dir(follow_symlinks=False):
