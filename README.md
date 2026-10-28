@@ -1,103 +1,183 @@
-# drive-fusion
+# Drive Fusion
 
-A Windows desktop tool for cataloging the drives you point it at — internal, external,
-connected or shelved — confirming how many real copies of each file exist, and building
-reviewable plans to consolidate that content into a traceable, FAIR-aligned order.
+A Windows desktop and command-line tool that **catalogs the drives you point it at**
+(internal or external, connected or on a shelf), **tells you how many real copies of each
+file exist**, and will produce **reviewable plans** for consolidating that content into a
+traceable, FAIR-aligned order.
 
-> **Drive Fusion never modifies, moves, or deletes your data.** It is a planning and
-> reporting instrument. It reads the drives you add to its scan scope and writes only to its
-> own catalog and to an export folder you choose. This is enforced structurally — a read-only
-> I/O gateway, read-only volume handles, a CI lint that bans mutating calls, and a regression
-> test asserting scanned trees are byte-identical before and after a full run — not by policy
-> alone.
+> **Drive Fusion never modifies, moves, or deletes your data.** It reads only the folders you
+> add to its scan scope and writes only to its own catalog database. Keep that catalog **off**
+> the drives you scan; see [Known limits](#known-limits).
 
-Python 3.11+ · PySide6 GUI · SQLite catalog · packaged as a signed 64-bit Windows executable.
+Python 3.11+ · SQLite catalog · optional PySide6 GUI · packaged as a 64-bit Windows one-folder
+build.
 
-**Designed for:** ~20 drives (~50/50 NTFS and exFAT), 10–50 million files, local drives only,
-user-defined scan scope. Scale drives the design — NTFS MFT/USN bulk enumeration for fast scans
-and near-instant incremental rescans, a parallel batch walker for exFAT volumes that have
-neither, layout-ordered hashing, interned paths, and fully virtualized views.
+**Designed for** ~20 drives (about half NTFS, half exFAT), 10–50 million files, local drives
+only. **Not for** identifiable human-subjects data, PHI or other regulated data. See the
+disclaimer in [docs/PLAN.md §1](docs/PLAN.md#1-scope-and-targets).
 
-**Not for identifiable human-subjects data, PHI, or otherwise regulated data.** See the
-disclaimer in the plan.
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    U(["You"]) -->|"scope add D:\Research"| S["Scan scope<br/>(opt-in roots)"]
+    S --> W["Walker<br/>read-only listings"]
+    W --> C[("Catalog<br/>SQLite")]
+    C --> H["Hash<br/>only same-size files"]
+    H --> C
+    C --> R["Reports<br/>copies · duplicates · fixity"]
+    R --> U
+    D[("Your drives")] -. "read only" .-> W
+    D -. "read only" .-> H
+```
+
+*Figure 1 — The tool reads your drives in two places, listing and hashing, and writes only to
+its catalog.*
+
+1. **Scope.** You add root folders. Nothing else is ever listed. Nested roots are refused;
+   junctions, symlinks and mount points are recorded but not followed; OS churn (recycle bin,
+   page file, `System Volume Information`, `C:\Windows`, …) is excluded by default.
+2. **Scan.** A parallel directory walker records names, sizes, timestamps and attributes into
+   a staging table, which one transaction then merges into the catalog. Files that can't be
+   read, and cloud placeholders, are counted and reported, never opened.
+3. **Hash.** Only files whose *size* appears more than once in the catalog are opened. A
+   quick hash (size plus head, middle and tail samples, or the whole file for files up to 192 KiB)
+   separates most of them; a full hash settles the rest.
+4. **Report.** Copies are counted **over distinct physical drives, not over paths**: two
+   copies on one drive are one copy, and a hardlink is the same file twice.
 
 ## Status
 
-**M4 complete — there is a window now.** The tool answers use cases 1 and 2 from either the
-command line or a desktop app: register scan scope, enumerate it, rescan incrementally, search
-it, establish content identity, browse the catalog, and get redundancy, duplication and fixity
-reports.
+| Milestone | State | What you can use today |
+|---|---|---|
+| **M0** Skeleton and guardrails | done | read-only gateway, lint, no-touch test, VHDX fixtures, build |
+| **M1** Catalog core | done | `scope`, `scan`, `find`, `status`, `volumes` |
+| **M2** Fast enumeration | **library done, not wired** | parallel batch walker is used by every scan. The NTFS change-journal path (`dfscan-helper`, journal logic, incremental delta) is implemented and unit-tested but **not called by `scan` or the GUI**, so every rescan is currently a full walk |
+| **M3** Identity and analysis | done | `hash`, `report`, `verify` |
+| **M4** GUI shell | done, with one gap | `gui`: Scope, Dashboard, Drives and Catalog screens; background scans and hashing with Cancel. The UAC elevation launcher exists but **no screen offers it yet** |
+| M5–M8 | planned | health and risk, curation and FAIR scorecards, the planner, exports. See [PLAN §15](docs/PLAN.md#15-milestones) |
 
-| Milestone | State |
-|---|---|
-| **M0** Skeleton and guardrails | **done** — gateway, lint, no-touch test, volume fixtures, build |
-| **M1** Catalog core | **done** — scope, discovery, walker, interned schema, merge, CLI |
-| **M2** Fast enumeration | **done** — parsers, journal logic, parallel walker, `dfscan-helper`, incremental rescan |
-| **M3** Identity & analysis | **done** — tiered hashing, duplicate groups, copies-per-drive, fixity |
-| **M4** GUI shell | **done** — Scope, Dashboard, Drives, Catalog; paged views, cancellable scans, UAC prompt |
-| M5–M8 | see [docs/PLAN.md](docs/PLAN.md) §15 |
+Not yet implemented, though described in the plan: first-run disclaimer acknowledgement, the
+hash-chained audit log, and portable mode.
 
-```
+## Quick start
+
+```bash
+pip install -e ".[gui]"
+
 drivefusion scope add D:\Research
 drivefusion scope preview 1        # counts what a scan would cover, writes nothing
 drivefusion scan
 drivefusion find "*.psd"
-drivefusion hash                   # content identity; the only verb that reads file bodies
-drivefusion report                 # duplication, durability, and fixity findings
-drivefusion verify                 # re-hash and report silent corruption
+drivefusion hash                   # the only verb that reads file contents
+drivefusion report                 # duplication, durability and fixity findings
+drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
-drivefusion gui                    # the desktop window (needs the [gui] extra)
+drivefusion gui                    # the desktop window
 ```
 
-The window has four screens — Scope, Dashboard, Drives and Catalog. Scans and hash passes run
-on a worker thread with a Cancel button that takes effect within a directory rather than at the
-end of a root, the catalog browser pages through a directory 200 rows at a time by keyset seek
-rather than `OFFSET`, and file counts are computed off-thread and shown as "counting…" until
-they land. Screens that belong to later milestones are listed and visibly disabled rather than
-present and inert.
+The catalog lives at `~/.drivefusion/catalog.db` unless you pass `--catalog PATH` or set
+`DRIVEFUSION_CATALOG`.
 
-There is no delete, move, or apply control anywhere in it, and a test walks the whole widget
-tree on every CI run to assert there never is one.
+There are deliberately no `apply`, `move`, `dedupe` or `delete` verbs, and the GUI has no such
+controls. A test walks the entire widget tree on every CI run to keep it that way.
 
-Redundancy is counted **over distinct physical drives, not over paths**. Two copies on one
-drive are one copy — if that drive dies they go together — and a hardlink is the same file
-seen twice, not a second copy of anything. Both rules exist because getting them wrong does
-not raise an error; it produces a confident number that is false.
+## The read-only guarantee
 
-Measured at 3M files: **222 bytes per file** (≈10.4 GB projected at 50M), 192k rows/s merge,
-555 MB peak RSS — all inside the [§13 budgets](docs/PLAN.md). Run `python tools/benchmark.py`
-to reproduce.
+```mermaid
+flowchart TB
+    subgraph L1["Layer 1 — single gateway"]
+        G["core/fsio.py exposes only<br/>scandir · stat · open_read"]
+    end
+    subgraph L2["Layer 2 — OS handles"]
+        O["CreateFileW(GENERIC_READ, OPEN_EXISTING)<br/>volume handles read-only"]
+    end
+    subgraph L3["Layer 3 — static lint (CI)"]
+        A["tools/ro_lint.py bans mutating calls<br/>outside core/store and core/export"]
+    end
+    subgraph L4["Layer 4 — no-touch test (CI)"]
+        N["fixture tree byte-identical after<br/>scan ×2 · hash · verify · reports · browse"]
+    end
+    L1 --> L2 --> L3 --> L4
+```
+
+*Figure 2 — Four complementary layers. They overlap, but they are not independent: the lint
+is the only layer that would catch some classes of regression (see below).*
+
+What the layers guarantee today:
+
+* Every handle on user media is opened with read access and `OPEN_EXISTING`. It can't write,
+  and it can't create a file.
+* No module outside `core/store/` (the catalog) and `core/export/` (not yet implemented) calls
+  a mutating filesystem function that the lint knows about.
+* On Linux and Windows CI, a fixture tree's bytes and metadata are unchanged after a full
+  cycle. Access times are also asserted on POSIX, where `O_NOATIME` is available.
+
+### Known limits
+
+These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
+
+* **The catalog location is not checked.** If you point `--catalog` at a folder inside a scan
+  root, scans will write the database there and catalogue it.
+* **The lint has blind spots.** It doesn't catch `subprocess`, `os.write`, `io.open`, numeric
+  `os.open` flags or Win32 mutators called through `ctypes`. The other layers don't cover
+  these either.
+* **Scope roots are paths, not volume identities.** Scan, hash and verify act on whatever
+  volume is currently mounted at the stored drive letter. Make sure the right drive is
+  attached before you run them.
+* **A directory that can't be listed is treated as gone.** So is an unplugged root. Its files
+  are tombstoned, never deleted, and come back on the next successful scan.
+* **Under-protected counts leave out files of unique size**, even though each of those has
+  exactly one copy.
+
+## Redundancy rules
+
+| Situation | Counted as |
+|---|---|
+| Same content on two different drives | 2 copies |
+| Same content twice on one drive | 1 copy (plus reclaimable space, reported as an observation) |
+| Hardlinks to one file | 1 physical copy |
+| Volume whose physical drive serial couldn't be read | its own drive (this can **overstate** copies; see the review) |
+| File not yet hashed | unknown, shown as "—" in the GUI |
+
+## Scale
+
+Measured at 3 million files: **222 bytes per file** (≈10.4 GB projected at 50M), 192k rows/s
+merge, 555 MB peak RSS. All of these are inside the [§13 budgets](docs/PLAN.md#13-performance-budgets).
+Reproduce with `python tools/benchmark.py`. A 50M-file run is still to do.
 
 ## Development
 
 ```bash
 pip install -e ".[dev,gui]"
 
-python tools/ro_lint.py        # the read-only guard; exits non-zero on any finding
-python -m pytest -q            # full suite
-python tools/benchmark.py      # catalog benchmark against the §13 budgets
-python -m drivefusion --help
+python tools/ro_lint.py         # read-only guard; non-zero exit on any finding
+python -m pytest -q             # full suite
+python tools/review_repro.py    # reproductions for docs/REVIEW.md findings
+python tools/benchmark.py       # catalog benchmark against the §13 budgets
 
 pyinstaller packaging/drivefusion.spec --noconfirm --clean
 ```
 
-The VHDX volume tests need Windows and administrator rights (they call `diskpart`) and skip
-everywhere else. The GUI tests run headless under `QT_QPA_PLATFORM=offscreen` on both
-platforms; CI installs Qt's runtime libraries and then asserts Qt can actually start, because a
-GUI suite that skips itself would otherwise turn a green run into a statement about nothing.
-
-CI runs the lint and tests on Windows and Linux, then builds and smoke-tests the Windows
-executables — a windowed `DriveFusion.exe` and a console `drivefusion.exe` from one build.
+* The VHDX volume tests need Windows and administrator rights (they call `diskpart`). They
+  run on the Windows CI runner and skip elsewhere.
+* The GUI tests run headless with `QT_QPA_PLATFORM=offscreen`. CI asserts that Qt can start,
+  so a skipped GUI suite can't pass as green.
+* CI runs the lint and tests on Windows and Linux, then builds and smoke-tests three Windows
+  executables: windowed `DriveFusion.exe`, console `drivefusion.exe`, and `dfscan-helper.exe`.
 
 ### The one rule
 
 Nothing outside `drivefusion/core/store/` and `drivefusion/core/export/` may reference a
 mutating filesystem call. `tools/ro_lint.py` enforces it, the test suite asserts it, and CI
 gates on it. If you find yourself needing to write to a catalogued volume, the answer is that
-the tool does not do that — it emits a plan describing what *you* might do.
+the tool doesn't do that. It emits a plan describing what *you* might do.
 
 ## Documentation
 
-[docs/PLAN.md](docs/PLAN.md) — the full build plan: read-only guarantees, scan scope, Windows
-enumeration strategy, data model and performance budgets at 50M files, durability scoring,
-FAIR/NDSA scorecards, the placement planner, and milestones M0–M8.
+| Document | Contents |
+|---|---|
+| [docs/PLAN.md](docs/PLAN.md) | The build plan: read-only design, scan scope, Windows enumeration, data model and budgets at 50M files, durability scoring, FAIR/NDSA, planner, milestones |
+| [docs/REVIEW.md](docs/REVIEW.md) | Safety, file-integrity and security review: user needs → requirements → specification traceability, findings with reproductions, recommended order of fixes |
