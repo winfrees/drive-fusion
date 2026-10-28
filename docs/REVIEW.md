@@ -80,7 +80,7 @@ findings.*
 | [F-02](#f-02) | **High** | File facts | A directory that cannot be listed, or a root whose drive is unplugged, gets its whole subtree tombstoned as "vanished" | R1, R2 | **Fixed** |
 | [F-03](#f-03) | **High** | Safety | The catalog database (plus `-wal`/`-shm`) can be created inside a scanned tree | R3 | **Fixed** for scope roots; export root waits for M8 |
 | [F-04](#f-04) | **High** | File facts | Files of unique size, which by definition have exactly one copy, are missing from the under-protected report | R4 | **Fixed** |
-| [F-05](#f-05) | Medium | File facts | Volumes whose drive serial can't be read each count as a separate drive, which can overstate copies | R6 | Open |
+| [F-05](#f-05) | Medium | File facts | Volumes whose drive serial can't be read each count as a separate drive, which can overstate copies | R6 | **Fixed** |
 | [F-06](#f-06) | Medium | File facts | `verify` reports an ordinary edit as a fixity mismatch, because it never compares size or mtime | R5 | Open |
 | [F-07](#f-07) | Medium | Security | The elevation launcher checks only the helper's filename and existence: no signature or hash check, and parameters are joined unquoted | code | Open |
 | [F-08](#f-08) | Medium | Safety | `ro_lint` misses `subprocess`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators via ctypes, `sqlite3.connect`, and `getattr` indirection | R8 | **Fixed** |
@@ -142,7 +142,7 @@ implemented as a library with no user-facing entry point.
 | SR-08 | UN-5 | Only explicitly added roots are scanned; nested roots refused; links not traversed; OS churn excluded. | `scope/registry.py` (`validate_new_root`, `ExclusionSet`); walker refuses to descend reparse points. | `test_scope.py`, `test_enum_batchwalk.py` | **Met** |
 | SR-09 | UN-2, UN-3 | A scan, hash or verify acts on the catalogued **volume identity**, never on whatever is now mounted at a drive letter. | Root still stored as a path, but `core/scope/binding.bind_roots` resolves the volume at each root (`discovery.identify_volume`) and refuses any root whose `volume_guid` differs or can't be identified. `cmd_scan`, `cmd_hash`, `cmd_verify`, the GUI `scan_body` and `request_hash` scan only bound roots, and `hash_pass`/`verify_pass` take `root_ids` so they read only files under them. Checked once at the start of each pass. | `test_scope.py`, `test_cli.py`, `test_identity.py`, `test_gui_shell.py` | **Met** ([F-01](#f-01)) |
 | SR-10 | UN-2, UN-9 | A path that was not examined is *unknown*, not *gone*. | Delta merges use `vanish_scope="staged-dirs"`. Full scans stage every directory they listed in `stage_dir` and merge with `vanish_scope="listed-dirs"`: only files missing from a listed directory, and child directories missing from a listing (with their subtrees), are tombstoned. If the root itself can't be listed, nothing is merged and the scan is recorded as failed. | Delta: `test_enum_delta.py`. Full scan: `test_scanner.py`, `test_cli.py`; R1, R2 | **Met** ([F-02](#f-02)) |
-| SR-11 | UN-3 | Copies are counted over distinct physical drives; hardlinks are one physical copy. | `DRIVE_KEY = COALESCE(v.drive_id, -v.id)`; physical copies = distinct `(volume, frn)`. | `test_analysis.py` | **Partial**: serial-less volumes overstate drives ([F-05](#f-05)) |
+| SR-11 | UN-3 | Copies are counted over distinct physical drives; hardlinks are one physical copy. | Drives are identified by serial or partition table (`drive.identity`). `DRIVES_PROVEN = MAX(COUNT(DISTINCT v.drive_id), 1)` for protection; `DRIVES_POSSIBLE = COUNT(DISTINCT COALESCE(v.drive_id, -v.id))` for reclamation; physical copies = distinct `(volume, frn)`. | `test_analysis.py`, `test_store.py`, `test_discovery_layout.py`; V&V R-RED-06 | **Met** ([F-05](#f-05)) |
 | SR-12 | UN-3, UN-9 | The under-protected report includes every item with fewer copies than the target. | `under_protected` adds every live, non-empty file whose size no other live file shares, as one copy on one drive (`single_copy_files`), without hashing it. `redundancy_summary` counts them in its totals and reports them as `single_copy_files`; `unhashed_files` now counts only files whose size is shared. | `test_analysis.py`, `test_cli.py`; R4 | **Met** ([F-04](#f-04)) |
 | SR-13 | UN-4 | Fixity separates corruption (bytes changed, metadata unchanged) from modification. | `verify_pass` re-hashes and compares digests only (`pipeline.py:197`). | `test_identity.py` | **Partial** ([F-06](#f-06)) |
 | SR-14 | UN-6 | The main application runs as invoker and never silently elevates. | `drivefusion.manifest`: `requestedExecutionLevel="asInvoker"` for all three executables. | CI build smoke test | **Met** |
@@ -164,8 +164,8 @@ implemented as a library with no user-facing entry point.
 ```mermaid
 pie showData
     title Requirement status (28 requirements)
-    "Met" : 14
-    "Partial" : 8
+    "Met" : 15
+    "Partial" : 7
     "Not met" : 1
     "Unwired" : 2
     "Planned" : 3
@@ -380,6 +380,28 @@ one. That direction is safe but still wrong.
 together with disk signature or GUID (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`), at discovery time.
 Report "drive identity unverified" next to any copy count that depends on such a volume, and
 leave those volumes out of the "distinct drives" total until a user confirms them.
+
+**Status: fixed (2026-10-28, ROADMAP A1).** Three parts:
+
+1. **Identify more drives.** Discovery reads the disk's partition table
+   (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`, allowed on a zero-access handle) and records its MBR
+   signature or GPT disk GUID as `drive.layout_id` (schema v5, with `drive.identity` =
+   `serial`, `disk-layout` or `user`). A serial-less disk is then one drive across its
+   partitions and reconnections, and gains its serial if a dock later reports one.
+2. **Count safely what still isn't identified.** A volume with no drive adds no *proven*
+   copy (`DRIVES_PROVEN`), so the under-protected list errs towards listing; for reclamation
+   it counts as its own drive (`DRIVES_POSSIBLE`), so a possibly separate copy is never called
+   waste. Where the two differ the group is `identity_uncertain`, the CLI report says "up to
+   N", the summary counts `unverified_drive_items`, and the browser shows "1?".
+3. **Let the user settle it.** `drivefusion drives list | confirm VOLUME | assign VOLUME
+   DRIVE` and two buttons on the Drives screen. A drive identified by serial or partition
+   table can't be overruled by hand. (Recording these decisions in the audit log waits for
+   ROADMAP A4.)
+
+The bridge-serial case in the failure scenario (different disks behind one bridge serial)
+is not addressed; it errs safe. Tests: `test_discovery_layout.py`, `test_store.py`,
+`test_analysis.py`, `test_cli.py`, `test_gui_shell.py`, `test_gui_models.py`; V&V R-RED-06,
+which fails against the previous code. R6 now prints `NOT FOUND`.
 
 <a id="f-06"></a>
 ### F-06 · Medium · `verify` reports legitimate edits as fixity mismatches
@@ -677,6 +699,6 @@ python tools/review_repro.py     # prints R1–R12 with FOUND / NOT FOUND
 The script runs in temporary directories only. As each defect is fixed, its line should flip
 to `NOT FOUND`; at that point the corresponding check belongs in the regular test suite.
 R1–R4 print `NOT FOUND` as of 2026-10-28, and their checks are in `tests/`. R3 now expects
-`add_scope_root` to refuse the root and reports that refusal. After Track A item A2, R8 (every
-probe), R9, R10 and R13 also print `NOT FOUND` or `caught`. R5, R6, R7, R11 and R12 remain
-`FOUND` and are scheduled in ROADMAP Track A (A1, A3).
+`add_scope_root` to refuse the root and reports that refusal. After Track A items A2 and A1, R6,
+R8 (every probe), R9, R10 and R13 also print `NOT FOUND` or `caught`. R5, R7, R11 and R12
+remain `FOUND` and are scheduled in ROADMAP Track A (A3).

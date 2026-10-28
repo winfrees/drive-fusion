@@ -113,7 +113,19 @@ def _identify(files: dict, previously_identified: set[Key] | None) -> set[Key]:
     return out
 
 
+def _drive_identity(manifest: dict) -> tuple[dict[str, str], set[str]]:
+    """Each drive's physical device, and the drives nothing identifies.
+
+    Manifests from before R-RED-06 carry neither field: every drive is then its
+    own, identified device.
+    """
+    device = {d["id"]: d.get("device", d["id"]) for d in manifest["drives"]}
+    unknown = {d["id"] for d in manifest["drives"] if d.get("identity") == "none"}
+    return device, unknown
+
+
 def _analyse(manifest: dict, files: dict, identified: set[Key], min_copies: int) -> dict:
+    device, unknown = _drive_identity(manifest)
     members: dict[str, list[Key]] = defaultdict(list)
     for key in identified:
         members[files[key]["content"]].append(key)
@@ -121,14 +133,24 @@ def _analyse(manifest: dict, files: dict, identified: set[Key], min_copies: int)
     groups = {}
     for content, keys in members.items():
         size = files[keys[0]]["size"]
-        drives = {k[0] for k in keys}
+        # §8.1 and REVIEW F-05: copies are proven only on identified devices
+        # (a live file is on one device at least); for reclamation, an
+        # unidentified drive may be a device of its own.
+        proven = max(1, len({device[k[0]] for k in keys if k[0] not in unknown}))
+        possible = len({device[k[0]] if k[0] not in unknown else ("unknown", k[0])
+                        for k in keys})
         physical = {(k[0], files[k]["link_group"] or k[1]) for k in keys}
+        holders = [k[0] for k in keys]
         groups[content] = {
             "size": size,
             "paths": sorted(keys),
-            "drives": len(drives),
+            "drives": proven,
+            "drives_possible": possible,
             "physical": len(physical),
-            "reclaimable": max(0, len(physical) - len(drives)) * size,
+            "reclaimable": max(0, len(physical) - possible) * size,
+            # Where counting volumes rather than identified devices goes wrong.
+            "identity_case": (len({device[d] for d in holders}) < len(set(holders))
+                              or any(d in unknown for d in holders)),
         }
 
     # REVIEW.md SR-12 (F-04): a live, non-empty file whose size no other live
@@ -140,7 +162,7 @@ def _analyse(manifest: dict, files: dict, identified: set[Key], min_copies: int)
 
     under = {c for c, g in groups.items() if g["drives"] < min_copies}
     under_singles = singles if min_copies > 1 else {}
-    reclaim = {c: g["reclaimable"] for c, g in groups.items() if g["physical"] > g["drives"]}
+    reclaim = {c: g["reclaimable"] for c, g in groups.items() if g["reclaimable"] > 0}
     single_bytes = sum(singles.values())
     path_bytes = sum(files[k]["size"] for k in identified) + single_bytes
     unique_bytes = sum(g["size"] for g in groups.values()) + single_bytes

@@ -158,19 +158,7 @@ class ScopeScreen(QWidget):
             QMessageBox.warning(self, "Cannot add this folder", str(exc))
             return False
 
-        drive_id = None
-        if volume.drive and volume.drive.serial:
-            drive_id = catalog.upsert_drive(
-                serial=volume.drive.serial,
-                model=volume.drive.model,
-                manufacturer=volume.drive.manufacturer,
-                bus=volume.drive.bus,
-                media=volume.drive.media,
-            )
-        fields = volume.as_volume_fields()
-        if drive_id is not None:
-            fields["drive_id"] = drive_id
-        volume_id = catalog.upsert_volume(volume_guid=volume.volume_guid, **fields)
+        volume_id = catalog.record_discovered_volume(volume)
         catalog.add_scope_root(volume_id, root_path)
 
         self.refresh()

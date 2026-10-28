@@ -234,6 +234,50 @@ def test_oracle_counts_drives_not_paths_and_links_once() -> None:
     assert base["summary"]["unhashed_files"] == 2
 
 
+def test_oracle_counts_devices_and_proves_only_identified_ones() -> None:
+    """R-RED-06 by hand: D1 and D2 are partitions of one device; D3 is identified
+    by nothing; D4 is an ordinary drive."""
+    def f(drive, path, content):
+        return {"drive": drive, "path": path, "content": content, "mtime_ns": 0,
+                "scenario": "S1"}
+
+    manifest = {
+        "contents": {"p": {"size": 100}, "v": {"size": 200}, "w": {"size": 300}},
+        "files": [f("D1", "p", "p"), f("D2", "p", "p"),        # both partitions
+                  f("D3", "v", "v"), f("D4", "v", "v"),        # unknown + known
+                  f("D3", "w1", "w"), f("D3", "w2", "w")],     # twice on the unknown
+        "dirs": [],
+        "drives": [{"id": "D1", "device": "X"}, {"id": "D2", "device": "X"},
+                   {"id": "D3", "identity": "none"}, {"id": "D4"}],
+        "excluded": {"roots": [], "dirs": [], "files": []},
+        "links": [], "mutations": [], "corruptions": [],
+    }
+    base = oracle.expectations(manifest)["baseline"]
+    p, v, w = (base["groups"][k] for k in "pvw")
+    assert (p["drives"], p["drives_possible"], p["reclaimable"]) == (1, 1, 100), \
+        "two partitions are one copy, and the second is same-drive waste"
+    assert (v["drives"], v["drives_possible"], v["reclaimable"]) == (1, 2, 0), \
+        "the unknown drive adds no proven copy, and no waste"
+    assert (w["drives"], w["reclaimable"]) == (1, 300), "two paths on one volume: waste"
+    assert base["under_protected"] == {"p", "v", "w"}
+    assert all(g["identity_case"] for g in (p, v, w))
+
+
+def test_simulated_devices_include_partitions_and_an_unidentified_drive() -> None:
+    from vv.generator import assign_devices
+
+    for count, partitions, unknown in ((2, 0, 0), (3, 1, 0), (4, 1, 1), (10, 1, 1)):
+        drives = [{"id": f"D{i:02d}", "serial": f"S{i}", "manufacturer": "M", "model": "m",
+                   "media": "hdd"} for i in range(1, count + 1)]
+        assign_devices(drives, seed=1234)
+        devices = [d["device"] for d in drives]
+        assert len(devices) - len(set(devices)) == partitions, count
+        assert sum(d["identity"] == "none" for d in drives) == unknown, count
+        shared = [d for d in drives if devices.count(d["device"]) > 1]
+        assert len({d["serial"] for d in shared}) <= 1, "partitions share their disk's serial"
+        assert not any(d["identity"] == "none" for d in shared), "kept apart, one trouble each"
+
+
 def test_oracle_treats_a_recreated_folder_as_live() -> None:
     """A folder deleted between scans and then recreated exists at the rescan."""
     manifest = {

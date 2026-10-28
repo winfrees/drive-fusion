@@ -54,10 +54,10 @@ two versions are measured against **the same** data (§6).
 | | Simulated (default) | Physical (`--drive-path`, once per drive) |
 |---|---|---|
 | Where the drives are | `<out>/drives/D01 … Dnn` on one disk | One empty folder per real device |
-| How Drive Fusion sees them | Each folder is registered as its own volume on its own drive, with a mock maker, model and serial. The product's own redundancy tests stand in for many drives the same way | Drive Fusion's real discovery identifies each one, exactly as `drivefusion scope add` does |
+| How Drive Fusion sees them | Each folder is registered as its own volume, with a mock maker, model and serial. With 3+ drives, two of them are registered as partitions of one device (one serial); with 4+, one other sits behind a bridge that reports no identity at all (R-RED-06). The choice comes from its own random stream, so the rest of a seed's dataset is unchanged | Drive Fusion's real discovery identifies each one, exactly as `drivefusion scope add` does |
 | Filesystems | Labelled NTFS or exFAT, ~50/50, as §1 specifies. exFAT-labelled drives get no hardlinks or symlinks, as on real exFAT | Whatever the device really is: NTFS, exFAT, FAT32, ext4… |
 | Size | Unlimited by default, or set with `--drive-size` (§2.1). Registered as the drive's capacity | What Windows reports for the volume |
-| Guard | — | **Refused** at `generate` and again at `run` if two roots resolve to the same physical device. Two folders on one thumb drive are one copy, so Drive Fusion would be right to count one, and every cross-drive expectation would be wrong |
+| Guard | — | **Refused** at `run` if Drive Fusion can't identify a device (no serial, no partition table): the bench couldn't know its true copy counts. **Refused** at `generate` and again at `run` if two roots resolve to the same physical device. Two folders on one thumb drive are one copy, so Drive Fusion would be right to count one, and every cross-drive expectation would be wrong |
 
 ### 2.1 Drive sizes and disk space
 
@@ -137,7 +137,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-CAT-04 | §6.7 | Names stored as observed: Unicode, spaces, dots, no extension, leading dot, punctuation, long names, case variants |
 | R-CAT-05 | §6.7 | Paths over 260 characters are catalogued |
 | R-CAT-06 | §6.7 | Unreadable files are recorded, not fatal, and get no unestablished identity |
-| R-CAT-07 | §2, §5, §8.1 | Each drive is a distinct device in the catalog |
+| R-CAT-07 | §2, §5, §8.1 | Each physical device is a distinct device in the catalog, and the volumes of one device are that one device |
 | R-ID-01 | §6.6, §10.4 | Byte-identical files share one identity regardless of name, case, folder, drive or mtime |
 | R-ID-02 | §6.6 | Different bytes never share an identity, including same name, same size, and differences outside the quick-hash samples (tier 2) |
 | R-ID-03 | §6.6, §8.1 | Only shared-size files (or unchanged previously identified ones) are hashed; shared-size files not yet identified are reported as unhashed |
@@ -146,6 +146,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-RED-03 | §8.1, REVIEW SR-12 | The under-protected set is exactly the content on fewer drives than the policy minimum, including every non-empty unique-size file as a known single copy |
 | R-RED-04 | §8.1, §3.3 | Reclamation is exactly same-drive duplication; reclaimable = (physical − drives) × size |
 | R-RED-05 | §8.1, §11, REVIEW SR-12 | Headline numbers agree with the ground truth, single-copy files included |
+| R-RED-06 | §8.1, REVIEW F-05 | Two volumes on one device are one copy; a volume whose drive nothing identifies adds no proven copy and is never counted as same-drive waste |
 | R-INC-01 | §6.3, §6.4 | A rescan reflects additions and modifications; a modified file loses its old identity |
 | R-INC-02 | §7.1 (FAIR A2) | Vanished files and folders are tombstoned with metadata kept, not removed |
 | R-INC-03 | §6.4 | Moved/renamed content is recognized as the same content at a new path |
@@ -190,6 +191,8 @@ support. `tests/test_vv.py` asserts that.
 | cross-drive-copy | One content on 2…N drives; half mirrored at the same path, half scattered with different names and mtimes | R-ID-01, R-RED-01 |
 | all-drives-copy | One content on every drive | R-ID-01, R-RED-01, R-RED-03 |
 | same-drive-dupes | 2–4 copies on one drive only: many paths, one copy, under-protected | R-RED-01, R-RED-04 |
+| partition-copy | Content on the two partitions of one simulated device and nowhere else: one copy, and the second is same-drive waste | R-RED-06 |
+| unverified-copy | Content on an identified drive and on the drive nothing identifies: one proven copy, and no waste | R-RED-06 |
 | mixed-dupes | 2 copies on drive A + 1 on drive B | R-RED-01, R-RED-04 |
 | renamed-copy | Same bytes, different name *and* extension (`.jpg` → `.jpeg`, `.csv` → `.txt`) | R-ID-01 |
 | case-variant | `Report_1234.PDF` vs `report_1234.pdf` | R-ID-01, R-CAT-04 |
@@ -251,7 +254,8 @@ product's own no-touch test covers those.
 **The oracle** ([`vv/oracle.py`](../vv/oracle.py)) imports nothing from `drivefusion`.
 It derives expectations from the ground truth and from PLAN's rules: identity by true
 bytes, coverage by shared size (§6.6), tier 0 carrying identity across an unchanged
-rescan, copies over distinct drives, hardlinks once (§8.1). An oracle built from the
+rescan, copies over distinct physical devices with only identified ones proven, hardlinks
+once (§8.1). An oracle built from the
 tool's code would agree with the tool's bugs.
 
 | Test | Phases | Requirements | Passes when |
@@ -266,7 +270,7 @@ tool's code would agree with the tool's bugs.
 | VV-CAT-04 | baseline | R-CAT-04 | Every odd-name and case-variant file is present under its exact name |
 | VV-CAT-05 | baseline | R-CAT-05 | Every file beyond 260 characters is present |
 | VV-CAT-06 | baseline | R-CAT-06 | Unreadable files are present and carry no identity |
-| VV-CAT-07 | baseline | R-CAT-07 | Every drive is registered, each on a different device |
+| VV-CAT-07 | baseline | R-CAT-07 | Every drive is registered; drives on different true devices resolve to different devices, and the partitions of one device to one |
 | VV-ID-01 | baseline, rescan | R-ID-01 | Every set of identical files carries exactly one identity |
 | VV-ID-02 | baseline, rescan | R-ID-02 | No identity covers two different true contents |
 | VV-ID-03 | baseline, rescan | R-ID-03 | The set of identified files equals the spec's coverage set exactly |
@@ -275,6 +279,7 @@ tool's code would agree with the tool's bugs.
 | VV-RED-03 | baseline, rescan | R-RED-03 | The under-protected list equals the expected list, compared as path sets; single-copy files are matched by their one path |
 | VV-RED-04 | baseline, rescan | R-RED-04 | The reclamation list and each reclaimable byte count are exact |
 | VV-RED-05 | baseline, rescan | R-RED-05 | Every headline number in `redundancy_summary` is exact, including `single_copy_files` |
+| VV-RED-06 | baseline, rescan | R-RED-06 | For every content on a shared device or an unidentified drive: proven and possible drive counts are exact, and it is reported as same-drive waste exactly when it is. N/A with fewer than three drives |
 | VV-INC-01 | rescan | R-INC-01, R-CAT-01 | The rescan file set and sizes are exact; no edited file keeps its old identity |
 | VV-INC-02 | rescan | R-INC-02 | Every deleted file is tombstoned, none removed, none tombstoned wrongly |
 | VV-INC-03 | rescan | R-INC-03 | A moved file's old path is tombstoned and its new path shares the identity of the content's other copies |

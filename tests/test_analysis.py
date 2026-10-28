@@ -119,10 +119,9 @@ def test_hardlinks_are_not_a_second_copy(catalog: Catalog, tmp_path: Path) -> No
     assert group.reclaimable_bytes == 0, "removing a hardlink frees nothing"
 
 
-def test_volume_without_a_known_drive_counts_as_its_own(
-    catalog: Catalog, tmp_path: Path
-) -> None:
-    """An unmapped disk must never be silently merged with another."""
+def _unverified_pair(catalog: Catalog, tmp_path: Path) -> tuple[int, int]:
+    """The same content on two volumes whose drives are unknown: two partitions
+    of one serial-less disk, or two disks; nothing says which."""
     first = tmp_path / "u1"
     second = tmp_path / "u2"
     first.mkdir()
@@ -131,11 +130,76 @@ def test_volume_without_a_known_drive_counts_as_its_own(
     (second / "s.bin").write_bytes(PAYLOAD)
 
     # Neither volume has a drive_id.
-    scan_into(catalog, catalog.upsert_volume(volume_guid="vol:x"), first)
-    scan_into(catalog, catalog.upsert_volume(volume_guid="vol:y"), second)
+    x = catalog.upsert_volume(volume_guid="vol:x")
+    y = catalog.upsert_volume(volume_guid="vol:y")
+    scan_into(catalog, x, first)
+    scan_into(catalog, y, second)
+    hash_pass(catalog)
+    return x, y
+
+
+def test_unverified_volumes_add_no_proven_copy(catalog: Catalog, tmp_path: Path) -> None:
+    """REVIEW F-05: two partitions of one serial-less disk are not two copies.
+
+    The safe answer is one proven copy, flagged as uncertain, so the content is
+    listed as under-protected until the user says otherwise.
+    """
+    _unverified_pair(catalog, tmp_path)
+    group = duplicate_groups(catalog)[0]
+    assert (group.drives, group.drives_possible) == (1, 2)
+    assert group.identity_uncertain
+
+    exposed = under_protected(catalog, min_copies=2)
+    assert [g.content_id for g in exposed] == [group.content_id]
+    summary = redundancy_summary(catalog, min_copies=2)
+    assert summary["unverified_drive_items"] == 1
+
+
+def test_unverified_volumes_are_never_offered_as_same_drive_waste(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """The other direction: they might be two disks, so neither copy is waste."""
+    _unverified_pair(catalog, tmp_path)
+    assert reclamation_candidates(catalog) == []
+    assert redundancy_summary(catalog)["reclaimable_bytes"] == 0
+
+
+def test_confirming_the_drives_settles_the_count(catalog: Catalog, tmp_path: Path) -> None:
+    x, y = _unverified_pair(catalog, tmp_path)
+
+    # Two separate disks: two proven copies.
+    catalog.confirm_volume_drive(x)
+    catalog.confirm_volume_drive(y)
+    group = duplicate_groups(catalog)[0]
+    assert (group.drives, group.identity_uncertain) == (2, False)
+    assert under_protected(catalog, min_copies=2) == []
+
+
+def test_assigning_both_volumes_to_one_drive_makes_it_waste(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    x, y = _unverified_pair(catalog, tmp_path)
+    drive = catalog.confirm_volume_drive(x)
+    catalog.assign_volume_drive(y, drive)       # two partitions of one disk
+    [group] = reclamation_candidates(catalog)
+    assert (group.drives, group.reclaimable_bytes) == (1, len(PAYLOAD))
+
+
+def test_a_copy_on_an_unverified_volume_adds_nothing_to_a_known_drive(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    known, unknown = tmp_path / "known", tmp_path / "unknown"
+    known.mkdir()
+    unknown.mkdir()
+    (known / "s.bin").write_bytes(PAYLOAD)
+    (unknown / "s.bin").write_bytes(PAYLOAD)
+    scan_into(catalog, add_drive_volume(catalog, "SERIAL-K", "vol:k"), known)
+    scan_into(catalog, catalog.upsert_volume(volume_guid="vol:u"), unknown)
     hash_pass(catalog)
 
-    assert duplicate_groups(catalog)[0].drives == 2
+    group = duplicate_groups(catalog)[0]
+    assert (group.drives, group.drives_possible) == (1, 2)
+    assert under_protected(catalog, min_copies=2)
 
 
 # -- the reports --------------------------------------------------------------

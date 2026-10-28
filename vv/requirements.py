@@ -56,8 +56,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Unreadable files are recorded rather than fatal, and are never given a "
                 "content identity that was not established by reading them."),
     Requirement("R-CAT-07", "§2, §5, §8.1",
-                "Each drive is catalogued as a distinct device, so copy counts can be "
-                "taken over physical drives."),
+                "Each physical device is catalogued as a distinct device, and the "
+                "volumes of one device as that one device, so copy counts can be taken "
+                "over physical drives."),
     Requirement("R-ID-01", "§6.6, §10.4",
                 "Byte-identical files share one content identity regardless of name, "
                 "extension, case, directory, drive, or modification time."),
@@ -82,6 +83,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Reclamation candidates are exactly the content duplicated within a single "
                 "drive, with reclaimable bytes = (physical copies - drives) x size; "
                 "cross-drive copies are never counted as waste."),
+    Requirement("R-RED-06", "§8.1, REVIEW F-05",
+                "Two volumes on one physical device are one copy. A volume whose drive "
+                "nothing identifies (no serial, no partition-table identity) adds no "
+                "proven copy, and a copy on it is never counted as same-drive waste."),
     Requirement("R-RED-05", "§8.1, §11, REVIEW SR-12",
                 "Headline numbers (distinct content, catalogued paths, bytes, duplicate "
                 "weight, under-protected items and bytes, same-drive waste, single-copy "

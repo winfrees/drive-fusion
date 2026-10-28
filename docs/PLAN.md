@@ -230,7 +230,7 @@ drivefusion/
 │   ├── curate/ fair/     ○ collections, vocabularies, scorecards (M6)
 │   └── policy/ planner/  ○ preservation rules, placement solver (M7)
 ├── standards/            ○ versioned rubric files (M6)
-├── cli/                  ✓ scope|scan|find|hash|report|verify|status|volumes|gui
+├── cli/                  ✓ scope|scan|find|hash|report|verify|status|drives|volumes|gui
 ├── gui/                  ✓ PySide6 screens, per-thread catalog, workers; elevation.py ◐
 └── packaging/            ✓ PyInstaller spec (three executables), manifest
 ```
@@ -691,8 +691,17 @@ FTS5 over 50M full paths would add several GB and a long build. Instead:
 ### 8.1 Redundancy and duplication
 
 - **`copies(content)`** — distinct *drives* holding it; not paths, not hardlinks.
-  **As built:** a volume whose drive serial couldn't be read counts as its own drive, which
-  overstates copies when two such volumes share one disk (REVIEW F-05).
+  **As built (REVIEW F-05, fixed):** a drive is identified by its serial, or failing that by
+  its partition table (MBR signature or GPT disk GUID, `drive.identity`, schema v5), so a
+  serial-less disk is still one drive across its partitions and its reconnections. A volume
+  that nothing identifies gets two counts, each used where it errs safely: for protection
+  (copies, the under-protected list, repair sources) it adds no drive that isn't proven, so
+  at most one copy; for reclamation it counts as a drive of its own, so a copy that may be
+  on another disk is never offered as waste. Reports and the browser mark such counts
+  *unverified* ("1?"), and `drivefusion drives confirm|assign` or the Drives screen record
+  which drive it is on. A drive identified by hardware can't be overruled by hand. Cloned
+  disks without serials share a partition-table identity and are counted as one drive,
+  which errs safe.
 - **Under-protected set** — `copies < policy.min_copies`, ranked by `size × P(loss)`. The queue
   that actually matters, and the first screen you should look at. **As built:** ranked by
   size. A file whose size no other live file shares is counted as one copy on one drive and
@@ -1042,7 +1051,7 @@ Unit and fixture tests ask whether each part behaves as its author meant. V&V as
 tool as a whole gives a *user* true answers on drives that look like theirs. Full procedure:
 **[VV.md](VV.md)**.
 
-- **Requirements:** 26 testable requirements (`R-RO`, `R-SC`, `R-CAT`, `R-ID`, `R-RED`,
+- **Requirements:** 27 testable requirements (`R-RO`, `R-SC`, `R-CAT`, `R-ID`, `R-RED`,
   `R-INC`, `R-FIX`, `R-VER`), each traced to the section of this plan it restates.
 - **Datasets:** `python -m vv generate` builds a fresh, randomized dataset across a chosen
   number of drives: **simulated** (folders registered as separate drives) or **physical** (one

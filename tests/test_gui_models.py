@@ -267,6 +267,37 @@ def test_copies_column_counts_drives_after_hashing(
     assert model.data(model.index(0, COPIES), Qt.DisplayRole) == "2"
 
 
+def test_a_copy_on_an_unverified_drive_is_shown_as_uncertain(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """REVIEW F-05: "1?" and a tooltip, not a confident "2" or a silent "1"."""
+    from PySide6.QtCore import Qt
+
+    from drivefusion.gui.models import FileTableModel
+    from drivefusion.gui.models.filetable import COPIES
+
+    payload = b"one known drive, one unknown" * 4
+    known, unknown = tmp_path / "k", tmp_path / "u"
+    known.mkdir()
+    unknown.mkdir()
+    (known / "x.bin").write_bytes(payload)
+    (unknown / "x.bin").write_bytes(payload)
+    drive_id = catalog.upsert_drive(serial="SER-K")
+    build(catalog, known, volume_id=catalog.upsert_volume(volume_guid="vol:k", drive_id=drive_id))
+    build(catalog, unknown, volume_id=catalog.upsert_volume(volume_guid="vol:u"))
+    hash_pass(catalog)
+
+    dir_id = int(
+        catalog.conn.execute(
+            "SELECT dir_id FROM file WHERE name = 'x.bin' LIMIT 1"
+        ).fetchone()["dir_id"]
+    )
+    model = FileTableModel.over(catalog)
+    model.set_directory(dir_id)
+    assert model.data(model.index(0, COPIES), Qt.DisplayRole) == "1?"
+    assert "unverified" in model.data(model.index(0, COPIES), Qt.ToolTipRole)
+
+
 def test_two_paths_on_one_drive_count_as_one_copy_in_the_browser(
     catalog: Catalog, tmp_path: Path
 ) -> None:

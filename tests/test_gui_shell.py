@@ -319,7 +319,52 @@ def test_drives_screen_lists_the_scanned_volume(window) -> None:
     assert window.drives.tree.topLevelItemCount() == 1
     item = window.drives.tree.topLevelItem(0)
     assert item.text(0) == "(drive not identified)"
-    assert "no identified physical drive" in window.drives.note.text()
+    assert item.text(1) == "unverified"
+    assert "unverified drive" in window.drives.note.text()
+
+
+def test_an_unverified_drive_can_be_confirmed_from_the_drives_screen(window) -> None:
+    """REVIEW F-05: the user settles what the hardware couldn't."""
+    screen = window.drives
+    assert not screen.own_drive_button.isEnabled(), "nothing selected yet"
+    screen.tree.setCurrentItem(screen.tree.topLevelItem(0))
+    assert screen.own_drive_button.isEnabled() and screen.on_drive_button.isEnabled()
+
+    changed = []
+    screen.catalogChanged.connect(lambda: changed.append(True))
+    screen.confirm_own_drive()
+
+    item = screen.tree.topLevelItem(0)
+    assert item.text(1) == "confirmed by you"
+    assert window.session.catalog().unverified_volumes() == []
+    assert changed, "the dashboard must hear that copy counts changed"
+    screen.tree.setCurrentItem(item)
+    assert not screen.own_drive_button.isEnabled(), "a confirmed drive is settled"
+
+
+def test_a_volume_can_be_put_on_a_known_drive(window) -> None:
+    catalog = window.session.catalog()
+    drive = catalog.upsert_drive(serial="KNOWN-1", model="Archive 4TB")
+    volume = catalog.unverified_volumes()[0]["id"]
+    window.drives.assign_to_drive(volume, drive)
+    assert window.drives.tree.topLevelItem(0).text(1) == "serial number"
+    assert window.drives._known_drives()[f"drive {drive} Archive 4TB"] == drive
+
+
+def test_a_drive_identified_by_hardware_cannot_be_reassigned(window, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    catalog = window.session.catalog()
+    volume = catalog.unverified_volumes()[0]["id"]
+    real = catalog.upsert_drive(serial="REAL-1")
+    catalog.assign_volume_drive(volume, real)      # stands in for discovery
+    catalog.conn.execute("UPDATE drive SET identity = 'serial' WHERE id = ?", (real,))
+    other = catalog.upsert_drive(serial="OTHER-2")
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    window.drives.assign_to_drive(volume, other)
+    assert warnings and "can't be overruled" in warnings[0]
 
 
 # -- elevation ----------------------------------------------------------------

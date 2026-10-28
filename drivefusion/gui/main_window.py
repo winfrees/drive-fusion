@@ -116,6 +116,7 @@ class MainWindow(QMainWindow):
 
         self.scope.scanRequested.connect(lambda body: self.run_task(body, "Scanning"))
         self.scope.catalogChanged.connect(self.refresh_all)
+        self.drives.catalogChanged.connect(self.refresh_all)
         self.dashboard.hashRequested.connect(lambda body: self.run_task(body, "Hashing"))
         self.cancel_button.clicked.connect(self._cancel_current)
         self._current_task = None

@@ -144,6 +144,8 @@ def _plan(args, seed, rng, mode, roots, sizes, out) -> dict:
             drive["capacity_bytes"] = sizes[drive_id]
             drive["cluster_bytes"] = generator.default_cluster_bytes(fs, sizes[drive_id])
         drives.append(drive)
+    if mode == "simulated":
+        generator.assign_devices(drives, seed)
 
     params = {"files_per_drive": args.files_per_drive, "large_files": args.large_files,
               "drive_sizes": {d: s for d, s in sizes.items() if s}}

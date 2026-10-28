@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -43,10 +43,14 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at  TEXT    NOT NULL
 );
 
--- A physical device. Identity is the serial, never a drive letter.
+-- A physical device. Identity is the serial, never a drive letter. A disk with
+-- no serial is identified by its partition table (layout_id), or, failing
+-- both, by the user confirming it; `identity` records which (REVIEW F-05).
 CREATE TABLE IF NOT EXISTS drive (
     id                  INTEGER PRIMARY KEY,
     serial              TEXT UNIQUE,
+    layout_id           TEXT,
+    identity            TEXT NOT NULL DEFAULT 'serial', -- serial|disk-layout|user
     model               TEXT,
     manufacturer        TEXT,
     bus                 TEXT,
@@ -137,6 +141,8 @@ CREATE TABLE IF NOT EXISTS dir (
     vanished_at     TEXT,
     UNIQUE(volume_id, parent_id, name)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_drive_layout ON drive(layout_id)
+    WHERE layout_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_dir_root ON dir(root_id);
 CREATE INDEX IF NOT EXISTS ix_dir_parent ON dir(parent_id);
 -- Resolves a change-journal parent reference to a catalogued directory.
@@ -266,6 +272,11 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # with IF NOT EXISTS on the upgrade pass; no ALTER is needed.
     3: (),
     4: (),
+    # Every drive before v5 was created from a serial.
+    5: (
+        "ALTER TABLE drive ADD COLUMN layout_id TEXT",
+        "ALTER TABLE drive ADD COLUMN identity TEXT NOT NULL DEFAULT 'serial'",
+    ),
 }
 
 
@@ -345,6 +356,22 @@ def backup_catalog(conn: sqlite3.Connection, path: Path) -> Path | None:
     return target
 
 
+def _apply_migration(conn: sqlite3.Connection, statement: str) -> None:
+    """Run one migration step, skipping an ADD COLUMN that has nothing to do.
+
+    The table may not exist yet (the DDL that follows creates it, column
+    included), or may already have the column (a step half-applied before a
+    crash). Either way, adding it again would fail the whole upgrade.
+    """
+    words = statement.split()
+    if words[:2] == ["ALTER", "TABLE"] and words[3:5] == ["ADD", "COLUMN"]:
+        table, column = words[2], words[5]
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not columns or column in columns:
+            return
+    conn.execute(statement)
+
+
 def migrate(conn: sqlite3.Connection, path: Path | None = None) -> int:
     """Bring the catalog to SCHEMA_VERSION, backing it up first if it exists."""
     version = current_version(conn)
@@ -363,7 +390,7 @@ def migrate(conn: sqlite3.Connection, path: Path | None = None) -> int:
     if version > 0:
         for target in range(version + 1, SCHEMA_VERSION + 1):
             for statement in MIGRATIONS.get(target, ()):
-                conn.execute(statement)
+                _apply_migration(conn, statement)
 
     # executescript() issues an implicit COMMIT before running, so the DDL
     # cannot be wrapped in an explicit transaction here. Every statement is

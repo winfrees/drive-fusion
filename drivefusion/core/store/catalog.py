@@ -193,10 +193,33 @@ class Catalog:
 
     # -- drives and volumes ------------------------------------------------
 
-    def upsert_drive(self, *, serial: str, **fields) -> int:
-        row = self.conn.execute(
-            "SELECT id FROM drive WHERE serial = ?", (serial,)
-        ).fetchone()
+    def upsert_drive(
+        self, *, serial: str | None = None, layout_id: str | None = None, **fields
+    ) -> int:
+        """Record a physical drive, found by its serial or, failing that, its
+        partition-table identity (docs/REVIEW.md F-05).
+
+        A disk first seen without a serial (through a USB bridge that hides
+        it) and later with one (in a dock that doesn't) is matched by layout
+        and gains the serial, rather than becoming a second drive.
+        """
+        if not serial and not layout_id:
+            raise ValueError("a drive needs a serial or a layout_id to be identified")
+        row = None
+        if serial:
+            row = self.conn.execute(
+                "SELECT id FROM drive WHERE serial = ?", (serial,)
+            ).fetchone()
+        if row is None and layout_id:
+            row = self.conn.execute(
+                "SELECT id FROM drive WHERE layout_id = ? "
+                "AND (serial IS NULL OR serial = ?)",
+                (layout_id, serial or ""),
+            ).fetchone()
+            if row is not None and serial:
+                fields = {**fields, "serial": serial, "identity": "serial"}
+        if layout_id and self._layout_free(layout_id, row["id"] if row else None):
+            fields = {**fields, "layout_id": layout_id}
         now = utcnow()
         if row:
             if fields:
@@ -211,6 +234,7 @@ class Catalog:
                 )
             return int(row["id"])
 
+        fields = {"identity": "serial" if serial else "disk-layout", **fields}
         columns = ["serial", "first_seen_at", "last_seen_at", *fields]
         values = [serial, now, now, *fields.values()]
         placeholders = ", ".join("?" for _ in columns)
@@ -218,6 +242,95 @@ class Catalog:
             f"INSERT INTO drive ({', '.join(columns)}) VALUES ({placeholders})", values
         )
         return int(cursor.lastrowid)
+
+    def _layout_free(self, layout_id: str, drive_id: int | None) -> bool:
+        """Whether ``layout_id`` can be recorded on ``drive_id``.
+
+        Two serial-bearing drives can share a layout (a disk cloned sector by
+        sector), and the first keeps it; the serials still tell them apart.
+        """
+        holder = self.conn.execute(
+            "SELECT id FROM drive WHERE layout_id = ?", (layout_id,)
+        ).fetchone()
+        return holder is None or holder["id"] == drive_id
+
+    def record_discovered_volume(self, volume) -> int:
+        """Record a volume found by discovery, and its drive if it has one.
+
+        ``volume`` is a ``discovery.VolumeInfo``. A volume whose disk reports
+        neither a serial nor a partition-table identity gets no drive: its
+        drive is *unverified*, and copies on it don't count as proven until
+        the user confirms which drive it is on (``confirm_volume_drive``,
+        ``assign_volume_drive``). A drive already confirmed by the user is
+        kept when discovery still can't identify it.
+        """
+        fields = volume.as_volume_fields()
+        drive = volume.drive
+        if drive is not None and (drive.serial or drive.layout_id):
+            fields["drive_id"] = self.upsert_drive(
+                serial=drive.serial,
+                layout_id=drive.layout_id,
+                model=drive.model,
+                manufacturer=drive.manufacturer,
+                bus=drive.bus,
+                media=drive.media,
+            )
+        return self.upsert_volume(volume_guid=volume.volume_guid, **fields)
+
+    def unverified_volumes(self) -> list[sqlite3.Row]:
+        """Volumes whose physical drive is not known: no serial, no layout,
+        no confirmation. Copies on them count as proven only once."""
+        return list(
+            self.conn.execute(
+                "SELECT * FROM volume WHERE drive_id IS NULL ORDER BY id"
+            )
+        )
+
+    def confirm_volume_drive(self, volume_id: int, *, nickname: str | None = None) -> int:
+        """The user's word that this volume is on a drive of its own.
+
+        Only for a volume discovery couldn't tie to a drive. A drive identified
+        by its serial or its partition table is a fact the user can't
+        overrule here.
+        """
+        volume = self._unverified_volume(volume_id)
+        now = utcnow()
+        cursor = self.conn.execute(
+            "INSERT INTO drive (identity, nickname, first_seen_at, last_seen_at) "
+            "VALUES ('user', ?, ?, ?)",
+            (nickname or volume["label"], now, now),
+        )
+        drive_id = int(cursor.lastrowid)
+        self.conn.execute(
+            "UPDATE volume SET drive_id = ? WHERE id = ?", (drive_id, volume_id)
+        )
+        return drive_id
+
+    def assign_volume_drive(self, volume_id: int, drive_id: int) -> None:
+        """The user's word that this volume is on ``drive_id``, for instance a
+        second partition of a disk that is already catalogued."""
+        self._unverified_volume(volume_id)
+        if self.conn.execute("SELECT 1 FROM drive WHERE id = ?", (drive_id,)).fetchone() is None:
+            raise ValueError(f"no drive {drive_id} in the catalog")
+        self.conn.execute(
+            "UPDATE volume SET drive_id = ? WHERE id = ?", (drive_id, volume_id)
+        )
+
+    def _unverified_volume(self, volume_id: int) -> sqlite3.Row:
+        volume = self.conn.execute(
+            "SELECT v.*, d.identity AS drive_identity FROM volume v "
+            "LEFT JOIN drive d ON d.id = v.drive_id WHERE v.id = ?",
+            (volume_id,),
+        ).fetchone()
+        if volume is None:
+            raise ValueError(f"no volume {volume_id} in the catalog")
+        if volume["drive_id"] is not None and volume["drive_identity"] != "user":
+            raise ValueError(
+                f"volume {volume_id} is on drive {volume['drive_id']}, identified by "
+                f"its {volume['drive_identity'].replace('-', ' ')}; that can't be "
+                "overruled by hand"
+            )
+        return volume
 
     def upsert_volume(self, *, volume_guid: str, **fields) -> int:
         row = self.conn.execute(

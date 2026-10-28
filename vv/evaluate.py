@@ -258,19 +258,26 @@ class Evaluator:
         r.finish("no drive in this dataset can hold an unreadable file "
                  "(Windows, or running as administrator/root)")
 
-        r = self.new("VV-CAT-07", "Each drive is catalogued as a distinct device", ["R-CAT-07"], phase)
+        r = self.new("VV-CAT-07", "Each physical device is catalogued as a distinct device",
+                     ["R-CAT-07"], phase)
         volumes = raw.get("volumes", {})
         r.checked = len(self.manifest["drives"])
-        devices = defaultdict(list)
+        devices = defaultdict(set)
+        truth = {d["id"]: d.get("device", d["id"]) for d in self.manifest["drives"]}
         for drive in self.manifest["drives"]:
             v = volumes.get(drive["id"])
             if not v:
                 r.fail(f"{drive['id']} was not registered as a volume")
                 continue
-            devices[v["device"]].append(drive["id"])
+            devices[v["device"]].add(drive["id"])
         for device, drives in devices.items():
-            if len(drives) > 1:
-                r.fail(f"drives {', '.join(drives)} resolved to one device {device}")
+            if len({truth[d] for d in drives}) > 1:
+                r.fail(f"drives {', '.join(sorted(drives))} are on different physical "
+                       f"devices but resolved to one, {device}")
+        for true_device in set(truth.values()):
+            seen = {v["device"] for d, v in volumes.items() if truth.get(d) == true_device}
+            if len(seen) > 1:
+                r.fail(f"the partitions of one device resolved to {len(seen)} devices")
         r.finish()
 
     def root(self, drive: str) -> str:
@@ -467,6 +474,33 @@ class Evaluator:
             if ps:
                 r.fail(spurious(ps, "reported as same-drive waste"))
         r.finish()
+
+        r = self.new("VV-RED-06", "Volumes count by physical device; an unidentified "
+                     "drive adds no proven copy and no waste", ["R-RED-06"], phase)
+        reclaimed = {frozenset(map(tuple, ps)) for ps in
+                     (exp["groups"][c]["paths"] for c in exp["reclamation"])}
+        got_reclaim = set(as_paths(raw["reclamation"]))
+        for content, g in sorted(exp["groups"].items()):
+            if not g["identity_case"]:
+                continue
+            r.checked += 1
+            og, why = self._observed_group(obs, g["paths"])
+            label = self.tag(g["paths"][0])
+            if og is None:
+                r.fail(f"{label}: {why} (see VV-ID-01/02)")
+                continue
+            if og["drives"] != g["drives"]:
+                r.fail(f"{label}: reported on {og['drives']} drive(s); "
+                       f"{g['drives']} proven (by physical device, identified drives only)")
+            if og.get("drives_possible") is not None and og["drives_possible"] != g["drives_possible"]:
+                r.fail(f"{label}: {og['drives_possible']} possible drive(s) reported, "
+                       f"{g['drives_possible']} true")
+            ps = frozenset(g["paths"])
+            if (ps in got_reclaim) != (ps in reclaimed):
+                r.fail(f"{label}: {'reported' if ps in got_reclaim else 'not reported'} as "
+                       f"same-drive waste; truly {'is' if ps in reclaimed else 'is not'}")
+        r.finish("needs three or more simulated drives (two partitions of one device), "
+                 "or four for an unidentified drive")
 
         r = self.new("VV-RED-05", "Headline numbers match the ground truth", ["R-RED-05"], phase)
         for name, value in exp["summary"].items():

@@ -8,8 +8,14 @@ The counting rule that matters, and the one that is easy to get wrong:
 * Two paths sharing an inode or file reference number are *the same file* seen
   twice — a hardlink is not a second copy of anything, and counting it as one
   would inflate the number that the whole tool exists to report.
-* A volume with no identified physical drive counts as its own drive, so an
-  unmapped disk is never silently merged with another.
+* A volume whose physical drive is unknown (no serial, no partition-table
+  identity, not confirmed by the user) gets two answers, each used where it
+  errs safely (docs/REVIEW.md F-05). For **protection** it adds no drive that
+  isn't proven: two partitions of one serial-less disk must not read as two
+  copies, so copies are counted over identified drives only, at least one. For
+  **reclamation** it counts as its own drive, so a copy that may well be on
+  another disk is never offered as same-drive waste. Where the two differ the
+  group says so (``identity_uncertain``).
 * A file whose size no other catalogued file shares is one copy, known
   without reading a byte of it. Hashing never opens such a file, so it has no
   content identity, but leaving it out of the durability figures would hide the
@@ -26,9 +32,15 @@ from dataclasses import dataclass
 
 from drivefusion.core.store.catalog import Catalog
 
-#: A volume whose physical drive is unknown is treated as its own device.
-#: Negating the volume id keeps it from colliding with a real drive id.
-DRIVE_KEY = "COALESCE(v.drive_id, -v.id)"
+#: Drives that certainly hold a copy: identified drives only, and at least
+#: one, since a live file is on *some* drive. Used for every protection
+#: figure: copies, the under-protected list, repair sources.
+DRIVES_PROVEN = "MAX(COUNT(DISTINCT v.drive_id), 1)"
+
+#: Drives that might hold a copy: each unidentified volume counted as its own
+#: device (negating the volume id keeps it clear of real drive ids). Used only
+#: to keep same-drive reclamation from claiming a possibly separate copy.
+DRIVES_POSSIBLE = "COUNT(DISTINCT COALESCE(v.drive_id, -v.id))"
 
 _LIVE = "f.vanished_at IS NULL AND f.content_id IS NOT NULL"
 
@@ -61,15 +73,26 @@ class ContentGroup:
     drives: int
     physical_copies: int
     file_id: int | None = None
+    #: Drives that *might* hold a copy; more than ``drives`` when a copy sits
+    #: on a volume whose drive is unverified. ``None`` means equal.
+    drives_possible: int | None = None
+
+    @property
+    def identity_uncertain(self) -> bool:
+        """A copy is on a volume whose drive is unverified, so ``drives``
+        (proven) may undercount. Confirming the drive settles it."""
+        return (self.drives_possible or self.drives) > self.drives
 
     @property
     def reclaimable_bytes(self) -> int:
         """Bytes freed if every duplicate *within* a drive were removed.
 
         Cross-drive copies are the point of the exercise and are never counted
-        as waste; only extra copies on the same device are.
+        as waste; only extra copies on the same device are. A copy on an
+        unverified drive counts as possibly elsewhere.
         """
-        return max(0, self.physical_copies - self.drives) * self.size_bytes
+        drives = self.drives_possible or self.drives
+        return max(0, self.physical_copies - drives) * self.size_bytes
 
 
 def _group_rows(catalog: Catalog, having: str = "", params: tuple = ()):
@@ -78,7 +101,8 @@ def _group_rows(catalog: Catalog, having: str = "", params: tuple = ()):
         catalog.conn.execute(
             "SELECT c.id AS content_id, c.size_bytes, "
             "  COUNT(f.id) AS paths, "
-            f"  COUNT(DISTINCT {DRIVE_KEY}) AS drives, "
+            f"  {DRIVES_PROVEN} AS drives, "
+            f"  {DRIVES_POSSIBLE} AS drives_possible, "
             # Hardlinks share a file reference number on a volume, so a
             # physical copy is a distinct (volume, frn) — falling back to the
             # file id where the filesystem has no frn to give.
@@ -104,6 +128,7 @@ def _as_groups(rows) -> list[ContentGroup]:
             paths=int(r["paths"]),
             drives=int(r["drives"]),
             physical_copies=int(r["physical_copies"]),
+            drives_possible=int(r["drives_possible"]),
         )
         for r in rows
     ]
@@ -142,7 +167,7 @@ def under_protected(
     drive's failure probability and the ranking becomes size × P(loss).
     """
     groups = _as_groups(
-        _group_rows(catalog, f"COUNT(DISTINCT {DRIVE_KEY}) < ?", (min_copies,))
+        _group_rows(catalog, f"{DRIVES_PROVEN} < ?", (min_copies,))
     )
     if min_copies > 1:
         groups.extend(single_copy_files(catalog))
@@ -161,7 +186,7 @@ def reclamation_candidates(
     groups = [
         group
         for group in _as_groups(_group_rows(catalog, "COUNT(f.id) > 1"))
-        if group.physical_copies > group.drives
+        if group.reclaimable_bytes > 0
     ]
     groups.sort(key=lambda g: g.reclaimable_bytes, reverse=True)
     return groups[:limit] if limit else groups
@@ -204,6 +229,9 @@ def redundancy_summary(catalog: Catalog, *, min_copies: int = 2) -> dict:
         "unique_bytes": unique_total,
         "duplicate_overhead_bytes": path_bytes - unique_total,
         "under_protected_items": len(exposed),
+        # Of those, the ones that may be better protected than shown: a copy
+        # is on a volume whose drive the user hasn't confirmed yet.
+        "unverified_drive_items": sum(1 for g in exposed if g.identity_uncertain),
         "under_protected_bytes": sum(g.size_bytes for g in exposed),
         "reclaimable_bytes": sum(g.reclaimable_bytes for g in reclaim),
         # Files known to be single copies from their size alone; counted
@@ -269,7 +297,7 @@ def group_paths(catalog: Catalog, group: ContentGroup, *, limit: int = 10) -> li
 
 def _other_copies(catalog: Catalog, content_id: int) -> int:
     row = catalog.conn.execute(
-        f"SELECT COUNT(DISTINCT {DRIVE_KEY}) AS n FROM file f "
+        f"SELECT {DRIVES_PROVEN} AS n FROM file f "
         "JOIN volume v ON v.id = f.volume_id "
         "WHERE f.content_id = ? AND f.vanished_at IS NULL",
         (content_id,),
