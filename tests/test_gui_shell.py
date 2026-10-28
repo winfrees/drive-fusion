@@ -433,3 +433,24 @@ def test_adding_a_folder_that_holds_the_catalog_is_refused(
     )
     assert window.scope.add_path(str(populated.parent)) is False
     assert "contains the catalog" in warnings[0]
+
+
+def test_adding_a_folder_on_the_catalogs_data_drive_is_refused(
+    window, populated: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """Only the system drive may hold both the catalog and scanned folders."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from drivefusion.core import discovery
+
+    monkeypatch.setattr(discovery, "system_volume_guid", lambda: "vol:some-other-drive")
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args: warnings.append(args[2])
+    )
+    elsewhere = tmp_path / "on-the-same-drive"
+    elsewhere.mkdir()
+    roots_before = len(window.session.catalog().scope_roots())
+    assert window.scope.add_path(str(elsewhere)) is False
+    assert "same drive as the catalog" in warnings[0]
+    assert len(window.session.catalog().scope_roots()) == roots_before

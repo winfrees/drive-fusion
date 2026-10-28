@@ -13,6 +13,7 @@ elevates (docs/PLAN.md §6.5).
 from __future__ import annotations
 
 import ctypes
+import functools
 import sys
 from typing import Iterator
 
@@ -39,10 +40,39 @@ class VolumeAccessError(RuntimeError):
         self.winerror = winerror
 
 
-def _kernel32():
+@functools.lru_cache(maxsize=None)
+def kernel32():
+    """kernel32 with every handle-bearing call declared (REVIEW F-14).
+
+    Without ``restype = HANDLE`` ctypes returns a C ``int``, so a failed
+    ``CreateFileW`` (-1) never equals ``INVALID_HANDLE_VALUE`` and an access-
+    denied error surfaces later as "invalid handle". Without ``argtypes`` a
+    64-bit handle can't be passed back in. One cached, declared instance is
+    shared by this module and ``dirinfo.py``.
+    """
     if not WINDOWS:  # pragma: no cover - guarded by callers
         raise VolumeAccessError("volume enumeration requires Windows")
-    return ctypes.WinDLL("kernel32", use_last_error=True)
+    from ctypes import wintypes
+
+    lib = ctypes.WinDLL("kernel32", use_last_error=True)
+    lib.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    lib.CreateFileW.restype = wintypes.HANDLE
+    lib.CloseHandle.argtypes = [wintypes.HANDLE]
+    lib.CloseHandle.restype = wintypes.BOOL
+    lib.DeviceIoControl.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    lib.DeviceIoControl.restype = wintypes.BOOL
+    lib.GetFileInformationByHandleEx.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    lib.GetFileInformationByHandleEx.restype = wintypes.BOOL
+    return lib
 
 
 def open_volume(device_path: str):
@@ -51,8 +81,7 @@ def open_volume(device_path: str):
     A handle opened without write access cannot write, at the OS level,
     whatever the code above it does.
     """
-    kernel32 = _kernel32()
-    handle = kernel32.CreateFileW(
+    handle = kernel32().CreateFileW(
         device_path,
         GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -61,7 +90,7 @@ def open_volume(device_path: str):
         0,
         None,
     )
-    if handle == INVALID_HANDLE_VALUE:
+    if handle is None or handle == INVALID_HANDLE_VALUE:
         error = ctypes.get_last_error()
         raise VolumeAccessError(
             f"cannot open {device_path}: WinError {error}"
@@ -78,8 +107,7 @@ def open_directory(path: str):
     Windows; it grants no write capability. Centralised here so the directory
     reader in ``dirinfo.py`` needs no raw-handle allowlist entry of its own.
     """
-    kernel32 = _kernel32()
-    handle = kernel32.CreateFileW(
+    handle = kernel32().CreateFileW(
         path,
         GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -88,14 +116,14 @@ def open_directory(path: str):
         FILE_FLAG_BACKUP_SEMANTICS,
         None,
     )
-    if handle == INVALID_HANDLE_VALUE:
+    if handle is None or handle == INVALID_HANDLE_VALUE:
         error = ctypes.get_last_error()
         raise VolumeAccessError(f"cannot open directory {path}: WinError {error}", error)
     return handle
 
 
 def close_handle(handle) -> None:
-    _kernel32().CloseHandle(handle)
+    kernel32().CloseHandle(handle)
 
 
 def device_ioctl(
@@ -112,12 +140,11 @@ def device_ioctl(
 
 
 def _ioctl(handle, code: int, payload: bytes, out_size: int) -> bytes:
-    kernel32 = _kernel32()
     out_buffer = ctypes.create_string_buffer(out_size)
     returned = ctypes.c_ulong()
     in_buffer = ctypes.create_string_buffer(payload, len(payload)) if payload else None
 
-    ok = kernel32.DeviceIoControl(
+    ok = kernel32().DeviceIoControl(
         handle,
         ctypes.c_ulong(code),
         in_buffer,

@@ -162,3 +162,89 @@ def test_long_path_prefixing() -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX passthrough")
 def test_long_path_is_identity_off_windows() -> None:
     assert fsio.long_path("/mnt/data/file.txt") == "/mnt/data/file.txt"
+
+
+# -- REVIEW F-16: the handle is checked, not just the path ---------------------
+
+def _make_link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted here")
+
+
+def test_a_link_is_not_opened(sample_tree: Path, tmp_path: Path) -> None:
+    """Links are reported, never followed, and that includes reading them."""
+    outside = tmp_path / "outside-scope.txt"
+    outside.write_bytes(b"not in scope")
+    link = sample_tree / "docs" / "looks-like-a-file.txt"
+    _make_link(link, outside)
+
+    with pytest.raises(UnreadableError, match="link"):
+        fsio.open_read(str(link))
+
+
+def test_a_file_swapped_for_a_link_after_the_check_is_not_read(
+    sample_tree: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """The time-of-check to time-of-use race: checked as a file, opened as a link."""
+    outside = tmp_path / "outside-scope.txt"
+    outside.write_bytes(b"not in scope")
+    target = sample_tree / "docs" / "report.txt"
+    real_stat = fsio.stat
+
+    def stat_then_swap(path: str, **kwargs):
+        info = real_stat(path, **kwargs)
+        if path == str(target):
+            target.unlink()
+            _make_link(target, outside)
+        return info
+
+    monkeypatch.setattr(fsio, "stat", stat_then_swap)
+    with pytest.raises(UnreadableError):
+        with fsio.open_read(str(target)) as handle:
+            pytest.fail(f"read through a swapped-in link: {handle.read()!r}")
+
+
+def test_a_handle_that_is_not_the_checked_file_is_refused_and_closed(
+    sample_tree: Path, monkeypatch
+) -> None:
+    """Portable form of the race: the handle's identity differs from the check."""
+    target = str(sample_tree / "docs" / "report.txt")
+    real_stat = fsio.stat
+
+    def other_identity(path: str, **kwargs):
+        info = real_stat(path, **kwargs)
+        return type(info)(
+            size=info.size, mtime_ns=info.mtime_ns, ctime_ns=info.ctime_ns,
+            atime_ns=info.atime_ns, is_dir=False, nlink=info.nlink,
+            attributes=info.attributes, file_id=(info.file_id or 0) + 1,
+            device=info.device or 1,
+        )
+
+    closed: list[int] = []
+    real_close = os.close
+    monkeypatch.setattr(fsio, "stat", other_identity)
+    monkeypatch.setattr(os, "close", lambda fd: (closed.append(fd), real_close(fd)))
+
+    with pytest.raises(UnreadableError, match="changed between"):
+        fsio.open_read(target)
+    assert closed, "the refused handle was left open"
+
+
+def test_a_handle_showing_recall_attributes_is_refused(sample_tree: Path, monkeypatch) -> None:
+    """A placeholder reached after the path check must still not be read."""
+    target = str(sample_tree / "docs" / "report.txt")
+    real_fstat = os.fstat
+
+    class Recalled:
+        def __init__(self, st):
+            self._st = st
+            self.st_file_attributes = fsio.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
+    monkeypatch.setattr(fsio.os, "fstat", lambda fd: Recalled(real_fstat(fd)))
+    with pytest.raises(DehydratedFileError):
+        fsio.open_read(target)

@@ -49,6 +49,41 @@ def codes(source: str, path: str = GUARDED) -> set[str]:
         ("from os import O_TRUNC\n", "DF004"),
         ("import ctypes\nctypes.windll.kernel32.CreateFileW(x)\n", "DF007"),
         ("DeviceIoControl(handle, code)\n", "DF007"),
+        # REVIEW F-08: each of these passed with zero findings before.
+        ("import subprocess\nsubprocess.run(['cmd', '/c', 'del', 'x'])\n", "DF008"),
+        ("from subprocess import Popen\n", "DF008"),
+        ("import os\nos.system('del x')\n", "DF008"),
+        ("import os\nos.startfile(p)\n", "DF008"),
+        ("import os\nos.popen('x')\n", "DF008"),
+        ("from os import execv\n", "DF008"),
+        ("import ctypes\nctypes.windll.shell32.ShellExecuteW(0, 'open', p)\n", "DF008"),
+        ("import os\nos.write(3, b'x')\n", "DF009"),
+        ("from os import pwrite\n", "DF009"),
+        ("import io\nio.open(p, 'wb')\n", "DF003"),
+        ("import io\nio.open(p)\n", "DF003"),
+        ("import io\nio.FileIO(p, 'w')\n", "DF003"),
+        ("from io import FileIO\nFileIO(p, mode='a')\n", "DF003"),
+        ("import os\nos.fdopen(fd, 'w')\n", "DF003"),
+        ("import codecs\ncodecs.open(p, 'w', 'utf-8')\n", "DF003"),
+        ("import os\nos.open(p, 0x241)\n", "DF010"),
+        ("import os\nos.open(p, os.O_RDONLY | 0x40)\n", "DF010"),
+        ("import os\nos.open(p, flags=chosen)\n", "DF010"),
+        ("import os\nflags = 0x241\nos.open(p, flags)\n", "DF010"),
+        ("import os\ndef f(p, flags):\n    return os.open(p, flags)\n", "DF010"),
+        ("import os\nf = os.O_RDONLY\nf += 1\nos.open(p, f)\n", "DF010"),
+        ("import os\nos.open(p, getattr(os, 'O_WRONLY', 0))\n", "DF010"),
+        ("import sqlite3\nsqlite3.connect('E:/data/x.db')\n", "DF011"),
+        ("from sqlite3 import connect\n", "DF011"),
+        ("import ctypes\nctypes.windll.kernel32.DeleteFileW('x')\n", "DF012"),
+        ("kernel32.SetFileTime(h, None, None, None)\n", "DF012"),
+        ("fn = kernel32['MoveFileExW']\n", "DF012"),
+        ("cldapi.CfHydratePlaceholder(h, 0, -1, 0, None)\n", "DF012"),
+        ("import os\ngetattr(os, 're' + 'move')('x')\n", "DF013"),
+        ("import shutil\ngetattr(shutil, name)(a)\n", "DF013"),
+        ("import os\ngetattr(os, 'remove')('x')\n", "DF001"),
+        ("import os\ngetattr(os, 'system')('x')\n", "DF008"),
+        ("__import__('o' + 's')\n", "DF013"),
+        ("import importlib\nimportlib.import_module(name)\n", "DF013"),
     ],
 )
 def test_catches_mutating_code(source: str, expected: str) -> None:
@@ -76,10 +111,40 @@ def test_raw_handle_module_may_not_request_write_access() -> None:
         "config = defaults.copy()\n",                 # dict.copy, not shutil.copy
         "cursor.move(3)\n",                           # unrelated .move
         "import hashlib\nhashlib.sha256(data).hexdigest()\n",
+        # The shapes core/fsio.py uses to open read-only, which must stay legal.
+        "import os\nos.open(p, os.O_RDONLY | getattr(os, 'O_NOATIME', 0))\n",
+        "import os\nflags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)\n"
+        "noatime = getattr(os, 'O_NOATIME', 0)\nos.open(p, flags | noatime)\n",
+        "import io\nio.FileIO(fd, mode='rb', closefd=True)\n",
+        "import io\nio.open(p, 'rb')\n",
+        "import os\nos.fdopen(fd, 'rb')\n",
+        "import io\nbuffer = io.BytesIO()\nbuffer.write(b'x')\n",   # in memory
+        "import sys\nsys.stdout.write('x')\n",
+        "import os\nvalue = getattr(os, 'sep')\n",
+        "label = 'DeleteFileW is never called'\n",                    # prose, not a name
+        "import importlib\nimportlib.import_module('json')\n",
     ],
 )
 def test_leaves_read_only_code_alone(source: str) -> None:
     assert codes(source) == set(), f"false positive on: {source!r}"
+
+
+def test_process_launch_is_permitted_only_where_allowlisted() -> None:
+    source = "import subprocess\nsubprocess.Popen(argv)\n"
+    for allowed in ro_lint.PROCESS_LAUNCH_MODULES:
+        assert "DF008" not in codes(source, path=allowed)
+    assert "DF008" in codes(source, path="drivefusion/core/identity/pipeline.py")
+
+
+def test_allowlisted_launchers_are_still_held_to_every_other_rule() -> None:
+    source = "import os\nos.remove(p)\nos.write(1, b'x')\n"
+    for allowed in ro_lint.PROCESS_LAUNCH_MODULES:
+        assert {"DF001", "DF009"} <= codes(source, path=allowed)
+
+
+def test_every_process_launch_entry_gives_its_reason() -> None:
+    for entry, reason in ro_lint.PROCESS_LAUNCH_MODULES.items():
+        assert len(reason.split()) >= 5, f"{entry}: say why it may start a process"
 
 
 def test_permitted_writers_are_exempt() -> None:

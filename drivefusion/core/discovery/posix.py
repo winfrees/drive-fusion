@@ -26,6 +26,10 @@ def _mount_point(path: str) -> str:
         current = parent
 
 
+def volume_guid_for_path(path: str) -> str:
+    return f"dev:{os.stat(os.path.abspath(path)).st_dev}"
+
+
 def identify_volume(path: str) -> VolumeInfo:
     absolute = os.path.abspath(path)
     stat = os.stat(absolute)

@@ -6,8 +6,9 @@ file exist**, and will produce **reviewable plans** for consolidating that conte
 traceable, FAIR-aligned order.
 
 > **Drive Fusion never modifies, moves, or deletes your data.** It reads only the folders you
-> add to its scan scope and writes only to its own catalog database. Keep that catalog **off**
-> the drives you scan; see [Known limits](#known-limits).
+> add to its scan scope and writes only to its own catalog database, which it refuses to keep
+> on a drive you scan. The one exception is the system drive: there the catalog may sit
+> anywhere outside the folders being scanned.
 
 Python 3.11+ · SQLite catalog · optional PySide6 GUI · packaged as a 64-bit Windows one-folder
 build.
@@ -98,7 +99,7 @@ flowchart TB
         A["tools/ro_lint.py bans mutating calls<br/>outside core/store and core/export"]
     end
     subgraph L4["Layer 4 — no-touch test (CI)"]
-        N["fixture tree byte-identical after<br/>scan ×2 · hash · verify · reports · browse"]
+        N["fixture tree byte-identical after<br/>scan ×2 · hash · verify · reports · browse,<br/>run under an audit hook that refuses any write"]
     end
     L1 --> L2 --> L3 --> L4
 ```
@@ -119,12 +120,16 @@ What the layers guarantee today:
 
 These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
 
-* **The catalog is kept out of scope roots, but not off catalogued volumes.** A catalog inside
-  a scope root is refused, and so is a root that contains the catalog. A catalog elsewhere on
-  a catalogued drive is still allowed. Keep it on a drive you don't catalogue.
-* **The lint has blind spots.** It doesn't catch `subprocess`, `os.write`, `io.open`, numeric
-  `os.open` flags or Win32 mutators called through `ctypes`. The other layers don't cover
-  these either.
+* **Where the catalog may live.** Never inside a scanned folder, and never on a drive that
+  holds one, except the system drive: scanning `C:\Users\me\Research` with the default
+  catalog at `C:\Users\me\.drivefusion` is fine, scanning all of `C:` is not. Both a catalog
+  opened in the wrong place and a root added in the wrong place are refused. A catalog on a
+  volume Windows can't identify, such as a network share, can't be on a scanned drive, so it
+  is allowed.
+* **The lint can't follow everything.** It now catches process launches, descriptor writes,
+  `io`/`codecs` opens, numeric `os.open` flags, `sqlite3.connect`, Win32 mutators by name, and
+  `getattr` indirection on filesystem modules. A computed name on an arbitrary `ctypes`
+  library, such as `getattr(dll, name)`, still gets past it.
 * **Scope roots are stored as drive-letter paths.** Scan, hash and verify first check that
   the volume at the path is the catalogued one, and skip the root with a message if it isn't
   or if the drive is unplugged. A root doesn't yet follow its drive to a new letter.

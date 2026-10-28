@@ -15,6 +15,27 @@ from tests.fixtures import tree as tree_fixture  # noqa: E402
 from tests.fixtures import vhdx as vhdx_fixture  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _temp_drive_counts_as_the_system_drive(monkeypatch) -> None:
+    """Tests keep the catalog and the scanned folders under one temp directory.
+
+    That is only allowed on the system drive (ROADMAP D8), and the temp
+    directory is usually there, but not always (``TEMP`` on ``D:``, ``/tmp`` on
+    tmpfs). Treating its drive as the system drive keeps the suite independent
+    of where the machine puts temp files. Tests of that rule replace this with
+    their own answer.
+    """
+    import tempfile
+
+    from drivefusion.core import discovery
+
+    try:
+        temp_volume = discovery.volume_guid_of(tempfile.gettempdir())
+    except (discovery.DiscoveryError, OSError):
+        return
+    monkeypatch.setattr(discovery, "system_volume_guid", lambda: temp_volume)
+
+
 @pytest.fixture
 def sample_tree(tmp_path: Path) -> Path:
     """A synthetic tree with duplicates, unicode names, and deep paths."""

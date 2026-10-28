@@ -94,6 +94,11 @@ filesystem must keep a reserve free afterwards: a tenth of its size, capped at 1
 dataset that would break that reserve on the host disk, or on a physical thumb drive, is
 refused, and the folders created for it are removed.
 
+**Where the dataset folder goes.** Drive Fusion won't keep its catalog on a drive it
+scans, unless that's the system drive. In physical mode the catalog lives under `--out`, so
+put `--out` on the system drive or on a device that is not one of the `--drive-path`
+devices, as in the quick-start example (`C:\vv\phys1` with drives on `E:`, `F:`, `G:`).
+
 **Preparing physical drives.** Give each device an empty folder, such as
 `E:\DriveFusionVV`; the drive root itself already holds `System Volume Information`. The
 generator refuses any folder that has anything in it, so it cannot overwrite data. A

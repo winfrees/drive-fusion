@@ -153,6 +153,7 @@ class ScopeScreen(QWidget):
             root_path = validate_new_root(path, [r.path for r in catalog.scope_roots()])
             catalog.check_root_location(root_path)
             volume = discovery.identify_volume(root_path)
+            catalog.check_root_location(root_path, volume.volume_guid)
         except (ScopeError, CatalogLocationError, discovery.DiscoveryError) as exc:
             QMessageBox.warning(self, "Cannot add this folder", str(exc))
             return False

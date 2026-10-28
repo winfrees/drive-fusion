@@ -292,3 +292,22 @@ def test_a_catalog_inside_a_scope_root_is_refused(
     assert "contains the catalog" in capsys.readouterr().err
     assert main(["--catalog", str(inside), "scope", "list"]) == 0
     assert "no scope roots" in capsys.readouterr().out
+
+
+def test_scope_add_refuses_a_root_on_the_catalogs_data_drive(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """Refused before anything is recorded, not even the volume (ROADMAP D8)."""
+    from drivefusion.core import discovery
+
+    monkeypatch.setattr(discovery, "system_volume_guid", lambda: "vol:some-other-drive")
+    tree = tmp_path / "media"
+    tree.mkdir()
+    catalog = tmp_path / "catalog" / "catalog.db"
+    assert main(["--catalog", str(catalog), "scope", "add", str(tree)]) == 1
+    assert "same drive as the catalog" in capsys.readouterr().err
+
+    from drivefusion.core.store.catalog import Catalog
+
+    with Catalog(catalog) as opened:
+        assert opened.volumes() == [] and opened.scope_roots() == []

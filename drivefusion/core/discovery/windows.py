@@ -24,6 +24,28 @@ PROVIDER = "windows"
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
+# Every call that takes or returns a handle is declared (REVIEW F-14). With the
+# default C int restype a failed open (-1) never equals INVALID_HANDLE_VALUE,
+# and a 64-bit handle can't be passed back in.
+kernel32.CreateFileW.argtypes = [
+    wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+]
+kernel32.CreateFileW.restype = wintypes.HANDLE
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.DeviceIoControl.argtypes = [
+    wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+    ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+]
+kernel32.DeviceIoControl.restype = wintypes.BOOL
+kernel32.FindFirstVolumeW.argtypes = [wintypes.LPWSTR, wintypes.DWORD]
+kernel32.FindFirstVolumeW.restype = wintypes.HANDLE
+kernel32.FindNextVolumeW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD]
+kernel32.FindNextVolumeW.restype = wintypes.BOOL
+kernel32.FindVolumeClose.argtypes = [wintypes.HANDLE]
+kernel32.FindVolumeClose.restype = wintypes.BOOL
+
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 OPEN_EXISTING = 3
 FILE_SHARE_READ = 0x00000001
@@ -334,6 +356,10 @@ def _build(volume_guid: str) -> VolumeInfo:
         drive=drive,
         provider=PROVIDER,
     )
+
+
+def volume_guid_for_path(path: str) -> str:
+    return _volume_guid_for_path(os.path.abspath(path))
 
 
 def identify_volume(path: str) -> VolumeInfo:

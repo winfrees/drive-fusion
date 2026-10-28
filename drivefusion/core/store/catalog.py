@@ -39,6 +39,14 @@ def path_within(path: Path | str, root: Path | str) -> bool:
         return False
 
 
+#: Enabled roots and the volume each is on, for the catalog-location checks.
+_ENABLED_ROOT_LOCATIONS = (
+    "SELECT r.path, v.volume_guid FROM scope_root r "
+    "LEFT JOIN volume v ON v.id = r.volume_id "
+    "WHERE r.removed_at IS NULL AND r.enabled = 1"
+)
+
+
 def root_clause(root_ids, alias: str = "f") -> tuple[str, list]:
     """SQL restricting file rows to the given scope roots, or nothing for ``None``.
 
@@ -88,15 +96,14 @@ class Catalog:
         self.conn = schema.connect(self.path)
         try:
             schema.migrate(self.conn, self.path)
-            self._refuse_location(
-                root.path for root in self.scope_roots(enabled_only=True)
-            )
+            self._refuse_location(self._enabled_root_locations())
         except BaseException:
             self.conn.close()
             raise
 
-    def _roots_on_disk(self) -> list[str]:
-        """Enabled root paths of an existing catalog, read without writing.
+    def _roots_on_disk(self) -> list[tuple[str, str | None]]:
+        """Enabled roots of an existing catalog as ``(path, volume_guid)``,
+        read without writing.
 
         ``immutable=1`` takes no locks and creates no side files. It does not
         see rows still only in the WAL; the check after connecting covers those.
@@ -107,18 +114,26 @@ class Catalog:
         try:
             probe = sqlite3.connect(uri, uri=True)
             try:
-                rows = probe.execute(
-                    "SELECT path FROM scope_root "
-                    "WHERE removed_at IS NULL AND enabled = 1"
-                ).fetchall()
+                rows = probe.execute(_ENABLED_ROOT_LOCATIONS).fetchall()
             finally:
                 probe.close()
         except sqlite3.Error:
             return []
-        return [row[0] for row in rows]
+        return [(row[0], row[1]) for row in rows]
 
-    def _refuse_location(self, root_paths: Iterable[str]) -> None:
-        for root_path in root_paths:
+    def _enabled_root_locations(self) -> list[tuple[str, str | None]]:
+        return [(row[0], row[1]) for row in self.conn.execute(_ENABLED_ROOT_LOCATIONS)]
+
+    def _refuse_location(self, roots: Iterable[tuple[str, str | None]]) -> None:
+        """Refuse to use a catalog inside a root, or on a root's drive.
+
+        The catalog may share a volume with scanned folders only when that
+        volume is the system drive, which Windows writes to constantly anyway.
+        Even there it may not sit inside a scanned folder, so scanning the
+        whole system drive leaves nowhere on it for the catalog.
+        """
+        roots = list(roots)
+        for root_path, _guid in roots:
             if path_within(self.path, root_path):
                 raise CatalogLocationError(
                     f"refusing to use catalog {self.path}: it is inside scope "
@@ -126,6 +141,46 @@ class Catalog:
                     "a scope root. Keep the catalog elsewhere (--catalog or "
                     "DRIVEFUSION_CATALOG)."
                 )
+        sharing = self._roots_sharing_catalog_volume(roots)
+        if sharing:
+            raise CatalogLocationError(
+                f"refusing to use catalog {self.path}: it is on the same drive "
+                f"as scope root {sharing[0]}, and Drive Fusion writes nothing to "
+                "a drive it catalogues. Only the system drive may hold both the "
+                "catalog and scanned folders. Keep the catalog on another drive "
+                "(--catalog or DRIVEFUSION_CATALOG)."
+            )
+
+    def _roots_sharing_catalog_volume(
+        self, roots: Iterable[tuple[str, str | None]]
+    ) -> list[str]:
+        """Roots on this catalog's volume, unless that volume is the system drive.
+
+        A catalog whose volume can't be identified (a network share, say) is
+        not refused: every scope root is on an identified local volume, so it
+        can't be one of them.
+        """
+        by_guid: dict[str, list[str]] = {}
+        for root_path, guid in roots:
+            if guid:
+                by_guid.setdefault(guid, []).append(root_path)
+        if not by_guid:
+            return []
+
+        from drivefusion.core import discovery
+
+        try:
+            mine = discovery.volume_guid_of(str(self.path.resolve().parent))
+        except (discovery.DiscoveryError, OSError):
+            return []
+        if mine not in by_guid:
+            return []
+        try:
+            if mine == discovery.system_volume_guid():
+                return []
+        except (discovery.DiscoveryError, OSError):
+            pass        # unknown system drive: no exception to the rule
+        return by_guid[mine]
 
     def close(self) -> None:
         self.conn.close()
@@ -191,17 +246,27 @@ class Catalog:
 
     # -- scope -------------------------------------------------------------
 
-    def check_root_location(self, path: str) -> None:
-        """Raise :class:`CatalogLocationError` if ``path`` contains this catalog.
+    def check_root_location(self, path: str, volume_guid: str | None = None) -> None:
+        """Raise :class:`CatalogLocationError` if ``path`` may not become a root.
 
-        Callers that record anything before adding a root call this first, so a
-        refused root leaves nothing behind.
+        Refused when it contains this catalog, or when ``volume_guid`` (the
+        volume ``path`` is on) also holds the catalog and isn't the system
+        drive. Callers that record anything before adding a root call this
+        first, with the volume once they have identified it, so a refused root
+        leaves nothing behind.
         """
         if path_within(self.path, path):
             raise CatalogLocationError(
                 f"refusing to add {path}: it contains the catalog {self.path}, "
                 "and Drive Fusion writes nothing inside a scope root. Move the "
                 "catalog elsewhere (--catalog or DRIVEFUSION_CATALOG) first."
+            )
+        if volume_guid and self._roots_sharing_catalog_volume([(path, volume_guid)]):
+            raise CatalogLocationError(
+                f"refusing to add {path}: it is on the same drive as the catalog "
+                f"{self.path}, and Drive Fusion writes nothing to a drive it "
+                "catalogues. Only the system drive may hold both. Move the "
+                "catalog to another drive (--catalog or DRIVEFUSION_CATALOG) first."
             )
 
     def add_scope_root(
@@ -214,9 +279,13 @@ class Catalog:
         that root is picked back up instead of being stranded.
 
         A root that contains this catalog is refused: every scan would then
-        write into the tree it observes (docs/REVIEW.md F-03).
+        write into the tree it observes (docs/REVIEW.md F-03). So is a root on
+        the catalog's own drive, unless that is the system drive.
         """
-        self.check_root_location(path)
+        recorded = self.conn.execute(
+            "SELECT volume_guid FROM volume WHERE id = ?", (volume_id,)
+        ).fetchone()
+        self.check_root_location(path, recorded["volume_guid"] if recorded else None)
         row = self.conn.execute(
             "SELECT id FROM scope_root WHERE volume_id = ? AND path = ?",
             (volume_id, path),

@@ -6,7 +6,7 @@
 | **Focus** | (1) safety of user data on catalogued media, (2) correctness of the file and redundancy facts the tool reports, (3) security of the privileged and packaging surface |
 | **Method** | Every source module read in full; lint and full test suite run on Linux (291 passed, 5 Windows-only skipped) and checked against the latest Windows CI log (293 passed, 3 skipped); every finding below reproduced with [`tools/review_repro.py`](../tools/review_repro.py) or shown directly in code. Each claim was checked three times: against the code, against a running reproduction, and against the test that would be expected to catch it |
 | **Date** | 2026-10-27 |
-| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed. Re-checked at `ce03f64` the same day: R5–R12 still `FOUND`, so F-05 … F-16 stay open. [ROADMAP.md](ROADMAP.md) Track A schedules them |
+| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed. Re-checked at `ce03f64` the same day: R5–R12 still `FOUND`, so F-05 … F-16 stayed open. [ROADMAP.md](ROADMAP.md) Track A schedules them. 2026-10-28, Track A item A2: F-08, F-10, F-14 and F-16 fixed, each with regression tests; R8 (all seven probes), R9, R10 and the new R13 (F-16) now print `NOT FOUND` / `caught` |
 
 ---
 
@@ -83,15 +83,15 @@ findings.*
 | [F-05](#f-05) | Medium | File facts | Volumes whose drive serial can't be read each count as a separate drive, which can overstate copies | R6 | Open |
 | [F-06](#f-06) | Medium | File facts | `verify` reports an ordinary edit as a fixity mismatch, because it never compares size or mtime | R5 | Open |
 | [F-07](#f-07) | Medium | Security | The elevation launcher checks only the helper's filename and existence: no signature or hash check, and parameters are joined unquoted | code | Open |
-| [F-08](#f-08) | Medium | Safety | `ro_lint` misses `subprocess`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators via ctypes, `sqlite3.connect`, and `getattr` indirection | R8 | Open |
+| [F-08](#f-08) | Medium | Safety | `ro_lint` misses `subprocess`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators via ctypes, `sqlite3.connect`, and `getattr` indirection | R8 | **Fixed** |
 | [F-09](#f-09) | Medium | Accuracy | Docs describe unwired or unimplemented features as done (corrected by this change) | code | Docs corrected |
-| [F-10](#f-10) | Medium | Catalog integrity | The pre-migration backup is a file copy taken while the database is in WAL mode, so it can miss committed data | R10 | Open |
+| [F-10](#f-10) | Medium | Catalog integrity | The pre-migration backup is a file copy taken while the database is in WAL mode, so it can miss committed data | R10 | **Fixed** |
 | [F-11](#f-11) | Medium | File facts | Cloud placeholders that expose the reparse attribute are dropped from the catalog instead of being recorded by metadata | R11 | Open |
 | [F-12](#f-12) | Low | Accuracy | "Last scanned" shows when the volume was added, not when it was last scanned | R12 | Open |
 | [F-13](#f-13) | Low | Usability | Cancel is checked every 10,000 staged files, not per directory | R7 | Open |
-| [F-14](#f-14) | Low | Robustness | `CreateFileW`/`FindFirstVolumeW` have no `restype`, so `INVALID_HANDLE_VALUE` is never matched | R9 | Open |
+| [F-14](#f-14) | Low | Robustness | `CreateFileW`/`FindFirstVolumeW` have no `restype`, so `INVALID_HANDLE_VALUE` is never matched | R9 | **Fixed** |
 | [F-15](#f-15) | Low | Accuracy | The coverage line counts unlistable directories as unread *files* | R1 | Open |
-| [F-16](#f-16) | Low | Safety | `open_read` checks attributes without following links, then opens the path *with* link following | code | Open |
+| [F-16](#f-16) | Low | Safety | `open_read` checks attributes without following links, then opens the path *with* link following | R13 | **Fixed** |
 
 **Severity scale.** *High*: can write to user media, or can lead a user to believe data is
 safer than it is. *Medium*: a wrong or misleading result in a narrower case, or a security
@@ -132,11 +132,11 @@ implemented as a library with no user-facing entry point.
 
 | Req | Need | Requirement | Specification as built | Verification | Status |
 |---|---|---|---|---|---|
-| SR-01 | UN-1 | No module outside `core/store` and `core/export` may invoke a filesystem mutation. | `core/fsio.py` exposes only `scandir`, `stat`, `open_read`; `tools/ro_lint.py` rules DF001–DF007 run as a CI step. | `test_ro_lint.py`; CI "Read-only lint" step | **Partial**: lint blind spots ([F-08](#f-08)) |
-| SR-02 | UN-1 | User files are opened read-only, without blocking other processes. | `CreateFileW(GENERIC_READ, FILE_SHARE_READ\|WRITE\|DELETE, OPEN_EXISTING)` (`fsio.py:326`); `ReadOnlyBinaryFile` raises `ReadOnlyViolation` on `write`/`truncate`. | `test_handles_refuse_to_write`; `test_no_touch.py` | **Met** |
-| SR-03 | UN-1 | Volume, directory and device handles cannot write. | `winio.open_volume` / `open_directory`: `GENERIC_READ`, `OPEN_EXISTING`; discovery opens with zero access; DF006 rejects write-access names in raw-handle modules. | Code review; DF006 | **Met**. DF006 matches names only, not numeric literals or creation dispositions ([F-08](#f-08)) |
-| SR-04 | UN-1 | The tool writes nothing inside a scope root or on a catalogued volume. | `Catalog()` refuses to open a catalog inside any enabled scope root, checking with an `immutable=1` read before connecting so no `-wal`/`-shm` is created; `Catalog.add_scope_root` (and `scope add` / the GUI before they record anything) refuses a root that contains the catalog (`CatalogLocationError`). A catalog on a catalogued volume but outside every root is still allowed, and the export-root check waits for M8. | `test_store.py` (`test_a_root_containing_the_catalog_is_refused`, `test_a_catalog_inside_a_scope_root_is_not_opened`), `test_cli.py`, `test_gui_shell.py`; R3 | **Partial**: inside a root fixed ([F-03](#f-03)); rest of the volume not checked |
-| SR-05 | UN-1 | An end-to-end regression shows media unchanged after every stage. | `test_no_touch.py` snapshots a fixture tree, runs scan ×2, hash, verify, reports and browse, then re-snapshots. | Linux + Windows CI | **Partial**: access times asserted only on POSIX with `O_NOATIME`; helper, USN and delta paths not exercised |
+| SR-01 | UN-1 | No module outside `core/store` and `core/export` may invoke a filesystem mutation. | `core/fsio.py` exposes only `scandir`, `stat`, `open_read`; `tools/ro_lint.py` rules DF001–DF007 run as a CI step. | `test_ro_lint.py`; CI "Read-only lint" step; audit-hook guard in `test_no_touch.py` | **Met** ([F-08](#f-08)). Residual: a computed name on an arbitrary `ctypes` receiver |
+| SR-02 | UN-1 | User files are opened read-only, without blocking other processes. | `CreateFileW(GENERIC_READ, FILE_SHARE_READ\|WRITE\|DELETE, OPEN_EXISTING)`; `ReadOnlyBinaryFile` raises `ReadOnlyViolation` on `write`/`truncate`. `open_read` refuses links (`O_NOFOLLOW` on POSIX) and checks the opened handle's identity and attributes against the path's ([F-16](#f-16)). | `test_handles_refuse_to_write`; `test_no_touch.py`; `test_fsio.py` | **Met** |
+| SR-03 | UN-1 | Volume, directory and device handles cannot write. | `winio.open_volume` / `open_directory`: `GENERIC_READ`, `OPEN_EXISTING`; discovery opens with zero access; DF006 rejects write-access names in raw-handle modules. | Code review; DF006; `test_win32_signatures.py` | **Met**. DF006 matches names only, not numeric literals or creation dispositions. Handle signatures declared ([F-14](#f-14)) |
+| SR-04 | UN-1 | The tool writes nothing inside a scope root or on a catalogued volume. | `Catalog()` refuses to open a catalog inside any enabled scope root, checking with an `immutable=1` read before connecting so no `-wal`/`-shm` is created; `Catalog.add_scope_root` (and `scope add` / the GUI before they record anything) refuses a root that contains the catalog (`CatalogLocationError`). Since 2026-10-28 the same checks refuse a catalog on any volume that holds an enabled root, and a root on the catalog's volume, unless that volume is the system drive. The export-root check waits for M8. | `test_store.py` (`test_a_root_containing_the_catalog_is_refused`, `test_a_catalog_inside_a_scope_root_is_not_opened`, `test_a_root_on_the_catalogs_data_drive_is_refused`, `test_a_catalog_moved_onto_a_scanned_data_drive_is_not_opened`, and the system-drive cases), `test_cli.py`, `test_gui_shell.py`; R3 | **Partial**: met for the catalog ([F-03](#f-03)); the export root waits for M8 |
+| SR-05 | UN-1 | An end-to-end regression shows media unchanged after every stage. | `test_no_touch.py` snapshots a fixture tree, runs scan ×2, hash, verify, reports and browse, then re-snapshots. | Linux + Windows CI; the cycle runs under the audit-hook guard | **Partial**: access times asserted only on POSIX with `O_NOATIME`; helper, USN and delta paths not exercised |
 | SR-06 | UN-8 | Cloud placeholders are never opened, and are catalogued by metadata. | `open_read` refuses `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` (`fsio.py:368`); scanner marks `skipped-dehydrated`; hash candidates require `read_state='ok'`. | `test_cloud_placeholders_are_never_opened`, `test_dehydrated_files_are_catalogued_but_not_opened`, `test_hashing_refuses_cloud_placeholders` | **Partial**: "never opened" met; "catalogued" fails when the reparse attribute is visible ([F-11](#f-11)) |
 | SR-07 | UN-8 | No outbound network connections. | No network modules imported anywhere in `drivefusion/`. | Inspection only (no lint rule) | **Met**, not enforced |
 | SR-08 | UN-5 | Only explicitly added roots are scanned; nested roots refused; links not traversed; OS churn excluded. | `scope/registry.py` (`validate_new_root`, `ExclusionSet`); walker refuses to descend reparse points. | `test_scope.py`, `test_enum_batchwalk.py` | **Met** |
@@ -149,7 +149,7 @@ implemented as a library with no user-facing entry point.
 | SR-15 | UN-6 | Before anything is elevated, the binary is proven to be the genuine helper and its arguments can't be reinterpreted. | `elevation.request` checks the filename equals `dfscan-helper.exe` and the file exists; parameters `" ".join(...)` (`elevation.py:130–170`). | `test_gui_shell.py` (rejects a wrong filename) | **Partial**: no signature or hash check, no quoting ([F-07](#f-07)). Latent: no caller |
 | SR-16 | UN-6 | Elevation is offered per scan, and consent is recorded. | `elevation.request` exists; **no GUI or CLI code calls it**; `scan.elevated` is always written as 0. | n/a | **Unwired** ([F-09](#f-09)) |
 | SR-17 | UN-2 | An NTFS rescan reads only what changed (USN delta). | `core/enum/delta.apply_delta`, journal validity logic, helper protocol, all unit-tested; **not called by `cmd_scan` or the GUI**; `decide()` returns `walk` whenever not elevated. | `test_enum_delta.py`, `test_enum_journal.py`, `test_enum_helper.py` | **Unwired** |
-| SR-18 | UN-7 | A schema migration first takes a consistent backup of the catalog. | `shutil.copy2` of the main file after opening in WAL mode (`schema.py:322`). | None | **Partial** ([F-10](#f-10)) |
+| SR-18 | UN-7 | A schema migration first takes a consistent backup of the catalog. | `schema.backup_catalog` snapshots through `Connection.backup()` on the open connection, to a temporary name renamed when complete. | `test_store.py` (`test_backup_includes_transactions_still_in_the_wal`); R10 | **Met** ([F-10](#f-10)) |
 | SR-19 | UN-7 | A failed or cancelled scan leaves the previous catalog state. | Staging + one-transaction merge; rollback on exception. | `test_scanner.py`, `test_store.py` | **Met**. Staged rows of a cancelled scan are left behind in `stage_file` |
 | SR-20 | UN-9 | Per-volume staleness is shown truthfully. | `describe_age(volume.last_seen_at)`; `last_seen_at` only changes in `upsert_volume`, which runs at `scope add`. | None | **Not met** ([F-12](#f-12)) |
 | SR-21 | UN-9 | Unknown copy counts are shown as unknown. | GUI renders "—" for files without `content_id`; CLI report prints the unhashed count. | `test_unhashed_files_show_copies_as_unknown` | **Met** |
@@ -164,8 +164,8 @@ implemented as a library with no user-facing entry point.
 ```mermaid
 pie showData
     title Requirement status (28 requirements)
-    "Met" : 12
-    "Partial" : 10
+    "Met" : 14
+    "Partial" : 8
     "Not met" : 1
     "Unwired" : 2
     "Planned" : 3
@@ -323,6 +323,16 @@ until M8) and the scan-time exclusion of the catalog's directory. Tests: `test_s
 `test_cli.py`, `test_gui_shell.py`. R3 now reports the refused `add_scope_root` instead of
 scanning.
 
+**Extended to the whole drive (2026-10-28, ROADMAP D8).** The catalog may not be on a volume
+that holds any enabled root, except the system drive, where it may sit anywhere outside the
+roots. `Catalog()` compares its own volume (`discovery.volume_guid_of`) with each enabled
+root's recorded `volume_guid` before connecting and again after. `add_scope_root`, `scope add`
+and the GUI refuse a root on the catalog's volume, and the CLI and GUI do so before recording
+the volume. If the system drive can't be identified, no exception is made. A catalog whose own
+volume can't be identified is allowed: every root is on an identified local volume, so the
+catalog can't be on one of them. Tests: `test_store.py` (7 cases on two simulated drives),
+`test_cli.py`, `test_gui_shell.py`.
+
 <a id="f-04"></a>
 ### F-04 · High · Single-copy files of unique size are missing from "under-protected"
 
@@ -452,6 +462,19 @@ filesystem modules with a non-literal name. Optionally add a runtime audit hook
 (`sys.addaudithook`) in tests that fails on `open` events with write modes, and on
 `os.remove`, `os.rename` and `subprocess.Popen`, outside the catalog directory.
 
+**Status: fixed (2026-10-28).** `tools/ro_lint.py` gains rules DF008–DF013:
+process launches outside `PROCESS_LAUNCH_MODULES`, an allowlist whose entries each state why
+they may start a process (today `helper/client.py` and `gui/elevation.py`); descriptor
+writes; `io.open`/`io.FileIO`/`os.fdopen`/`codecs.open` held to `"rb"`; `os.open` flags
+that can't be proven read-only; `sqlite3.connect` outside `core/store`; Win32 mutators by
+name and as string literals; and `getattr`/`__import__` indirection. Every R8 probe is now
+caught. The no-touch cycle also runs under a `sys.addaudithook` guard
+(`tests/fixtures/audit_guard.py`) that refuses and records any write, rename, remove, metadata
+change or `sqlite3.connect` under the fixture tree, and any process launch, on every thread.
+Tests: `test_ro_lint.py` (each rule both ways), `test_no_touch.py` (the guard stops each kind
+of change before it happens, and records one that is swallowed). Residual: a computed name on
+an arbitrary receiver (`getattr(dll, name)`), and `ctypes` calls, which raise no audit event.
+
 <a id="f-09"></a>
 ### F-09 · Medium · Documentation described unwired or unimplemented features as done
 
@@ -486,6 +509,12 @@ table".
 
 **Fix.** Use `sqlite3.Connection.backup()` or `VACUUM INTO 'target'`. Both produce a
 transactionally consistent snapshot that includes WAL content.
+
+**Status: fixed (2026-10-28).** `backup_catalog(conn, path)` uses SQLite's online backup
+API on the open connection, writing to `<name>.partial` and renaming when complete. It still
+never replaces an existing backup. Tests: `test_store.py`
+(`test_backup_includes_transactions_still_in_the_wal`,
+`test_backup_never_replaces_an_existing_backup`). R10 now exercises `backup_catalog` itself.
 
 <a id="f-11"></a>
 ### F-11 · Medium · Placeholders with a visible reparse attribute are dropped, not catalogued
@@ -557,6 +586,13 @@ undefined behaviour.
 **Fix.** Declare `argtypes` and `restype = wintypes.HANDLE` for every Win32 call, as
 `fsio._open_fd_windows` already does.
 
+**Status: fixed (2026-10-28).** `winio.kernel32()` is one cached `WinDLL` with `argtypes`
+and `restype` declared for `CreateFileW`, `CloseHandle`, `DeviceIoControl` and
+`GetFileInformationByHandleEx`; `dirinfo.py` uses it rather than its own undeclared instance.
+`discovery/windows.py` declares the same, plus `FindFirstVolumeW`, `FindNextVolumeW` and
+`FindVolumeClose`. Tests: `test_win32_signatures.py`, which runs on any platform against a
+stand-in `WinDLL`. R9 now checks the declaration instead of the general `ctypes` fact.
+
 <a id="f-15"></a>
 ### F-15 · Low · Coverage line counts directories as files
 
@@ -577,6 +613,16 @@ link points to. Fix: after opening, check the attributes of the *handle*
 (`GetFileInformationByHandle`, or `fstat`), and refuse if they show a reparse point or a
 recall attribute.
 
+
+**Status: fixed (2026-10-28).** `open_read` refuses a path whose own `lstat` says it is a
+link, opens with `O_NOFOLLOW` on POSIX, then `fstat`s the opened descriptor and closes it
+unread if it is a directory, shows recall attributes, or is not the same `(device, inode)`
+as the file checked before opening. On Windows `os.fstat` reads the handle's attributes,
+volume serial and file index, so the identity check covers a path swapped for a link there
+too. Reparse points as such are *not* refused, because hydrated cloud files and
+deduplicated files carry one (F-11). Tests: `test_fsio.py` (a link; a file swapped for a
+link after the check; a handle with a different identity, closed; a handle showing recall
+attributes). Reproduction: R13.
 ---
 
 ## 4. Strengths worth keeping
@@ -631,4 +677,6 @@ python tools/review_repro.py     # prints R1–R12 with FOUND / NOT FOUND
 The script runs in temporary directories only. As each defect is fixed, its line should flip
 to `NOT FOUND`; at that point the corresponding check belongs in the regular test suite.
 R1–R4 print `NOT FOUND` as of 2026-10-28, and their checks are in `tests/`. R3 now expects
-`add_scope_root` to refuse the root and reports that refusal.
+`add_scope_root` to refuse the root and reports that refusal. After Track A item A2, R8 (every
+probe), R9, R10 and R13 also print `NOT FOUND` or `caught`. R5, R6, R7, R11 and R12 remain
+`FOUND` and are scheduled in ROADMAP Track A (A1, A3).

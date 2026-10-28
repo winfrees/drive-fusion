@@ -85,6 +85,51 @@ def test_upgrades_an_older_catalog_in_place(tmp_path: Path) -> None:
     assert list(tmp_path.glob("old.db.*.bak"))
 
 
+def test_backup_includes_transactions_still_in_the_wal(tmp_path: Path) -> None:
+    """REVIEW F-10: committed rows not yet checkpointed must reach the backup.
+
+    A plain copy of the main file misses them, and can miss the schema too.
+    """
+    path = tmp_path / "catalog.db"
+    live = sqlite3.connect(str(path), isolation_level=None)
+    live.execute("PRAGMA journal_mode=WAL")
+    live.execute("PRAGMA wal_autocheckpoint=0")   # keep everything in -wal
+    live.execute("CREATE TABLE t (x)")
+    live.execute("INSERT INTO t VALUES (1), (2), (3)")
+    assert (tmp_path / "catalog.db-wal").stat().st_size > 0
+
+    target = schema.backup_catalog(live, path)
+    live.close()
+
+    assert target is not None and target.exists()
+    assert not list(tmp_path.glob("*.partial"))
+    backup = sqlite3.connect(str(target))
+    try:
+        assert backup.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
+    finally:
+        backup.close()
+
+
+def test_backup_never_replaces_an_existing_backup(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "catalog.db"
+    live = sqlite3.connect(str(path))
+    live.execute("CREATE TABLE t (x)")
+    live.commit()
+
+    class FixedClock:
+        @staticmethod
+        def now(tz=None):
+            from datetime import datetime
+            return datetime(2026, 1, 1, tzinfo=tz)
+
+    monkeypatch.setattr(schema, "datetime", FixedClock)
+    first = schema.backup_catalog(live, path)
+    first.write_bytes(b"earlier backup")
+    assert schema.backup_catalog(live, path) == first
+    assert first.read_bytes() == b"earlier backup"
+    live.close()
+
+
 def test_future_schema_is_refused(tmp_path: Path) -> None:
     """A newer catalog must not be silently downgraded."""
     path = tmp_path / "catalog.db"
@@ -450,3 +495,134 @@ def test_a_catalog_beside_a_scope_root_opens(tmp_path: Path) -> None:
         catalog.add_scope_root(volume_id, str(tree))
     with Catalog(path) as reopened:
         assert len(reopened.scope_roots()) == 1
+
+
+# -- the catalog's drive (ROADMAP D8) ------------------------------------------
+#
+# The catalog may not live on a drive that holds a scanned folder, except the
+# system drive, where it may sit anywhere outside the scanned folders.
+
+@pytest.fixture
+def drives(tmp_path: Path, monkeypatch):
+    """Two simulated drives: ``system/`` is the system drive, ``data/`` is not.
+
+    ``volume_guid_of`` answers by which folder a path is under, as discovery
+    would by which volume it is on.
+    """
+    from drivefusion.core import discovery
+
+    system, data = tmp_path / "system", tmp_path / "data"
+    system.mkdir()
+    data.mkdir()
+
+    def volume_guid_of(path: str) -> str:
+        resolved = Path(path).resolve()
+        for root, guid in ((system, "vol:system"), (data, "vol:data")):
+            if resolved == root.resolve() or root.resolve() in resolved.parents:
+                return guid
+        return "vol:elsewhere"
+
+    monkeypatch.setattr(discovery, "volume_guid_of", volume_guid_of)
+    monkeypatch.setattr(discovery, "system_volume_guid", lambda: "vol:system")
+    return system, data
+
+
+def test_a_root_on_the_catalogs_data_drive_is_refused(drives) -> None:
+    from drivefusion.core.errors import CatalogLocationError
+
+    _system, data = drives
+    (data / "Research").mkdir()
+    with Catalog(data / "DriveFusion" / "catalog.db") as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:data")
+        with pytest.raises(CatalogLocationError, match="same drive as the catalog"):
+            catalog.add_scope_root(volume_id, str(data / "Research"))
+        assert catalog.scope_roots() == []
+
+
+def test_a_folder_on_the_system_drive_may_be_scanned_with_the_catalog_there(drives) -> None:
+    system, _data = drives
+    (system / "Users" / "me" / "Research").mkdir(parents=True)
+    catalog_path = system / "Users" / "me" / ".drivefusion" / "catalog.db"
+    with Catalog(catalog_path) as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:system")
+        catalog.add_scope_root(volume_id, str(system / "Users" / "me" / "Research"))
+    with Catalog(catalog_path) as reopened:
+        assert len(reopened.scope_roots()) == 1
+
+
+def test_the_whole_system_drive_leaves_no_room_for_the_catalog(drives) -> None:
+    """Scanning all of the system drive puts the catalog inside the scan."""
+    from drivefusion.core.errors import CatalogLocationError
+
+    system, _data = drives
+    with Catalog(system / "Users" / "me" / ".drivefusion" / "catalog.db") as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:system")
+        with pytest.raises(CatalogLocationError, match="contains the catalog"):
+            catalog.add_scope_root(volume_id, str(system))
+
+
+def test_a_root_on_another_drive_is_fine(drives) -> None:
+    system, data = drives
+    (data / "Research").mkdir()
+    with Catalog(system / "catalog.db") as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:data")
+        catalog.add_scope_root(volume_id, str(data / "Research"))
+        assert len(catalog.scope_roots()) == 1
+
+
+def test_a_catalog_moved_onto_a_scanned_data_drive_is_not_opened(drives) -> None:
+    """Refused before connecting, so nothing at all is written to that drive."""
+    from drivefusion.core.errors import CatalogLocationError
+
+    system, data = drives
+    (data / "Research").mkdir()
+    original = system / "catalog.db"
+    with Catalog(original) as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:data")
+        catalog.add_scope_root(volume_id, str(data / "Research"))
+
+    # The user later points the tool at a copy kept on the data drive.
+    moved = data / "Backups" / "catalog.db"
+    moved.parent.mkdir()
+    moved.write_bytes(original.read_bytes())
+    before = sorted(p.name for p in moved.parent.iterdir())
+
+    with pytest.raises(CatalogLocationError, match="same drive as scope root"):
+        Catalog(moved)
+    assert sorted(p.name for p in moved.parent.iterdir()) == before
+
+
+def test_a_catalog_on_an_unidentifiable_volume_opens(drives, monkeypatch) -> None:
+    """A network share, say: every root is on an identified local volume."""
+    from drivefusion.core import discovery
+
+    system, data = drives
+    (data / "Research").mkdir()
+    path = system / "catalog.db"
+    with Catalog(path) as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:data")
+        catalog.add_scope_root(volume_id, str(data / "Research"))
+
+    def unidentifiable(_path: str) -> str:
+        raise discovery.DiscoveryError("no volume GUID for a network path")
+
+    monkeypatch.setattr(discovery, "volume_guid_of", unidentifiable)
+    with Catalog(path) as reopened:
+        assert len(reopened.scope_roots()) == 1
+
+
+def test_an_unknown_system_drive_grants_no_exception(drives, monkeypatch) -> None:
+    from drivefusion.core import discovery
+    from drivefusion.core.errors import CatalogLocationError
+
+    system, _data = drives
+    (system / "Research").mkdir()
+
+    def unknown() -> str:
+        raise discovery.DiscoveryError("SystemRoot unresolvable")
+
+    monkeypatch.setattr(discovery, "system_volume_guid", unknown)
+    with Catalog(system / "DriveFusion" / "catalog.db") as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="vol:system")
+        with pytest.raises(CatalogLocationError, match="same drive"):
+            catalog.add_scope_root(volume_id, str(system / "Research"))
