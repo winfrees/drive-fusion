@@ -81,6 +81,21 @@ python -m drivefusion --help
 pyinstaller packaging/drivefusion.spec --noconfirm --clean
 ```
 
+### V&V tests
+
+`python -m vv` generates randomized test drives full of the cases Drive Fusion has to get right
+(copies, same-name-different-bytes, empty files and folders, hardlinks, exclusions, deep paths,
+edits, moves, silent corruption…), runs a Drive Fusion version through scan → rescan → verify,
+and reports pass/fail per requirement against [docs/PLAN.md](docs/PLAN.md).
+
+```bash
+python -m vv all --out ../vv/run1 --drives 6                       # simulated drives
+python -m vv all --out ../vv/phys --drive-path D01=E:\DriveFusionVV --drive-path D02=F:\DriveFusionVV
+python -m vv reset ../vv/run1 && python -m vv run ../vv/run1 --drivefusion-src ../other-checkout
+```
+
+See [docs/VV.md](docs/VV.md) for the requirements, dataset design, and how to read a report.
+
 The VHDX volume tests need Windows and administrator rights (they call `diskpart`) and skip
 everywhere else. The GUI tests run headless under `QT_QPA_PLATFORM=offscreen` on both
 platforms; CI installs Qt's runtime libraries and then asserts Qt can actually start, because a
@@ -101,3 +116,6 @@ the tool does not do that — it emits a plan describing what *you* might do.
 [docs/PLAN.md](docs/PLAN.md) — the full build plan: read-only guarantees, scan scope, Windows
 enumeration strategy, data model and performance budgets at 50M files, durability scoring,
 FAIR/NDSA scorecards, the placement planner, and milestones M0–M8.
+
+[docs/VV.md](docs/VV.md) — verification and validation: testable requirements traced to the
+plan, the randomized drive datasets (simulated or physical), the oracle, and the V&V tests.
