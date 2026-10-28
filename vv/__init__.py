@@ -19,4 +19,4 @@ Three stages, each a subcommand of ``python -m vv`` (see docs/VV.md):
               docs/PLAN.md.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

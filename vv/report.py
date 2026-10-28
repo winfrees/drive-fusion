@@ -48,7 +48,10 @@ def markdown(manifest: dict, observed: dict, results: list[dict]) -> str:
         f"| Adapter | {observed.get('adapter', '?')} |",
         f"| Dataset seed | `{manifest['seed']}` |",
         f"| Drive mode | {manifest['mode']} |",
-        f"| Drives | " + ", ".join(f"{d['id']} {d['fs']}" for d in manifest["drives"]) + " |",
+        f"| Drives | " + ", ".join(
+            f"{d['id']} {d['fs']}" + (f" {d['capacity_bytes'] / 1e6:,.0f} MB"
+                                      if d.get("capacity_bytes") else "")
+            for d in manifest["drives"]) + " |",
         f"| Files / dirs / distinct contents | {len(manifest['files']):,} / {len(manifest['dirs']):,}"
         f" / {len(manifest['contents']):,} |",
         f"| Copy policy | {observed.get('min_copies', 2)} copies on distinct drives |",
@@ -103,6 +106,8 @@ def _params_cli(manifest: dict) -> str:
         parts += [f"--drive-path {d['id']}=<path>" for d in manifest["drives"]]
     else:
         parts.insert(0, f"--drives {len(manifest['drives'])}")
+        # Exact bytes, so the refit lands on the same scale and the same data.
+        parts += [f"--drive-size {d}={n}" for d, n in sorted(p.get("drive_sizes", {}).items())]
     return " ".join(parts) + " --out <new folder>"
 
 

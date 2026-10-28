@@ -118,6 +118,88 @@ def test_reset_will_not_delete_what_it_did_not_create(tmp_path: Path) -> None:
     assert stranger.read_bytes() == b"keep me"
 
 
+# -- drive sizes -------------------------------------------------------------
+
+def test_sizes_read_as_drive_makers_write_them() -> None:
+    from vv.__main__ import parse_size
+
+    assert parse_size("500MB") == 500_000_000
+    assert parse_size("1.5GB") == 1_500_000_000
+    assert parse_size("64GiB") == 64 * 2**30
+    assert parse_size("4096") == 4096
+    for bad in ("12XB", "MB", "-5MB", "0"):
+        with pytest.raises(Exception):
+            parse_size(bad)
+
+
+def test_a_drive_override_wins_whatever_the_order() -> None:
+    from vv.__main__ import _drive_sizes
+
+    sizes = _drive_sizes(["D02=25MB", "40MB"], ["D01", "D02", "D03"], "simulated")
+    assert sizes == {"D01": 40_000_000, "D02": 25_000_000, "D03": 40_000_000}
+
+
+def test_simulated_drives_fit_the_size_they_were_given(tmp_path: Path) -> None:
+    from vv import generator
+    from vv.adapter import DriveFusionAdapter
+
+    manifest = _generate(tmp_path / "ds", "--drives", "3", "--drive-size", "20MB",
+                         "--drive-size", "D02=12MB")
+    seed = manifest["seed"]
+    assert manifest["params"]["size_scale"] < 1, f"seed {seed}: nothing had to shrink"
+    fits = generator.footprints(manifest)
+    for d in manifest["drives"]:
+        assert fits[d["id"]]["capacity_peak"] <= d["capacity_bytes"], f"seed {seed}: {d['id']}"
+        on_disk = sum(p.stat().st_size for p in Path(d["root"]).rglob("*")
+                      if p.is_file() and not p.is_symlink())
+        assert on_disk <= d["capacity_bytes"], f"seed {seed}: {d['id']} holds {on_disk}"
+
+    # Every requirement is still planted in a shrunk dataset, tier 2 included.
+    assert any(s["kind"] == "same-name-hidden-diff" for s in manifest["scenarios"])
+    assert any(c["size"] > oracle.SMALL_FILE_BYTES for c in manifest["contents"].values())
+
+    # And Drive Fusion is told the size, as discovery would tell it a real one.
+    adapter = DriveFusionAdapter(str(tmp_path / "cat.db"))
+    try:
+        adapter.register(manifest)
+        volumes = {r["label"]: r for r in adapter.catalog.volumes()}
+    finally:
+        adapter.close()
+    d02 = volumes["VV-D02"]
+    assert d02["capacity_bytes"] == 12_000_000
+    assert 0 < d02["free_bytes"] < 12_000_000
+    assert d02["cluster_bytes"] == 4096
+
+
+def test_a_drive_too_small_for_the_file_count_is_refused_cleanly(tmp_path: Path) -> None:
+    out = tmp_path / "ds"
+    assert vv_main(["generate", "--out", str(out), *SMALL, "--drive-size", "200KB"]) == 2
+    assert not out.exists(), "refused, but left folders behind"
+
+
+def test_a_dataset_that_would_crowd_the_host_disk_is_refused(tmp_path: Path, monkeypatch) -> None:
+    from collections import namedtuple
+
+    from vv import fsops
+
+    usage = namedtuple("usage", "total used free")
+    # A 10 GiB disk with 5 MiB free: the dataset and the reserve cannot both fit.
+    monkeypatch.setattr(fsops.shutil, "disk_usage",
+                        lambda _p: usage(10 * 2**30, 10 * 2**30 - 5 * 2**20, 5 * 2**20))
+    out = tmp_path / "ds"
+    assert vv_main(["generate", "--out", str(out), *SMALL, "--drives", "2"]) == 2
+    assert not out.exists(), "refused, but left folders behind"
+
+
+def test_cluster_sizes_follow_windows_defaults() -> None:
+    from vv.generator import default_cluster_bytes
+
+    assert default_cluster_bytes("NTFS", 2 * 10**12) == 4096
+    assert default_cluster_bytes("exFAT", 100 * 10**6) == 4096
+    assert default_cluster_bytes("exFAT", 16 * 2**30) == 32 * 1024
+    assert default_cluster_bytes("exFAT", 2 * 10**12) == 128 * 1024
+
+
 # -- the oracle --------------------------------------------------------------
 
 def test_oracle_counts_drives_not_paths_and_links_once() -> None:
@@ -150,6 +232,20 @@ def test_oracle_counts_drives_not_paths_and_links_once() -> None:
     assert ("D1", "e1") not in base["singles"], "an empty file is not a copy of anything"
     # Unknown means "could still be a copy": only the two shared-size empty files.
     assert base["summary"]["unhashed_files"] == 2
+
+
+def test_oracle_treats_a_recreated_folder_as_live() -> None:
+    """A folder deleted between scans and then recreated exists at the rescan."""
+    manifest = {
+        "contents": {}, "files": [], "drives": [{"id": "D1"}],
+        "dirs": [{"drive": "D1", "path": "a"}, {"drive": "D1", "path": "a/b"}],
+        "excluded": {"roots": [], "dirs": [], "files": []}, "links": [], "corruptions": [],
+        "mutations": [{"op": "rmtree", "drive": "D1", "path": "a", "scenario": "S1"},
+                      {"op": "mkdir", "drive": "D1", "path": "a/new", "scenario": "S2"}],
+    }
+    rescan = oracle.expectations(manifest)["rescan"]
+    assert rescan["dirs"] == {("D1", "a"), ("D1", "a/new")}
+    assert rescan["vanished_dirs"] == {("D1", "a/b")}
 
 
 # -- the evaluator -----------------------------------------------------------

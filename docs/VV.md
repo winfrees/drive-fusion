@@ -23,6 +23,9 @@ last point is asserted in `tests/test_vv.py`.
 # Simulated: N folders on one disk, each registered as its own physical drive
 python -m vv all --out D:\vv\run1 --drives 6
 
+# Simulated, each drive capped at 2 GB (one at 500 MB) so the host disk is not crowded
+python -m vv all --out D:\vv\run2 --drives 6 --drive-size 2GB --drive-size D03=500MB
+
 # Physical: one empty folder per real device (one --drive-path per drive)
 python -m vv all --out C:\vv\phys1 ^
     --drive-path D01=E:\DriveFusionVV  --drive-path D02=F:\DriveFusionVV ^
@@ -36,7 +39,7 @@ target folder, a drive that is missing).
 
 | Command | What it does |
 |---|---|
-| `generate --out DIR [--drives N \| --drive-path [Dnn=]PATH …] [--seed S] [--files-per-drive K] [--large-files L]` | Build a fresh randomized dataset and its ground-truth `manifest.json` |
+| `generate --out DIR [--drives N [--drive-size [Dnn=]SIZE …] \| --drive-path [Dnn=]PATH …] [--seed S] [--files-per-drive K] [--large-files L]` | Build a fresh randomized dataset and its ground-truth `manifest.json` |
 | `run DIR [--drivefusion-src CHECKOUT] [--drive-path Dnn=PATH] [--min-copies 2]` | Run a Drive Fusion version through the dataset and judge it |
 | `evaluate DIR [--observed observed.json]` | Re-judge the latest run, or any `observed.json` |
 | `reset DIR [--drive-path Dnn=PATH]` | Restore a used dataset to exactly its generated state |
@@ -53,7 +56,43 @@ two versions are measured against **the same** data (§6).
 | Where the drives are | `<out>/drives/D01 … Dnn` on one disk | One empty folder per real device |
 | How Drive Fusion sees them | Each folder is registered as its own volume on its own drive, with a mock maker, model and serial. The product's own redundancy tests stand in for many drives the same way | Drive Fusion's real discovery identifies each one, exactly as `drivefusion scope add` does |
 | Filesystems | Labelled NTFS or exFAT, ~50/50, as §1 specifies. exFAT-labelled drives get no hardlinks or symlinks, as on real exFAT | Whatever the device really is: NTFS, exFAT, FAT32, ext4… |
+| Size | Unlimited by default, or set with `--drive-size` (§2.1). Registered as the drive's capacity | What Windows reports for the volume |
 | Guard | — | **Refused** at `generate` and again at `run` if two roots resolve to the same physical device. Two folders on one thumb drive are one copy, so Drive Fusion would be right to count one, and every cross-drive expectation would be wrong |
+
+### 2.1 Drive sizes and disk space
+
+**`--drive-size` (simulated only)** gives every simulated drive a capacity:
+`--drive-size 2GB` for all of them, `--drive-size D03=500MB` for one. An override wins
+whatever order the flags come in. KB/MB/GB/TB are decimal, as drive makers label them;
+KiB/MiB/GiB/TiB are binary.
+
+- **The dataset is planned to fit.** Each drive's peak footprint is computed: the baseline
+  files plus everything added or grown between scans, every file rounded up to whole clusters.
+  If any drive is over its size, all file sizes are scaled down and the plan is rebuilt, until
+  every drive fits. Copies share content across drives, so one scale applies to all of them,
+  and the smallest drive sets it. The generator prints the scale it used; `size_scale` is in
+  the manifest, and the reproduce command in every report rebuilds the same dataset at the
+  same scale.
+- **Shrinking never removes a test.** Sizes meant to exercise the tier-2 full hash never shrink
+  below twice the quick hash's small-file threshold (384 KiB). A smaller drive gets smaller
+  large files, never none.
+- **Too small is refused, cleanly.** File and folder *counts* set a floor: each takes at least
+  one cluster. Below it, `generate` says how much the drive needs, suggests a larger size or a
+  smaller `--files-per-drive`, and removes the folders it created.
+- **Drive Fusion sees a real-looking drive.** The size is registered as the drive's capacity,
+  free space as that size minus the baseline data, and the cluster size as Windows' format
+  default for that filesystem and size: NTFS 4 KiB; exFAT 4 KiB up to 256 MB, 32 KiB up to
+  32 GB, 128 KiB above. A simulated exFAT drive therefore carries the cluster slack a real one
+  would (PLAN §6.7).
+
+Without `--drive-size`, simulated drives have no capacity in the catalog. The Drives screen
+shows them as unknown rather than inventing a number.
+
+**Free space is checked in both modes, before anything is written.** Each location's peak
+host usage is summed per filesystem; simulated drives all share the host disk. Every
+filesystem must keep a reserve free afterwards: a tenth of its size, capped at 1 GiB. A
+dataset that would break that reserve on the host disk, or on a physical thumb drive, is
+refused, and the folders created for it are removed.
 
 **Preparing physical drives.** Give each device an empty folder, such as
 `E:\DriveFusionVV`; the drive root itself already holds `System Volume Information`. The

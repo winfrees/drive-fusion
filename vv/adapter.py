@@ -96,16 +96,23 @@ class DriveFusionAdapter:
                 }
                 file_ids = volume.supports_file_ids
             else:
+                # A simulated drive's size is the one it was generated to fit,
+                # and its free space what is left after the baseline dataset —
+                # what discovery would have reported for a real drive this size.
+                capacity = drive.get("capacity_bytes")
+                free = capacity - drive.get("baseline_bytes", 0) if capacity else None
                 drive_id = cat.upsert_drive(
                     serial=f"VV-{manifest['seed']}-{drive['serial']}",
                     model=drive["model"], manufacturer=drive["manufacturer"],
-                    media=drive["media"], bus="usb", nickname=drive["label"])
+                    media=drive["media"], bus="usb", nickname=drive["label"],
+                    capacity_bytes=capacity)
                 file_ids = drive["fs"] == "NTFS"
                 volume_id = cat.upsert_volume(
                     volume_guid=f"vv:{manifest['seed']}:{drive['id']}", label=drive["label"],
                     fs_type=drive["fs"], drive_id=drive_id, supports_usn=0,
                     supports_file_ids=int(file_ids), supports_hardlink=int(drive["fs"] == "NTFS"),
-                    rescan_cost="full-walk")
+                    capacity_bytes=capacity, free_bytes=free,
+                    cluster_bytes=drive.get("cluster_bytes"), rescan_cost="full-walk")
                 device = f"simulated:{drive['serial']}"
             cat.conn.commit()
             root_id = cat.add_scope_root(volume_id, root)
