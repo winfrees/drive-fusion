@@ -6,7 +6,7 @@
 | **Focus** | (1) safety of user data on catalogued media, (2) correctness of the file and redundancy facts the tool reports, (3) security of the privileged and packaging surface |
 | **Method** | Every source module read in full; lint and full test suite run on Linux (291 passed, 5 Windows-only skipped) and checked against the latest Windows CI log (293 passed, 3 skipped); every finding below reproduced with [`tools/review_repro.py`](../tools/review_repro.py) or shown directly in code. Each claim was checked three times: against the code, against a running reproduction, and against the test that would be expected to catch it |
 | **Date** | 2026-10-27 |
-| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed |
+| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed. Re-checked at `ce03f64` the same day: R5–R12 still `FOUND`, so F-05 … F-16 stay open. [ROADMAP.md](ROADMAP.md) Track A schedules them |
 
 ---
 
