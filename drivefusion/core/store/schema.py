@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS fixity_check (
     checked_at      TEXT NOT NULL,
     expected_hash   BLOB,
     observed_hash   BLOB,
-    result          TEXT NOT NULL   -- ok|mismatch|unreadable|missing
+    result          TEXT NOT NULL   -- ok|mismatch|unreadable|missing|modified (edited since the last scan)
 );
 CREATE INDEX IF NOT EXISTS ix_fixity_result ON fixity_check(result)
     WHERE result != 'ok';

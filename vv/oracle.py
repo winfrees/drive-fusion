@@ -224,8 +224,12 @@ def expectations(manifest: dict, *, min_copies: int = 2) -> dict:
     }
 
     corrupted = {(c["drive"], c["path"]) for c in manifest["corruptions"]}
+    edited = {(e["drive"], e["path"]) for e in manifest.get("late_edits", [])}
     verify = {
         "corrupted": corrupted,
+        # Edited after the rescan with a new date: modified, not checked (§8.1,
+        # REVIEW F-06), so they are left out of the verifiable floor below.
+        "edited": edited,
         "holding_drives": {
             k: rescan["groups"][files[k]["content"]]["drives"] for k in corrupted
         },
@@ -233,7 +237,8 @@ def expectations(manifest: dict, *, min_copies: int = 2) -> dict:
         # every byte); large ones only when a full hash exists, which the spec
         # guarantees for the corrupted ones because they were chosen from
         # duplicate groups. This is therefore a floor, not an exact count.
-        "min_checked": sum(1 for k in ident if files[k]["size"] <= SMALL_FILE_BYTES)
+        "min_checked": sum(1 for k in ident
+                           if files[k]["size"] <= SMALL_FILE_BYTES and k not in edited)
         + sum(1 for k in corrupted if files[k]["size"] > SMALL_FILE_BYTES),
     }
     return {"baseline": baseline, "rescan": rescan, "verify": verify,

@@ -250,7 +250,8 @@ def integrity_incidents(catalog: Catalog, *, limit: int = 100) -> list[dict]:
         "SELECT fc.result, fc.checked_at, f.dir_id, f.name, f.size_bytes, "
         "       fc.content_id "
         "FROM fixity_check fc JOIN file f ON f.id = fc.file_id "
-        "WHERE fc.result != 'ok' "
+        # 'modified' is an edit since the last scan, not a fixity failure.
+        "WHERE fc.result NOT IN ('ok', 'modified') "
         "ORDER BY fc.id DESC LIMIT ?",
         (limit,),
     )

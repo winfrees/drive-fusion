@@ -215,6 +215,48 @@ def test_dehydrated_files_are_catalogued_but_not_opened(
     assert row["read_state"] == "skipped-dehydrated"
 
 
+@pytest.mark.parametrize(
+    ("attributes", "tag", "read_state"),
+    [
+        # REVIEW F-11: a placeholder that shows the reparse attribute.
+        (0x400 | 0x00400000, 0x9000001A, "skipped-dehydrated"),
+        (0x400 | 0x00400000, 0, "skipped-dehydrated"),
+        (0x400, 0x9000001A, "ok"),        # downloaded cloud file
+        (0x400, 0x80000017, "ok"),        # WOF-compressed
+        (0x400, 0xA000000C, None),        # symlink: not catalogued
+    ],
+)
+def test_reparse_files_are_catalogued_unless_they_are_links(
+    catalog: Catalog, sample_tree: Path, monkeypatch, attributes, tag, read_state
+) -> None:
+    from drivefusion.core import fsio
+    from drivefusion.core.enum import batchwalk
+    from drivefusion.core.enum.records import DirEntry
+
+    def marked_lister(path: str) -> list[DirEntry]:
+        out = []
+        for entry in batchwalk.fsio_lister(path):
+            if entry.name == "report.txt":
+                entry = DirEntry(
+                    name=entry.name, attributes=attributes,
+                    size=entry.size, alloc_size=entry.alloc_size,
+                    mtime_ns=entry.mtime_ns, ctime_ns=entry.ctime_ns,
+                    file_id=entry.file_id, reparse_tag=tag,
+                )
+            out.append(entry)
+        return out
+
+    monkeypatch.setattr(fsio, "open_read", lambda *a, **k: pytest.fail("scan opened a file"))
+    result = scan(catalog, sample_tree, lister=marked_lister)
+    row = catalog.conn.execute(
+        "SELECT read_state FROM file WHERE name = 'report.txt'"
+    ).fetchone()
+    if read_state is None:
+        assert row is None and result["counters"].reparse_skipped >= 1
+    else:
+        assert row["read_state"] == read_state
+
+
 # -- unknown is not gone (docs/REVIEW.md F-02) --------------------------------
 
 def _live_names(catalog: Catalog) -> set[str]:
@@ -307,3 +349,56 @@ def rescan_with(catalog: Catalog, lister) -> dict:
         volume_id=stored.volume_id,
         lister=lister,
     )
+
+
+def test_last_scanned_comes_from_the_scan_not_from_scope_add(
+    catalog: Catalog, sample_tree: Path
+) -> None:
+    """REVIEW F-12: "last scanned" said when the volume was *added*."""
+    catalog.upsert_volume(volume_guid="test:1", fs_type="exfat")
+    catalog.conn.execute("UPDATE volume SET last_seen_at = '2000-01-01T00:00:00+00:00'")
+    assert catalog.volumes()[0]["last_scanned_at"] is None, "never scanned yet"
+    assert catalog.root_last_scanned() == {}
+
+    scan(catalog, sample_tree)
+    volume = catalog.volumes()[0]
+    assert volume["last_scanned_at"] and not volume["last_scanned_at"].startswith("2000")
+    [(root_id, when)] = catalog.root_last_scanned().items()
+    assert when == volume["last_scanned_at"]
+
+
+def test_a_failed_scan_does_not_count_as_scanned(catalog: Catalog, tmp_path: Path) -> None:
+    missing = tmp_path / "unplugged"
+    missing.mkdir()
+    volume_id = catalog.upsert_volume(volume_guid="f12:1")
+    root_id = catalog.add_scope_root(volume_id, str(missing))
+    missing.rmdir()
+    scan_root(catalog, root_path=str(missing), root_id=root_id, volume_id=volume_id)
+    assert catalog.volumes()[0]["last_scanned_at"] is None
+
+
+def test_cancel_takes_effect_within_a_small_tree(catalog: Catalog, tmp_path: Path) -> None:
+    """REVIEW F-13: a tree far under 10,000 files could not be cancelled at all."""
+    from drivefusion.core.errors import OperationCancelled
+
+    root = tmp_path / "tree"
+    for d in range(50):
+        (root / f"d{d}").mkdir(parents=True)
+        (root / f"d{d}" / "f.bin").write_bytes(b"x")
+    volume_id = catalog.upsert_volume(volume_guid="f13:1")
+    root_id = catalog.add_scope_root(volume_id, str(root))
+
+    calls = []
+
+    def cancel() -> None:
+        calls.append(1)
+        if len(calls) == 5:
+            raise OperationCancelled()
+
+    with pytest.raises(OperationCancelled):
+        scan_root(catalog, root_path=str(root), root_id=root_id, volume_id=volume_id,
+                  cancel=cancel)
+    assert len(calls) == 5, "checked once per directory, and stopped at once"
+    assert catalog.counts()["files"] == 0, "a cancelled scan merges nothing"
+    status = catalog.conn.execute("SELECT status FROM scan").fetchone()["status"]
+    assert status == "aborted"

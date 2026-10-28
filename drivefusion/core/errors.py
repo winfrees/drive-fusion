@@ -49,3 +49,12 @@ class RootRefusedError(DriveFusionError):
     root could not be listed at all. The message names each root and why; any
     other roots in the same pass were still processed.
     """
+
+
+class OperationCancelled(DriveFusionError):
+    """Raised by a ``cancel`` callback to stop a scan, hash or verify pass.
+
+    The passes call it between units of work: per directory listed, per file
+    read (docs/REVIEW.md F-13). A cancelled scan is rolled back and recorded
+    as ``aborted``; hashing keeps what it committed, as after any interruption.
+    """

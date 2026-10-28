@@ -188,6 +188,8 @@ def drive_inventory(catalog: Catalog) -> list[dict]:
         "SELECT v.id AS volume_id, v.volume_guid, v.label, v.fs_type, "
         "       v.capacity_bytes, v.free_bytes, v.cluster_bytes, v.rescan_cost, "
         "       v.last_seen_at, v.supports_usn, "
+        "       (SELECT MAX(s.finished_at) FROM scan s WHERE s.volume_id = v.id "
+        "         AND s.status = 'done') AS last_scanned_at, "
         "       d.id AS drive_id, d.serial, d.layout_id, d.identity, "
         "       d.model, d.manufacturer, d.bus, "
         "       d.media, d.purchase_date, d.nickname, d.location, d.role, "

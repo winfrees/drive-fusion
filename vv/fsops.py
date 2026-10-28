@@ -310,6 +310,25 @@ def apply_corruptions(manifest: dict) -> None:
             raise DatasetError(f"could not corrupt {path} silently: metadata changed")
 
 
+def apply_late_edits(manifest: dict) -> None:
+    """An ordinary edit after the rescan: bytes change, and so does the date.
+
+    Two seconds later, so a FAT-family filesystem stores the new time exactly.
+    """
+    roots = _roots(manifest)
+    for item in manifest.get("late_edits", []):
+        path = os_path(roots[item["drive"]], item["path"])
+        before = os.stat(path)
+        with open(path, "r+b") as handle:
+            handle.seek(item["offset"])
+            original = handle.read(1)
+            handle.seek(item["offset"])
+            handle.write(bytes([original[0] ^ 0xFF]))
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        if os.stat(path).st_mtime_ns == before.st_mtime_ns:
+            raise DatasetError(f"could not edit {path}: its date did not change")
+
+
 # -- the no-touch snapshot ---------------------------------------------------
 
 def _hash_file(path: str) -> str:

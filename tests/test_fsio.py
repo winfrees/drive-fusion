@@ -248,3 +248,28 @@ def test_a_handle_showing_recall_attributes_is_refused(sample_tree: Path, monkey
     monkeypatch.setattr(fsio.os, "fstat", lambda fd: Recalled(real_fstat(fd)))
     with pytest.raises(DehydratedFileError):
         fsio.open_read(target)
+
+
+# -- REVIEW F-11: which reparse points are links -------------------------------
+
+REPARSE = fsio.FILE_ATTRIBUTE_REPARSE_POINT
+RECALL = fsio.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+
+
+@pytest.mark.parametrize(
+    ("attributes", "tag", "is_dir", "skipped"),
+    [
+        (0, 0, False, False),                          # an ordinary file
+        (REPARSE, 0xA000000C, False, True),            # symlink
+        (REPARSE, 0xA0000003, True, True),             # junction / mount point
+        (REPARSE | RECALL, 0x9000001A, False, False),  # cloud placeholder: catalogued
+        (REPARSE, 0x9000001A, False, False),           # downloaded cloud file
+        (REPARSE, 0x80000013, False, False),           # deduplicated file
+        (REPARSE, 0x80000017, False, False),           # WOF-compressed file
+        (REPARSE, 0x9000001A, True, True),             # cloud folder: never traversed
+        (REPARSE | RECALL, 0, False, False),           # tag unknown, but a placeholder
+        (REPARSE, 0, False, True),                     # tag unknown: may be a link
+    ],
+)
+def test_only_name_surrogates_are_links(attributes, tag, is_dir, skipped) -> None:
+    assert fsio.skip_as_link(attributes, tag, is_dir=is_dir) is skipped

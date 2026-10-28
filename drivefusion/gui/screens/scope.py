@@ -106,6 +106,7 @@ class ScopeScreen(QWidget):
         self.tree.clear()
 
         roots = catalog.scope_roots()
+        scanned = catalog.root_last_scanned()
         for root in roots:
             volume = volumes.get(root.volume_id)
             item = QTreeWidgetItem(
@@ -114,7 +115,7 @@ class ScopeScreen(QWidget):
                     (volume["label"] or volume["volume_guid"]) if volume else "?",
                     (volume["fs_type"] or "?") if volume else "?",
                     (volume["rescan_cost"] or "?") if volume else "?",
-                    describe_age(volume["last_seen_at"] if volume else None),
+                    describe_age(scanned.get(root.id)),
                     ", ".join(root.excludes) or "—",
                 ]
             )
@@ -231,8 +232,6 @@ class ScopeScreen(QWidget):
                             f"{_path}: {counters.files:,} files", _index - 1, len(plan)
                         )
                     )
-                    # Checked per directory rather than per root, so Cancel takes
-                    # effect during a scan and not only between roots.
                     cancel.raised()
 
                 result = scan_root(
@@ -242,6 +241,7 @@ class ScopeScreen(QWidget):
                     volume_id=volume_id,
                     excludes=ExclusionSet.for_root(excludes),
                     progress=report,
+                    cancel=cancel.raised,       # per directory (REVIEW F-13)
                 )
                 if not result["root_listed"]:
                     problems.append(result["coverage"])

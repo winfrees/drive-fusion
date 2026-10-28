@@ -27,7 +27,7 @@ MANIFEST_SCHEMA = "drivefusion-vv-manifest/1"
 
 #: Which requirements each scenario kind exists to exercise.
 SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "filler": ("R-CAT-01",),
+    "filler": ("R-CAT-01", "R-CAT-08"),
     "cross-drive-copy": ("R-ID-01", "R-RED-01"),
     "all-drives-copy": ("R-ID-01", "R-RED-01", "R-RED-03"),
     "same-drive-dupes": ("R-RED-01", "R-RED-04"),
@@ -63,6 +63,7 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "rescan-rmtree": ("R-INC-02",),
     "rescan-mkdir": ("R-CAT-02",),
     "silent-corruption": ("R-FIX-01", "R-FIX-02", "R-FIX-03"),
+    "edit-before-verify": ("R-FIX-04",),
 }
 
 MANUFACTURERS = {
@@ -124,6 +125,7 @@ class Builder:
         self.unscoped: list[dict] = []
         self.mutations: list[dict] = []
         self.corruptions: list[dict] = []
+        self.late_edits: list[dict] = []
         self.scenarios: list[dict] = []
         self.sizes: Counter = Counter()
         self.reserved_unique: set[int] = set()
@@ -764,6 +766,18 @@ class Builder:
                                      "offset": self.rng.randrange(size)})
             s["members"].append([drive, path])
 
+        # R-FIX-04: an ordinary edit after the rescan, with a new date. Not
+        # corruption, and must not be reported as such.
+        others = [c for c in stable if c not in picks]
+        if not others:
+            return
+        s = self.scenario("edit-before-verify", "edited after the rescan; the date moves on")
+        for c in self.rng.sample(sorted(others), min(len(others), self.rng.randint(1, 2))):
+            drive, path = self.rng.choice(base["groups"][c]["paths"])
+            self.late_edits.append({"drive": drive, "path": path,
+                                    "offset": self.rng.randrange(base["groups"][c]["size"])})
+            s["members"].append([drive, path])
+
     # -- assembly -----------------------------------------------------------
 
     def manifest(self, mode: str, params: dict) -> dict:
@@ -785,6 +799,7 @@ class Builder:
             "unscoped": self.unscoped,
             "mutations": self.mutations,
             "corruptions": self.corruptions,
+            "late_edits": self.late_edits,
             "scenarios": self.scenarios,
         }
 

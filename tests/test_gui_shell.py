@@ -209,6 +209,39 @@ def test_a_failing_task_reports_instead_of_dying_silently(populated: Path) -> No
         assert "ValueError" in detail, "the traceback must reach the UI"
 
 
+def test_a_real_scan_stops_within_a_directory_of_cancel(window, populated: Path) -> None:
+    """REVIEW F-13, end to end: the scan body hands its Cancellation to the
+    scanner, which checks it per directory. A Cancellation that fires on its
+    second check must stop the scan inside the first root."""
+    from drivefusion.core.errors import OperationCancelled
+    from drivefusion.gui.workers import Cancellation
+
+    class SecondCheckCancels(Cancellation):
+        checks = 0
+
+        def raised(self) -> None:
+            SecondCheckCancels.checks += 1
+            if SecondCheckCancels.checks >= 3:  # one before the root, then per directory
+                raise OperationCancelled()
+
+    from drivefusion.core import discovery
+
+    with Catalog(populated) as catalog:
+        # The fixture's volume id is made up; make it the real one, so the
+        # root binds (REVIEW F-01) and the scan actually starts.
+        root = catalog.scope_roots()[0]
+        catalog.conn.execute(
+            "UPDATE volume SET volume_guid = ? WHERE id = ?",
+            (discovery.volume_guid_of(root.path), root.volume_id),
+        )
+    body = window.scope.scan_body()
+    with Catalog(populated) as catalog:
+        with pytest.raises(OperationCancelled):
+            body(catalog, lambda _p: None, SecondCheckCancels())
+        statuses = [r["status"] for r in catalog.conn.execute("SELECT status FROM scan")]
+    assert statuses[-1] == "aborted"
+
+
 def test_cancellation_stops_work_partway_through(populated: Path) -> None:
     """Cancel must bite between units of work, not at the end of the job."""
     from drivefusion.gui.session import Session

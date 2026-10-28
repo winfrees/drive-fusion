@@ -238,12 +238,13 @@ def cmd_scope_list(args) -> int:
             print("no scope roots; add one with: drivefusion scope add <path>")
             return 0
         volumes = {row["id"]: row for row in catalog.volumes()}
+        scanned = catalog.root_last_scanned()
         for root in roots:
             volume = volumes.get(root.volume_id)
             label = (volume["label"] or volume["volume_guid"]) if volume else "?"
             fs_type = volume["fs_type"] if volume else "?"
             cost = volume["rescan_cost"] if volume else "?"
-            age = describe_age(volume["last_seen_at"] if volume else None)
+            age = describe_age(scanned.get(root.id))
             print(f"[{root.id}] {root.path}")
             print(f"      volume: {label} ({fs_type}, rescan: {cost})")
             print(f"      last scanned: {age}")
@@ -275,8 +276,8 @@ def cmd_scope_preview(args) -> int:
     print(f"  bytes:       {_human_bytes(counters.bytes)}")
     if counters.excluded:
         print(f"  excluded:    {counters.excluded:,}")
-    if counters.unreadable:
-        print(f"  unreadable:  {counters.unreadable:,}")
+    if counters.unreadable_dirs:
+        print(f"  unlistable folders: {counters.unreadable_dirs:,} (contents unknown)")
     return 0
 
 
@@ -569,7 +570,14 @@ def cmd_verify(args) -> int:
         print(f"  checked:    {result['checked']:,}")
         print(f"  mismatched: {result['mismatched']:,}")
         print(f"  unreadable: {result['unreadable']:,}")
-        if not result["checked"] and not result["unreadable"]:
+        if result["modified"]:
+            print(
+                f"  modified:   {result['modified']:,} edited since the last scan "
+                "(date changed);\n"
+                "              not checked, and not corruption. Run `drivefusion "
+                "scan` to catalogue the edits."
+            )
+        if not result["checked"] and not result["unreadable"] and not result["modified"]:
             print(
                 "\nNothing in this catalog has a hash to verify against yet. "
                 "Run `drivefusion hash`\nfirst; note that files whose size is "
@@ -623,7 +631,7 @@ def cmd_status(args) -> int:
                 print(
                     f"  {label} ({volume['fs_type'] or '?'}) "
                     f"rescan: {volume['rescan_cost'] or '?'}, "
-                    f"last scanned {describe_age(volume['last_seen_at'])}"
+                    f"last scanned {describe_age(volume['last_scanned_at'])}"
                 )
 
         scans = catalog.scans(limit=5)

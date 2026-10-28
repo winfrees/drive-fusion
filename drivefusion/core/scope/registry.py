@@ -39,6 +39,8 @@ DEFAULT_EXCLUDE_PREFIXES: tuple[str, ...] = (
     r"C:\Program Files (x86)",
     r"C:\ProgramData\Package Cache",
     r"C:\$WinREAgent",
+    # Per-user temp folders, wherever a profile sits: churn, never content.
+    r"?:\Users\*\AppData\Local\Temp",
 )
 
 
@@ -89,8 +91,22 @@ class ExclusionSet:
         )
 
     def excludes_absolute(self, path: str) -> bool:
-        lowered = path.lower()
-        return any(lowered.startswith(prefix.lower()) for prefix in self.prefixes)
+        """``path`` is a prefix, or lies beneath one.
+
+        Matched by whole path components, so ``C:\\Windows`` doesn't take
+        ``C:\\WindowsBackups`` with it. A prefix may hold ``?`` and ``*``
+        wildcards, each standing within one component.
+        """
+        lowered = path.lower().rstrip("\\/")
+        parts = lowered.replace("/", "\\").split("\\")
+        for prefix in self.prefixes:
+            wanted = prefix.lower().rstrip("\\/").split("\\")
+            if len(parts) >= len(wanted) and all(
+                fnmatch.fnmatchcase(part, pattern)
+                for part, pattern in zip(parts, wanted)
+            ):
+                return True
+        return False
 
     def excludes(self, *, name: str, relpath: str = "", absolute: str = "") -> bool:
         return (

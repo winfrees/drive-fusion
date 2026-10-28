@@ -347,3 +347,16 @@ def test_drives_without_an_action_shows_help(cli, capsys) -> None:
     with pytest.raises(SystemExit):
         cli("drives")
     assert "confirm" in capsys.readouterr().out
+
+
+def test_scope_list_shows_when_the_root_was_last_scanned(cli, sample_tree: Path, capsys) -> None:
+    """REVIEW F-12: straight after a scan, not "9 months ago"."""
+    assert cli("scope", "add", str(sample_tree)) == 0
+    capsys.readouterr()
+    assert cli("scope", "list") == 0
+    assert "last scanned: never scanned" in capsys.readouterr().out
+    assert cli("scan") == 0
+    capsys.readouterr()
+    assert cli("scope", "list") == 0
+    out = capsys.readouterr().out
+    assert "never scanned" not in out and "last scanned:" in out

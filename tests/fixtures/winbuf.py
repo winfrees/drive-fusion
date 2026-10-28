@@ -105,6 +105,7 @@ def _dir_info_entry(
     ctime_ns: int,
     file_id: int | None,
     last: bool,
+    ea_size: int = 0,
 ) -> bytes:
     encoded = name.encode("utf-16-le")
     length = name_offset + len(encoded)
@@ -122,7 +123,7 @@ def _dir_info_entry(
     struct.pack_into("<q", buffer, 48, alloc_size)
     struct.pack_into("<I", buffer, 56, attributes)
     struct.pack_into("<I", buffer, 60, len(encoded))
-    struct.pack_into("<I", buffer, 64, 0)                      # EaSize
+    struct.pack_into("<I", buffer, 64, ea_size)                # EaSize: reparse tag
     if file_id is not None:
         struct.pack_into("<b", buffer, 68, 0)                  # ShortNameLength
         struct.pack_into("<q", buffer, 96, file_id)
@@ -145,6 +146,7 @@ def full_dir_info(entries: list[dict]) -> bytes:
                 ctime_ns=entry.get("ctime_ns", 0),
                 file_id=None,
                 last=index == len(entries) - 1,
+                ea_size=entry.get("reparse_tag", 0),
             )
         )
     return b"".join(out)
@@ -165,6 +167,7 @@ def id_both_dir_info(entries: list[dict]) -> bytes:
                 ctime_ns=entry.get("ctime_ns", 0),
                 file_id=entry.get("file_id", 0),
                 last=index == len(entries) - 1,
+                ea_size=entry.get("reparse_tag", 0),
             )
         )
     return b"".join(out)

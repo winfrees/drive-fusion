@@ -195,7 +195,7 @@ def apply_delta(
 
                 from drivefusion.core import fsio
 
-                if fsio.is_reparse_point(entry.attributes):
+                if fsio.skip_as_link(entry.attributes, entry.reparse_tag, is_dir=entry.is_dir):
                     continue
 
                 if entry.is_dir:
@@ -382,7 +382,7 @@ def _walk_new_subtree(
             ):
                 counters.excluded += 1
                 continue
-            if fsio.is_reparse_point(entry.attributes):
+            if fsio.skip_as_link(entry.attributes, entry.reparse_tag, is_dir=entry.is_dir):
                 continue
 
             if entry.is_dir:

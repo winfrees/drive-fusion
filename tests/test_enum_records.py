@@ -178,3 +178,18 @@ def test_non_advancing_offset_is_rejected() -> None:
 def test_single_entry_terminates() -> None:
     buffer = winbuf.full_dir_info([{"name": "only"}])
     assert [e.name for e in records.parse_full_dir_info(buffer)] == ["only"]
+
+
+@pytest.mark.parametrize("builder", [winbuf.full_dir_info, winbuf.id_both_dir_info])
+def test_the_reparse_tag_rides_in_ea_size_only_for_reparse_points(builder) -> None:
+    """REVIEW F-11: the tag is what tells a cloud file from a symlink."""
+    cloud = 0x9000101A
+    buffer = builder([
+        {"name": "cloud.docx", "attributes": 0x400, "reparse_tag": cloud},
+        {"name": "plain.txt", "attributes": 0x20, "reparse_tag": 0x1234},   # an EA size
+    ])
+    parse = (records.parse_full_dir_info if builder is winbuf.full_dir_info
+             else records.parse_id_both_dir_info)
+    first, second = list(parse(buffer))
+    assert first.reparse_tag == cloud
+    assert second.reparse_tag == 0, "EaSize means a reparse tag only on a reparse point"

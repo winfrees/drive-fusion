@@ -72,6 +72,9 @@ def fsio_lister(path: str) -> list[DirEntry]:
             # here keeps one traversal rule for both platforms instead of two
             # notions of "do not follow this".
             attributes |= fsio.FILE_ATTRIBUTE_REPARSE_POINT
+        reparse_tag = entry.reparse_tag or (
+            fsio.IO_REPARSE_TAG_SYMLINK if entry.is_symlink else 0
+        )
         out.append(
             DirEntry(
                 name=entry.name,
@@ -82,6 +85,7 @@ def fsio_lister(path: str) -> list[DirEntry]:
                 ctime_ns=entry.ctime_ns,
                 file_id=entry.file_id,
                 stat_failed=entry.stat_failed,
+                reparse_tag=reparse_tag,
             )
         )
     return out

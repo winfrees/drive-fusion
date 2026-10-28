@@ -155,6 +155,7 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
 
             log("corrupting files silently ...")
             fsops.apply_corruptions(manifest)
+            fsops.apply_late_edits(manifest)
             if not observed["errors"]:
                 log("verify: fixity pass ...")
                 tool_phase("verify", adapter.verify)

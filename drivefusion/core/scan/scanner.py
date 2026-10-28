@@ -23,7 +23,7 @@ from typing import Callable
 
 from drivefusion.core import fsio
 from drivefusion.core.enum.batchwalk import DEFAULT_WORKERS, ParallelWalker
-from drivefusion.core.errors import UnreadableError
+from drivefusion.core.errors import OperationCancelled, UnreadableError
 from drivefusion.core.scope.registry import ExclusionSet
 from drivefusion.core.store.catalog import BATCH_ROWS, Catalog, ScanStats
 
@@ -37,9 +37,14 @@ CHECKPOINT_ROWS = 50_000
 @dataclass
 class ScanCounters:
     dirs: int = 0
+    #: Files catalogued, including the ``unreadable`` ones.
     files: int = 0
     bytes: int = 0
+    #: Files whose metadata could not be read; catalogued as unreadable.
     unreadable: int = 0
+    #: Directories that could not be listed. What they hold is unknown, so
+    #: they are not counted as files of any kind (docs/REVIEW.md F-15).
+    unreadable_dirs: int = 0
     dehydrated: int = 0
     excluded: int = 0
     reparse_skipped: int = 0
@@ -50,10 +55,14 @@ class ScanCounters:
 
     def coverage_line(self) -> str:
         """One line a human can act on, in the shape docs/PLAN.md §6.7 asks for."""
-        total = self.files + self.unreadable
-        parts = [f"{self.files:,} of {total:,} files read"]
+        parts = [f"{self.files - self.unreadable:,} of {self.files:,} files read"]
         if self.unreadable:
             parts.append(f"{self.unreadable:,} unreadable")
+        if self.unreadable_dirs:
+            parts.append(
+                f"{self.unreadable_dirs:,} folder(s) could not be listed, so what "
+                "they hold is unknown"
+            )
         if self.dehydrated:
             parts.append(f"{self.dehydrated:,} cloud placeholders catalogued by metadata")
         if self.excluded:
@@ -93,8 +102,13 @@ def scan_root(
     lister=None,
     workers: int = DEFAULT_WORKERS,
     supports_file_ids: bool | None = None,
+    cancel: Callable[[], None] | None = None,
 ) -> dict:
     """Enumerate one scope root into the catalog. Returns a result summary.
+
+    ``cancel`` is called once per directory listed and may raise
+    :class:`~drivefusion.core.errors.OperationCancelled` to stop the scan,
+    which is then rolled back and recorded as aborted (docs/REVIEW.md F-13).
 
     Only directories whose listing succeeded may have anything tombstoned
     beneath them, and if the root itself cannot be listed nothing is merged at
@@ -151,6 +165,8 @@ def scan_root(
     conn.execute("BEGIN")
     try:
         for result in walker.walk(root_path):
+            if cancel:
+                cancel()
             known = dir_ids.pop(result.path, None)
             if known is None:
                 # A listing for a directory that was never interned. There is
@@ -164,7 +180,7 @@ def scan_root(
             if not result.ok:
                 if current_dir_id == root_dir_id:
                     root_error = result.error
-                counters.unreadable += 1
+                counters.unreadable_dirs += 1
                 if len(counters.unreadable_paths) < 50:
                     counters.unreadable_paths.append(result.path)
                 continue
@@ -185,7 +201,9 @@ def scan_root(
                     counters.excluded += 1
                     continue
 
-                if fsio.is_reparse_point(entry.attributes):
+                if fsio.skip_as_link(
+                    entry.attributes, entry.reparse_tag, is_dir=entry.is_dir
+                ):
                     # Reported, never traversed: a junction loop must not turn
                     # a bounded volume into an unbounded walk.
                     counters.reparse_skipped += 1
@@ -242,8 +260,11 @@ def scan_root(
         conn.execute("COMMIT")
     except Exception as exc:
         conn.execute("ROLLBACK")
+        cancelled = isinstance(exc, OperationCancelled)
         catalog.finish_scan(
-            ScanStats(scan_id=scan_id), status="failed", error=str(exc)
+            ScanStats(scan_id=scan_id),
+            status="aborted" if cancelled else "failed",
+            error="cancelled" if cancelled else str(exc),
         )
         raise
 
@@ -260,7 +281,8 @@ def scan_root(
             dirs_seen=counters.dirs,
             files_seen=counters.files,
             bytes_seen=counters.bytes,
-            unreadable=counters.unreadable,
+            # Entries not read, files and folders alike.
+            unreadable=counters.unreadable + counters.unreadable_dirs,
             dehydrated_skipped=counters.dehydrated,
             excluded=counters.excluded,
         )
@@ -295,7 +317,9 @@ def _refuse_merge(
         conn.execute("ROLLBACK")
         raise
     catalog.finish_scan(
-        ScanStats(scan_id=scan_id, unreadable=counters.unreadable),
+        ScanStats(
+            scan_id=scan_id, unreadable=counters.unreadable + counters.unreadable_dirs
+        ),
         status="failed",
         error=reason,
     )
@@ -331,7 +355,7 @@ def preview_root(
         try:
             entries = list(fsio.scandir(current))
         except UnreadableError:
-            counters.unreadable += 1
+            counters.unreadable_dirs += 1
             continue
         counters.dirs += 1
 
@@ -342,7 +366,9 @@ def preview_root(
             ):
                 counters.excluded += 1
                 continue
-            if entry.is_symlink or entry.is_reparse_point:
+            if entry.is_symlink or fsio.skip_as_link(
+                entry.attributes, entry.reparse_tag, is_dir=entry.is_dir
+            ):
                 counters.reparse_skipped += 1
                 continue
             if entry.is_dir:
