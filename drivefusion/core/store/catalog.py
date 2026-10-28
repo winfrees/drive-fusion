@@ -8,18 +8,51 @@ and bulk-insert throughput matters more than convenience.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
 from drivefusion import __version__
+from drivefusion.core.errors import CatalogLocationError
 from drivefusion.core.store import schema
 from drivefusion.core.store.schema import utcnow
 
 #: Rows per executemany batch. Large enough to amortise statement overhead,
 #: small enough that a interrupted scan loses little work.
 BATCH_ROWS = 10_000
+
+
+def path_within(path: Path | str, root: Path | str) -> bool:
+    """True when ``path`` is ``root`` or lies beneath it.
+
+    Both sides are resolved first, so a symlink, junction or relative spelling
+    cannot hide the catalog inside a root.
+    """
+    child = os.path.normcase(os.path.realpath(path))
+    parent = os.path.normcase(os.path.realpath(root))
+    try:
+        return os.path.commonpath([child, parent]) == parent
+    except ValueError:
+        # Different drives on Windows: never nested.
+        return False
+
+
+def root_clause(root_ids, alias: str = "f") -> tuple[str, list]:
+    """SQL restricting file rows to the given scope roots, or nothing for ``None``.
+
+    Used by the passes that read file contents, so a root whose volume could not
+    be confirmed is not read (docs/REVIEW.md F-01).
+    """
+    if root_ids is None:
+        return "", []
+    ids = sorted(int(r) for r in root_ids)
+    placeholders = ", ".join("?" for _ in ids)
+    return (
+        f" AND {alias}.dir_id IN (SELECT id FROM dir WHERE root_id IN ({placeholders}))",
+        ids,
+    )
 
 
 @dataclass(frozen=True)
@@ -48,8 +81,51 @@ class Catalog:
 
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
+        # Checked before connecting as well as after: opening a WAL database
+        # creates its -wal and -shm files, which is the very write to the
+        # observed tree this refusal exists to prevent.
+        self._refuse_location(self._roots_on_disk())
         self.conn = schema.connect(self.path)
-        schema.migrate(self.conn, self.path)
+        try:
+            schema.migrate(self.conn, self.path)
+            self._refuse_location(
+                root.path for root in self.scope_roots(enabled_only=True)
+            )
+        except BaseException:
+            self.conn.close()
+            raise
+
+    def _roots_on_disk(self) -> list[str]:
+        """Enabled root paths of an existing catalog, read without writing.
+
+        ``immutable=1`` takes no locks and creates no side files. It does not
+        see rows still only in the WAL; the check after connecting covers those.
+        """
+        if not self.path.is_file() or self.path.stat().st_size == 0:
+            return []
+        uri = self.path.resolve().as_uri() + "?mode=ro&immutable=1"
+        try:
+            probe = sqlite3.connect(uri, uri=True)
+            try:
+                rows = probe.execute(
+                    "SELECT path FROM scope_root "
+                    "WHERE removed_at IS NULL AND enabled = 1"
+                ).fetchall()
+            finally:
+                probe.close()
+        except sqlite3.Error:
+            return []
+        return [row[0] for row in rows]
+
+    def _refuse_location(self, root_paths: Iterable[str]) -> None:
+        for root_path in root_paths:
+            if path_within(self.path, root_path):
+                raise CatalogLocationError(
+                    f"refusing to use catalog {self.path}: it is inside scope "
+                    f"root {root_path}, and Drive Fusion writes nothing inside "
+                    "a scope root. Keep the catalog elsewhere (--catalog or "
+                    "DRIVEFUSION_CATALOG)."
+                )
 
     def close(self) -> None:
         self.conn.close()
@@ -115,6 +191,19 @@ class Catalog:
 
     # -- scope -------------------------------------------------------------
 
+    def check_root_location(self, path: str) -> None:
+        """Raise :class:`CatalogLocationError` if ``path`` contains this catalog.
+
+        Callers that record anything before adding a root call this first, so a
+        refused root leaves nothing behind.
+        """
+        if path_within(self.path, path):
+            raise CatalogLocationError(
+                f"refusing to add {path}: it contains the catalog {self.path}, "
+                "and Drive Fusion writes nothing inside a scope root. Move the "
+                "catalog elsewhere (--catalog or DRIVEFUSION_CATALOG) first."
+            )
+
     def add_scope_root(
         self, volume_id: int, path: str, excludes: Sequence[str] = ()
     ) -> int:
@@ -123,7 +212,11 @@ class Catalog:
         Re-adding a previously removed path reactivates the original row rather
         than failing on the uniqueness constraint, so the catalogued history of
         that root is picked back up instead of being stranded.
+
+        A root that contains this catalog is refused: every scan would then
+        write into the tree it observes (docs/REVIEW.md F-03).
         """
+        self.check_root_location(path)
         row = self.conn.execute(
             "SELECT id FROM scope_root WHERE volume_id = ? AND path = ?",
             (volume_id, path),
@@ -409,11 +502,21 @@ class Catalog:
         docs/PLAN.md §7.2 pays off: one upsert over the staging table instead
         of tens of millions of individual index-updating inserts.
 
-        ``vanish_scope`` decides what "not seen" is allowed to mean. A full
-        scan covered a whole root, so anything under it that went unseen is
-        gone (``"root"``). A delta examined only the directories the journal
-        named, so only those may be tombstoned (``"staged-dirs"``) — applying
-        the root rule to a delta would declare the entire volume missing.
+        ``vanish_scope`` decides what "not seen" is allowed to mean:
+
+        * ``"root"``: anything under the root that went unseen is gone. Only
+          true when every directory under it was listed.
+        * ``"listed-dirs"``: what a full scan uses. Files missing from a
+          directory the scan listed are gone, as are child directories missing
+          from such a listing, with their subtrees. Nothing beneath a directory
+          whose listing failed is touched: it is unknown, not gone.
+        * ``"staged-dirs"``: what a delta uses. Only files in the directories
+          the journal named may be tombstoned; the delta handles removed
+          directories itself. Applying the root rule to a delta would declare
+          the entire volume missing.
+
+        ``"listed-dirs"`` and ``"staged-dirs"`` both read the directories the
+        scan examined from ``stage_dir``.
         """
         conn = self.conn
         conn.execute("BEGIN")
@@ -492,6 +595,9 @@ class Catalog:
         """
         now = utcnow()
 
+        if vanish_scope == "listed-dirs":
+            return self._mark_vanished_under_listed(scan_id, now)
+
         if vanish_scope == "staged-dirs":
             # Only directories this scan actually listed are eligible. A file
             # in an unexamined directory is unknown, not gone.
@@ -528,6 +634,39 @@ class Catalog:
             "UPDATE dir SET vanished_at = ? WHERE vanished_at IS NULL "
             "AND last_seen_scan < ? AND root_id = ?",
             (now, scan_id, root_id),
+        )
+        return vanished
+
+    def _mark_vanished_under_listed(self, scan_id: int, now: str) -> int:
+        """Tombstone what listed directories no longer contain (docs/REVIEW.md F-02)."""
+        listed = "(SELECT dir_id FROM stage_dir WHERE scan_id = ?)"
+        cursor = self.conn.execute(
+            "UPDATE file SET vanished_at = ? WHERE vanished_at IS NULL "
+            f"AND last_seen_scan < ? AND dir_id IN {listed}",
+            (now, scan_id, scan_id),
+        )
+        vanished = cursor.rowcount
+
+        # A directory absent from its parent's listing is gone, and so is
+        # everything catalogued beneath it, however deep.
+        gone = (
+            "WITH RECURSIVE gone(id) AS ("
+            "  SELECT id FROM dir WHERE vanished_at IS NULL "
+            f"   AND last_seen_scan < ? AND parent_id IN {listed}"
+            "  UNION"
+            "  SELECT d.id FROM dir d JOIN gone ON d.parent_id = gone.id"
+            ") SELECT id FROM gone"
+        )
+        cursor = self.conn.execute(
+            f"UPDATE file SET vanished_at = ? WHERE vanished_at IS NULL "
+            f"AND dir_id IN ({gone})",
+            (now, scan_id, scan_id),
+        )
+        vanished += cursor.rowcount
+        self.conn.execute(
+            f"UPDATE dir SET vanished_at = ? WHERE vanished_at IS NULL "
+            f"AND id IN ({gone})",
+            (now, scan_id, scan_id),
         )
         return vanished
 
@@ -595,7 +734,12 @@ class Catalog:
 
     # -- content identity --------------------------------------------------
 
-    def hash_candidates(self, volume_id: int | None = None, limit: int | None = None):
+    def hash_candidates(
+        self,
+        volume_id: int | None = None,
+        limit: int | None = None,
+        root_ids=None,
+    ):
         """Files worth opening: those whose size occurs more than once.
 
         A size that appears exactly once anywhere in the catalog cannot be a
@@ -607,6 +751,10 @@ class Catalog:
         sequential one. exFAT has no file ids, so those rows fall back to
         directory order, which approximates allocation order on the
         mostly-append-only drives this tool targets.
+
+        ``root_ids``, when given, limits candidates to files under those roots.
+        The size test still runs over the whole catalog: a file whose twin is on
+        a drive that is unplugged today still needs an identity.
         """
         sql = (
             "SELECT f.id, f.volume_id, f.dir_id, f.name, f.size_bytes, f.frn "
@@ -625,6 +773,9 @@ class Catalog:
         if volume_id is not None:
             sql += " AND f.volume_id = ?"
             params.append(volume_id)
+        clause, clause_params = root_clause(root_ids)
+        sql += clause
+        params.extend(clause_params)
         sql += " ORDER BY f.volume_id, f.frn IS NULL, f.frn, f.dir_id, f.name"
         if limit:
             sql += " LIMIT ?"
@@ -700,12 +851,13 @@ class Catalog:
             )
         )
 
-    def files_for_content(self, content_id: int) -> list[sqlite3.Row]:
+    def files_for_content(self, content_id: int, root_ids=None) -> list[sqlite3.Row]:
+        clause, params = root_clause(root_ids, alias="file")
         return list(
             self.conn.execute(
                 "SELECT id, volume_id, dir_id, name, size_bytes FROM file "
-                "WHERE content_id = ? AND vanished_at IS NULL",
-                (content_id,),
+                "WHERE content_id = ? AND vanished_at IS NULL" + clause,
+                (content_id, *params),
             )
         )
 

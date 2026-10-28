@@ -200,13 +200,17 @@ def test_summary_reports_unhashed_coverage(
     scan_into(catalog, add_drive_volume(catalog, "SERIAL-C", "vol:c"), root)
 
     before = redundancy_summary(catalog)
-    assert before["unhashed_files"] == 3
+    # Only the two files sharing a size are unknown; the unique-size file is
+    # a single copy whatever its bytes are.
+    assert before["unhashed_files"] == 2
+    assert before["single_copy_files"] == 1
 
     hash_pass(catalog)
     after = redundancy_summary(catalog)
 
-    assert after["unhashed_files"] == 1, "the unique-size file is never opened"
-    assert after["distinct_content"] == 1
+    assert after["unhashed_files"] == 0
+    assert after["single_copy_files"] == 1, "the unique-size file is never opened"
+    assert after["distinct_content"] == 2
     assert after["duplicate_overhead_bytes"] == len(PAYLOAD)
 
 
@@ -264,3 +268,48 @@ def test_no_incidents_when_everything_verifies(
     # "No incidents" only means something if something was actually checked.
     assert result["checked"] == 2
     assert integrity_incidents(catalog) == []
+
+
+# -- single copies known from size alone (docs/REVIEW.md F-04) ----------------
+
+def test_unique_size_files_are_under_protected_without_being_read(
+    catalog: Catalog, tmp_path: Path, monkeypatch
+) -> None:
+    from drivefusion.core.analysis import group_paths
+    from drivefusion.core.identity import hasher
+
+    root = tmp_path / "vol"
+    root.mkdir()
+    (root / "a1.txt").write_bytes(b"same-size-A")
+    (root / "a2.txt").write_bytes(b"same-size-B")
+    (root / "solo.bin").write_bytes(b"z" * 999)
+    (root / "empty.txt").write_bytes(b"")
+    scan_into(catalog, add_drive_volume(catalog, "SERIAL-S", "vol:s"), root)
+
+    opened: list[str] = []
+    real_quick = hasher.quick_hash
+
+    def spy(path, size):
+        opened.append(os.path.basename(path))
+        return real_quick(path, size)
+
+    monkeypatch.setattr(hasher, "quick_hash", spy)
+    hash_pass(catalog)
+    assert "solo.bin" not in opened
+
+    exposed = under_protected(catalog, min_copies=2)
+    solo = [g for g in exposed if g.size_bytes == 999]
+    assert len(solo) == 1, "the only file of its size is certainly one copy"
+    assert solo[0].content_id is None
+    assert solo[0].drives == 1 and solo[0].physical_copies == 1
+    assert group_paths(catalog, solo[0]) == [str(root / "solo.bin")]
+    assert not [g for g in exposed if g.size_bytes == 0], "nothing to lose"
+
+    summary = redundancy_summary(catalog, min_copies=2)
+    assert summary["under_protected_items"] == 3
+    assert summary["under_protected_bytes"] == 11 + 11 + 999
+    assert summary["single_copy_files"] == 1
+    assert summary["unhashed_files"] == 0
+
+    # A target of one copy is met by a single copy.
+    assert under_protected(catalog, min_copies=1) == []

@@ -21,6 +21,7 @@ from drivefusion.core.identity import hash_pass, verify_pass
 from drivefusion.core.scan import scan_root
 from drivefusion.core.store.catalog import Catalog
 from drivefusion.core import fsio
+from drivefusion.core.errors import CatalogLocationError
 from drivefusion.core.enum.batchwalk import fsio_lister
 from drivefusion.core.enum.records import DirEntry
 from tools.ro_lint import check_source
@@ -73,11 +74,16 @@ root.mkdir()
 before = sorted(p.name for p in root.iterdir())
 cat = Catalog(root / "catalog.db")
 vol = cat.upsert_volume(volume_guid="vol:r3")
-rid = cat.add_scope_root(vol, str(root))
-scan(cat, root, vol, rid)
-after = sorted(p.name for p in root.iterdir())
-print("R3 catalog inside root -> tree before", before, "after", after,
-      "|", "FOUND" if before != after else "NOT FOUND")
+try:
+    rid = cat.add_scope_root(vol, str(root))
+except CatalogLocationError as exc:
+    # Fixed: the root is refused, so no scan ever writes into it.
+    print("R3 catalog inside root -> scope add refused:", exc, "| NOT FOUND")
+else:
+    scan(cat, root, vol, rid)
+    after = sorted(p.name for p in root.iterdir())
+    print("R3 catalog inside root -> tree before", before, "after", after,
+          "|", "FOUND" if before != after else "NOT FOUND")
 cat.close()
 
 # R4: unique-size single-copy files are absent from under-protected

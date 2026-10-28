@@ -141,9 +141,11 @@ flowchart TB
 the lint doesn't recognise, outside the gateway, on a path the no-touch cycle doesn't call,
 would get through. REVIEW F-08 lists those classes.*
 
-> **As built:** the catalog location (`--catalog` / `DRIVEFUSION_CATALOG`) isn't checked
-> against the scan scope, so a catalog placed inside a scope root is written there (REVIEW
-> F-03). Keep the catalog off catalogued volumes until that check lands.
+> **As built:** the catalog refuses to sit inside a scope root (REVIEW F-03, fixed).
+> `Catalog()` won't open a catalog inside any enabled root. It checks with a lock-free
+> read first, so a refused catalog gets no `-wal`/`-shm`. `scope add`, in the CLI and the
+> GUI, refuses a root that contains the catalog. Not yet checked: a catalog elsewhere on a
+> catalogued volume, and the export root (M8). Keep the catalog off catalogued volumes.
 
 ### 3.3 What this changes about the design
 
@@ -166,9 +168,13 @@ exists to look at.
 
 - **Add a volume** by drive letter or by its stable volume GUID path. The tool records
   identity (§5) so the entry survives a letter change or a reconnect.
-  **As built:** the volume GUID is recorded, but the root is stored and scanned as its
-  drive-letter path, and nothing checks the GUID before a scan, hash or verify. A different
-  drive mounted at the same letter would be catalogued as the original (REVIEW F-01).
+  **As built:** the volume GUID is recorded and the root is stored as its drive-letter path.
+  Before every scan, hash and verify, in the CLI and the GUI, `core/scope/binding.py`
+  identifies the volume now at each root's path. A root whose `volume_guid` differs, or
+  whose folder or volume can't be found (drive unplugged), is refused with a message naming both
+  volumes, and none of its files are read; other roots still run (REVIEW F-01, fixed).
+  Hash and verify skip removed roots. Opening through the GUID path, so roots survive a
+  letter change, is still to do.
 - **Add roots within a volume** — you may catalog `D:\Research` without touching `D:\Games`.
 - **Include/exclude globs** per root, plus a default exclusion list applied to every scope.
   As built (`core/scope/registry.py`): by name at any depth, `$Recycle.Bin`,
@@ -533,6 +539,14 @@ merge folds it into `file`, `dir`, and `content`, followed by `ANALYZE`. Connect
 `cache_size=-262144` (256 MB), `temp_store=MEMORY`, `mmap_size` sized to available RAM,
 batched `executemany` of 10k rows per transaction.
 
+> **As built:** the merge tombstones only what a scan actually examined (REVIEW F-02, fixed).
+> A full scan records every directory it listed in `stage_dir` and merges with
+> `vanish_scope="listed-dirs"`. Files missing from a listed directory are marked vanished,
+> as is a child directory missing from a listing, with its subtree. Nothing beneath a
+> directory whose listing failed is touched. If the root itself can't be listed (an unplugged
+> drive, say), nothing is merged and the scan is recorded as `failed`. The delta path keeps
+> `"staged-dirs"`.
+
 **Benchmark gate at M1 — measured, decision: single database.** `tools/benchmark.py`
 builds a synthetic catalog through the real loader and checks it against §13. At 3M files:
 
@@ -674,8 +688,10 @@ FTS5 over 50M full paths would add several GB and a long build. Instead:
   overstates copies when two such volumes share one disk (REVIEW F-05).
 - **Under-protected set** — `copies < policy.min_copies`, ranked by `size × P(loss)`. The queue
   that actually matters, and the first screen you should look at. **As built:** ranked by
-  size, and limited to hashed content, so files of unique size, which are certainly single
-  copies, are missing from it (REVIEW F-04).
+  size. A file whose size no other live file shares is counted as one copy on one drive and
+  included without being hashed; empty files are left out. The summary's "unhashed" count
+  covers only files whose size is shared, the ones that are genuinely unknown (REVIEW F-04,
+  fixed).
 - **Reclamation candidates** — content above the copy target, or duplicated *within* one drive
   (zero durability gain, real space cost), with reclaimable byte totals. **A report, never an
   action** (§3.3).
@@ -974,9 +990,10 @@ already going to buy or reformat, never a proposal to reformat anything you own.
   Merkle hash of the fixture tree before and after a full cycle, asserting byte *and* metadata
   identity, plus access times on POSIX where `O_NOATIME` is permitted.
 - **AST lint** for forbidden calls, as a CI step, covering `dfscan-helper` too.
-- *To add (from REVIEW):* tests for a missing or unlistable root not tombstoning its contents
-  (F-02), a catalog path inside scope being refused (F-03), unique-size files counting as
-  under-protected (F-04), and a placeholder with both reparse and recall attributes (F-11).
+- *Added from REVIEW:* a root on another volume being refused by scan, hash and verify
+  (F-01); an unlistable directory or root not tombstoning its contents (F-02); a catalog
+  inside a scope root being refused (F-03); unique-size files counting as under-protected
+  (F-04). *To add:* a placeholder with both reparse and recall attributes (F-11).
 - **Synthetic VHDX fixtures in both filesystems**, attached in CI: an NTFS image with known
   duplicate, version, hardlink, sparse, compressed, reparse-point, and long-path structure, and
   an **exFAT image with a large cluster size** carrying many small files. VHDX matters because
@@ -1042,9 +1059,9 @@ would mean reworking the scan pipeline.
 | **Hashing is seek-bound on external HDDs** | Tiered hashing plus reads ordered by File Reference Number; per-media concurrency limits; fully resumable |
 | **Cloud placeholders silently hydrate** | Detected by attribute and never opened; asserted by test |
 | **A future change reintroduces a write path** | Structural enforcement (§3.2): gateway with no writer, read-only volume handles, CI lint, no-touch test. The layers are complementary rather than independent; the lint's blind spots (REVIEW F-08) should be closed so that no class of mutation depends on a single layer |
-| **The wrong drive is mounted at a remembered letter** | Bind every scan, hash and verify to the recorded volume GUID and refuse on mismatch (REVIEW F-01, open) |
-| **An unreadable directory is mistaken for a deleted one** | Tombstone only inside directories a scan actually listed, as the delta path already does (REVIEW F-02, open) |
-| **The catalog is written onto catalogued media** | Refuse catalog and export paths inside any scope root (REVIEW F-03, open) |
+| **The wrong drive is mounted at a remembered letter** | Bind every scan, hash and verify to the recorded volume GUID and refuse on mismatch (REVIEW F-01, fixed) |
+| **An unreadable directory is mistaken for a deleted one** | Tombstone only inside directories a scan actually listed, as the delta path already does (REVIEW F-02, fixed) |
+| **The catalog is written onto catalogued media** | Refuse catalog and export paths inside any scope root (REVIEW F-03, fixed for the catalog; export paths wait for M8) |
 | **Elevated helper becomes an attack surface** | Separate binary, read-only handle, enumerate-and-exit, no network or write code, same lint and tests as the main app |
 | **Antivirus flags raw-volume access** | Signed binaries, one-folder build, published hashes, documented exclusions |
 | **Hardlinks and NTFS dedup inflate apparent redundancy** | FRN-based physical-copy counting; logical vs. allocated size tracked separately |

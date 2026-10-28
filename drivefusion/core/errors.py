@@ -31,3 +31,21 @@ class UnreadableError(DriveFusionError):
 
     Expected during scans and recorded per file rather than aborting a volume.
     """
+
+
+class CatalogLocationError(DriveFusionError):
+    """Raised when the catalog would live inside a tree the tool observes.
+
+    The catalog and its ``-wal``/``-shm`` files change on every scan. Kept inside
+    a scope root, they would be writes to catalogued media and would catalogue
+    themselves (docs/REVIEW.md F-03).
+    """
+
+
+class RootRefusedError(DriveFusionError):
+    """Raised when a pass refused to read one or more scope roots.
+
+    Either the volume now at the root's path is not the catalogued one, or the
+    root could not be listed at all. The message names each root and why; any
+    other roots in the same pass were still processed.
+    """

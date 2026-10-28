@@ -6,6 +6,7 @@
 | **Focus** | (1) safety of user data on catalogued media, (2) correctness of the file and redundancy facts the tool reports, (3) security of the privileged and packaging surface |
 | **Method** | Every source module read in full; lint and full test suite run on Linux (291 passed, 5 Windows-only skipped) and checked against the latest Windows CI log (293 passed, 3 skipped); every finding below reproduced with [`tools/review_repro.py`](../tools/review_repro.py) or shown directly in code. Each claim was checked three times: against the code, against a running reproduction, and against the test that would be expected to catch it |
 | **Date** | 2026-10-27 |
+| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed |
 
 ---
 
@@ -73,24 +74,24 @@ findings.*
 
 ### Findings at a glance
 
-| ID | Severity | Area | One-line statement | Reproduced |
-|---|---|---|---|---|
-| [F-01](#f-01) | **High** | File facts | Scans, hashes and verifies follow a stored drive-letter path, not the catalogued volume's identity | R1 |
-| [F-02](#f-02) | **High** | File facts | A directory that cannot be listed, or a root whose drive is unplugged, gets its whole subtree tombstoned as "vanished" | R1, R2 |
-| [F-03](#f-03) | **High** | Safety | The catalog database (plus `-wal`/`-shm`) can be created inside a scanned tree | R3 |
-| [F-04](#f-04) | **High** | File facts | Files of unique size, which by definition have exactly one copy, are missing from the under-protected report | R4 |
-| [F-05](#f-05) | Medium | File facts | Volumes whose drive serial can't be read each count as a separate drive, which can overstate copies | R6 |
-| [F-06](#f-06) | Medium | File facts | `verify` reports an ordinary edit as a fixity mismatch, because it never compares size or mtime | R5 |
-| [F-07](#f-07) | Medium | Security | The elevation launcher checks only the helper's filename and existence: no signature or hash check, and parameters are joined unquoted | code |
-| [F-08](#f-08) | Medium | Safety | `ro_lint` misses `subprocess`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators via ctypes, `sqlite3.connect`, and `getattr` indirection | R8 |
-| [F-09](#f-09) | Medium | Accuracy | Docs describe unwired or unimplemented features as done (corrected by this change) | code |
-| [F-10](#f-10) | Medium | Catalog integrity | The pre-migration backup is a file copy taken while the database is in WAL mode, so it can miss committed data | R10 |
-| [F-11](#f-11) | Medium | File facts | Cloud placeholders that expose the reparse attribute are dropped from the catalog instead of being recorded by metadata | R11 |
-| [F-12](#f-12) | Low | Accuracy | "Last scanned" shows when the volume was added, not when it was last scanned | R12 |
-| [F-13](#f-13) | Low | Usability | Cancel is checked every 10,000 staged files, not per directory | R7 |
-| [F-14](#f-14) | Low | Robustness | `CreateFileW`/`FindFirstVolumeW` have no `restype`, so `INVALID_HANDLE_VALUE` is never matched | R9 |
-| [F-15](#f-15) | Low | Accuracy | The coverage line counts unlistable directories as unread *files* | R1 |
-| [F-16](#f-16) | Low | Safety | `open_read` checks attributes without following links, then opens the path *with* link following | code |
+| ID | Severity | Area | One-line statement | Reproduced | Status |
+|---|---|---|---|---|---|
+| [F-01](#f-01) | **High** | File facts | Scans, hashes and verifies follow a stored drive-letter path, not the catalogued volume's identity | R1 | **Fixed** |
+| [F-02](#f-02) | **High** | File facts | A directory that cannot be listed, or a root whose drive is unplugged, gets its whole subtree tombstoned as "vanished" | R1, R2 | **Fixed** |
+| [F-03](#f-03) | **High** | Safety | The catalog database (plus `-wal`/`-shm`) can be created inside a scanned tree | R3 | **Fixed** for scope roots; export root waits for M8 |
+| [F-04](#f-04) | **High** | File facts | Files of unique size, which by definition have exactly one copy, are missing from the under-protected report | R4 | **Fixed** |
+| [F-05](#f-05) | Medium | File facts | Volumes whose drive serial can't be read each count as a separate drive, which can overstate copies | R6 | Open |
+| [F-06](#f-06) | Medium | File facts | `verify` reports an ordinary edit as a fixity mismatch, because it never compares size or mtime | R5 | Open |
+| [F-07](#f-07) | Medium | Security | The elevation launcher checks only the helper's filename and existence: no signature or hash check, and parameters are joined unquoted | code | Open |
+| [F-08](#f-08) | Medium | Safety | `ro_lint` misses `subprocess`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators via ctypes, `sqlite3.connect`, and `getattr` indirection | R8 | Open |
+| [F-09](#f-09) | Medium | Accuracy | Docs describe unwired or unimplemented features as done (corrected by this change) | code | Docs corrected |
+| [F-10](#f-10) | Medium | Catalog integrity | The pre-migration backup is a file copy taken while the database is in WAL mode, so it can miss committed data | R10 | Open |
+| [F-11](#f-11) | Medium | File facts | Cloud placeholders that expose the reparse attribute are dropped from the catalog instead of being recorded by metadata | R11 | Open |
+| [F-12](#f-12) | Low | Accuracy | "Last scanned" shows when the volume was added, not when it was last scanned | R12 | Open |
+| [F-13](#f-13) | Low | Usability | Cancel is checked every 10,000 staged files, not per directory | R7 | Open |
+| [F-14](#f-14) | Low | Robustness | `CreateFileW`/`FindFirstVolumeW` have no `restype`, so `INVALID_HANDLE_VALUE` is never matched | R9 | Open |
+| [F-15](#f-15) | Low | Accuracy | The coverage line counts unlistable directories as unread *files* | R1 | Open |
+| [F-16](#f-16) | Low | Safety | `open_read` checks attributes without following links, then opens the path *with* link following | code | Open |
 
 **Severity scale.** *High*: can write to user media, or can lead a user to believe data is
 safer than it is. *Medium*: a wrong or misleading result in a narrower case, or a security
@@ -134,15 +135,15 @@ implemented as a library with no user-facing entry point.
 | SR-01 | UN-1 | No module outside `core/store` and `core/export` may invoke a filesystem mutation. | `core/fsio.py` exposes only `scandir`, `stat`, `open_read`; `tools/ro_lint.py` rules DF001–DF007 run as a CI step. | `test_ro_lint.py`; CI "Read-only lint" step | **Partial**: lint blind spots ([F-08](#f-08)) |
 | SR-02 | UN-1 | User files are opened read-only, without blocking other processes. | `CreateFileW(GENERIC_READ, FILE_SHARE_READ\|WRITE\|DELETE, OPEN_EXISTING)` (`fsio.py:326`); `ReadOnlyBinaryFile` raises `ReadOnlyViolation` on `write`/`truncate`. | `test_handles_refuse_to_write`; `test_no_touch.py` | **Met** |
 | SR-03 | UN-1 | Volume, directory and device handles cannot write. | `winio.open_volume` / `open_directory`: `GENERIC_READ`, `OPEN_EXISTING`; discovery opens with zero access; DF006 rejects write-access names in raw-handle modules. | Code review; DF006 | **Met**. DF006 matches names only, not numeric literals or creation dispositions ([F-08](#f-08)) |
-| SR-04 | UN-1 | The tool writes nothing inside a scope root or on a catalogued volume. | **No check.** Catalog path comes from `--catalog` or `DRIVEFUSION_CATALOG` (`cli/main.py:34`); `validate_new_root` doesn't compare against it. | None | **Not met** ([F-03](#f-03)) |
+| SR-04 | UN-1 | The tool writes nothing inside a scope root or on a catalogued volume. | `Catalog()` refuses to open a catalog inside any enabled scope root, checking with an `immutable=1` read before connecting so no `-wal`/`-shm` is created; `Catalog.add_scope_root` (and `scope add` / the GUI before they record anything) refuses a root that contains the catalog (`CatalogLocationError`). A catalog on a catalogued volume but outside every root is still allowed, and the export-root check waits for M8. | `test_store.py` (`test_a_root_containing_the_catalog_is_refused`, `test_a_catalog_inside_a_scope_root_is_not_opened`), `test_cli.py`, `test_gui_shell.py`; R3 | **Partial**: inside a root fixed ([F-03](#f-03)); rest of the volume not checked |
 | SR-05 | UN-1 | An end-to-end regression shows media unchanged after every stage. | `test_no_touch.py` snapshots a fixture tree, runs scan ×2, hash, verify, reports and browse, then re-snapshots. | Linux + Windows CI | **Partial**: access times asserted only on POSIX with `O_NOATIME`; helper, USN and delta paths not exercised |
 | SR-06 | UN-8 | Cloud placeholders are never opened, and are catalogued by metadata. | `open_read` refuses `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` (`fsio.py:368`); scanner marks `skipped-dehydrated`; hash candidates require `read_state='ok'`. | `test_cloud_placeholders_are_never_opened`, `test_dehydrated_files_are_catalogued_but_not_opened`, `test_hashing_refuses_cloud_placeholders` | **Partial**: "never opened" met; "catalogued" fails when the reparse attribute is visible ([F-11](#f-11)) |
 | SR-07 | UN-8 | No outbound network connections. | No network modules imported anywhere in `drivefusion/`. | Inspection only (no lint rule) | **Met**, not enforced |
 | SR-08 | UN-5 | Only explicitly added roots are scanned; nested roots refused; links not traversed; OS churn excluded. | `scope/registry.py` (`validate_new_root`, `ExclusionSet`); walker refuses to descend reparse points. | `test_scope.py`, `test_enum_batchwalk.py` | **Met** |
-| SR-09 | UN-2, UN-3 | A scan, hash or verify acts on the catalogued **volume identity**, never on whatever is now mounted at a drive letter. | Root stored as an absolute path (`E:\Research`); `cmd_scan` passes `root.path` straight to `scan_root` (`cli/main.py:291`); hashing rebuilds paths from that text. No GUID check. | None | **Not met** ([F-01](#f-01)) |
-| SR-10 | UN-2, UN-9 | A path that was not examined is *unknown*, not *gone*. | Delta merges use `vanish_scope="staged-dirs"` (correct). Full scans tombstone everything under the root that wasn't seen, including unlistable subtrees (`catalog.py:479`). | Delta: `test_enum_delta.py`. Full scan: none | **Not met** for full scans ([F-02](#f-02)) |
+| SR-09 | UN-2, UN-3 | A scan, hash or verify acts on the catalogued **volume identity**, never on whatever is now mounted at a drive letter. | Root still stored as a path, but `core/scope/binding.bind_roots` resolves the volume at each root (`discovery.identify_volume`) and refuses any root whose `volume_guid` differs or can't be identified. `cmd_scan`, `cmd_hash`, `cmd_verify`, the GUI `scan_body` and `request_hash` scan only bound roots, and `hash_pass`/`verify_pass` take `root_ids` so they read only files under them. Checked once at the start of each pass. | `test_scope.py`, `test_cli.py`, `test_identity.py`, `test_gui_shell.py` | **Met** ([F-01](#f-01)) |
+| SR-10 | UN-2, UN-9 | A path that was not examined is *unknown*, not *gone*. | Delta merges use `vanish_scope="staged-dirs"`. Full scans stage every directory they listed in `stage_dir` and merge with `vanish_scope="listed-dirs"`: only files missing from a listed directory, and child directories missing from a listing (with their subtrees), are tombstoned. If the root itself can't be listed, nothing is merged and the scan is recorded as failed. | Delta: `test_enum_delta.py`. Full scan: `test_scanner.py`, `test_cli.py`; R1, R2 | **Met** ([F-02](#f-02)) |
 | SR-11 | UN-3 | Copies are counted over distinct physical drives; hardlinks are one physical copy. | `DRIVE_KEY = COALESCE(v.drive_id, -v.id)`; physical copies = distinct `(volume, frn)`. | `test_analysis.py` | **Partial**: serial-less volumes overstate drives ([F-05](#f-05)) |
-| SR-12 | UN-3, UN-9 | The under-protected report includes every item with fewer copies than the target. | `under_protected` inner-joins `content`, so only hashed files are considered. | `test_analysis.py` (hashed files only) | **Not met** ([F-04](#f-04)) |
+| SR-12 | UN-3, UN-9 | The under-protected report includes every item with fewer copies than the target. | `under_protected` adds every live, non-empty file whose size no other live file shares, as one copy on one drive (`single_copy_files`), without hashing it. `redundancy_summary` counts them in its totals and reports them as `single_copy_files`; `unhashed_files` now counts only files whose size is shared. | `test_analysis.py`, `test_cli.py`; R4 | **Met** ([F-04](#f-04)) |
 | SR-13 | UN-4 | Fixity separates corruption (bytes changed, metadata unchanged) from modification. | `verify_pass` re-hashes and compares digests only (`pipeline.py:197`). | `test_identity.py` | **Partial** ([F-06](#f-06)) |
 | SR-14 | UN-6 | The main application runs as invoker and never silently elevates. | `drivefusion.manifest`: `requestedExecutionLevel="asInvoker"` for all three executables. | CI build smoke test | **Met** |
 | SR-15 | UN-6 | Before anything is elevated, the binary is proven to be the genuine helper and its arguments can't be reinterpreted. | `elevation.request` checks the filename equals `dfscan-helper.exe` and the file exists; parameters `" ".join(...)` (`elevation.py:130–170`). | `test_gui_shell.py` (rejects a wrong filename) | **Partial**: no signature or hash check, no quoting ([F-07](#f-07)). Latent: no caller |
@@ -163,9 +164,9 @@ implemented as a library with no user-facing entry point.
 ```mermaid
 pie showData
     title Requirement status (28 requirements)
-    "Met" : 9
-    "Partial" : 9
-    "Not met" : 5
+    "Met" : 12
+    "Partial" : 10
+    "Not met" : 1
     "Unwired" : 2
     "Planned" : 3
 ```
@@ -253,6 +254,17 @@ GUID (`discovery.identify_volume`) and refuse to proceed unless it matches the r
 Better still, store roots relative to the volume and open through the GUID path
 (`\\?\Volume{…}\Research`), which survives letter changes, as PLAN §4 intends.
 
+**Status: fixed (2026-10-28).** `core/scope/binding.py` (`bind_roots`, `check_root`)
+resolves the volume at each root and refuses a root whose `volume_guid` differs from the
+recorded one, whose directory is missing, or whose volume can't be identified, naming both
+volumes in the message.
+`cmd_scan`, `cmd_hash`, `cmd_verify`, the GUI `scan_body` and the dashboard's `request_hash`
+call it first; `hash_pass` and `verify_pass` take the bound `root_ids` so no file under a
+refused root is read. Other roots in the same pass still run, and the pass exits 1 (CLI) or
+raises `RootRefusedError` (GUI) naming what was skipped. Roots are still stored as
+letter paths; opening through the GUID path remains the better long-term fix. Tests:
+`test_scope.py`, `test_cli.py`, `test_identity.py`, `test_gui_shell.py`.
+
 <a id="f-02"></a>
 ### F-02 · High · Unlisted directories are tombstoned as vanished
 
@@ -272,6 +284,14 @@ between was based on false data.
 **Fix.** Record the directories a full scan actually listed (`stage_dir`, as the delta path
 already does) and tombstone only inside them. Never tombstone anything beneath a directory
 whose listing failed. Refuse the merge outright if the root itself couldn't be listed.
+
+**Status: fixed (2026-10-28).** `scan_root` stages each directory whose listing succeeded
+(`Catalog.stage_dirs`) and merges with the new `vanish_scope="listed-dirs"`: files missing
+from a listed directory are tombstoned, and so is a child directory missing from a listing,
+with its whole subtree. Nothing under an unlistable directory is touched. If the root can't
+be listed, `scan_root` merges nothing, records the scan as `failed`, and returns
+`root_listed=False` with a coverage line saying so; the CLI exits 1 and the GUI reports it.
+Tests: `test_scanner.py`, `test_cli.py`.
 
 <a id="f-03"></a>
 ### F-03 · High · The catalog can be written inside a scanned tree
@@ -293,6 +313,16 @@ them. This breaks UN-1 and makes that volume's catalog self-referential.
 that contains the catalog or the export root. Exclude the catalog's directory from every
 scan as a final defence.
 
+**Status: fixed for scope roots (2026-10-28).** `Catalog()` refuses (`CatalogLocationError`)
+to open a catalog inside any enabled scope root. It checks first with a lock-free
+`immutable=1` read, so a refused catalog gets no `-wal`/`-shm` files, then again after
+connecting. `Catalog.add_scope_root` refuses a root that contains the catalog, and
+`scope add` and the GUI check before they record a volume. Both sides are resolved with
+`realpath`, so a link can't hide the nesting. Not done: the export root (no exporter exists
+until M8) and the scan-time exclusion of the catalog's directory. Tests: `test_store.py`,
+`test_cli.py`, `test_gui_shell.py`. R3 now reports the refused `add_scope_root` instead of
+scanning.
+
 <a id="f-04"></a>
 ### F-04 · High · Single-copy files of unique size are missing from "under-protected"
 
@@ -312,6 +342,15 @@ copies.
 **Fix.** Treat files of unique size as one copy each, which needs no hashing, and include
 them in `under_protected` and `redundancy_summary`. Keep "unhashed" for files whose size *is*
 shared but which haven't been hashed yet, because only those are genuinely unknown.
+
+**Status: fixed (2026-10-28).** `single_copy_files` returns each live, non-empty file whose
+size no other live file shares (in any read state), as a `ContentGroup` with
+`content_id=None`, one path, one drive and one physical copy. `under_protected` includes
+these whenever `min_copies > 1`. `redundancy_summary` adds them to its totals, reports
+`single_copy_files`, and limits `unhashed_files` to files whose size is shared. They are
+never opened. `group_paths` lists their path for the CLI report, and the CLI note and GUI
+coverage line say they are counted as single copies. Tests: `test_analysis.py`,
+`test_cli.py`.
 
 <a id="f-05"></a>
 ### F-05 · Medium · A volume with no readable serial counts as its own drive
@@ -591,3 +630,5 @@ python tools/review_repro.py     # prints R1–R12 with FOUND / NOT FOUND
 
 The script runs in temporary directories only. As each defect is fixed, its line should flip
 to `NOT FOUND`; at that point the corresponding check belongs in the regular test suite.
+R1–R4 print `NOT FOUND` as of 2026-10-28, and their checks are in `tests/`. R3 now expects
+`add_scope_root` to refuse the root and reports that refusal.

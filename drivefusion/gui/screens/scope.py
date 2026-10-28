@@ -29,8 +29,14 @@ from PySide6.QtWidgets import (
 )
 
 from drivefusion.core import discovery
+from drivefusion.core.errors import CatalogLocationError, RootRefusedError
 from drivefusion.core.scan import preview_root, scan_root
-from drivefusion.core.scope import ExclusionSet, ScopeError, validate_new_root
+from drivefusion.core.scope import (
+    ExclusionSet,
+    ScopeError,
+    bind_roots,
+    validate_new_root,
+)
 from drivefusion.gui.format import describe_age, human_bytes
 from drivefusion.gui.workers import Progress
 
@@ -145,8 +151,9 @@ class ScopeScreen(QWidget):
         catalog = self.session.catalog()
         try:
             root_path = validate_new_root(path, [r.path for r in catalog.scope_roots()])
+            catalog.check_root_location(root_path)
             volume = discovery.identify_volume(root_path)
-        except (ScopeError, discovery.DiscoveryError) as exc:
+        except (ScopeError, CatalogLocationError, discovery.DiscoveryError) as exc:
             QMessageBox.warning(self, "Cannot add this folder", str(exc))
             return False
 
@@ -203,6 +210,12 @@ class ScopeScreen(QWidget):
 
         Returned rather than started so the window can own the progress bar and
         the Cancel button. ``None`` when there is nothing in scope.
+
+        Each root's volume is confirmed on the worker before it is read. A root
+        that fails the check, or whose top directory cannot be listed, is not
+        scanned; the others still are, and the body then raises
+        :class:`RootRefusedError` naming what was skipped (docs/REVIEW.md
+        F-01, F-02).
         """
         catalog = self.session.catalog()
         roots = catalog.scope_roots(enabled_only=True)
@@ -211,9 +224,13 @@ class ScopeScreen(QWidget):
         if not roots:
             return None
 
-        plan = [(r.id, r.path, r.volume_id, r.excludes) for r in roots]
-
         def body(catalog, progress, cancel):
+            binding = bind_roots(catalog, roots)
+            problems = binding.refusal_lines()
+            if not binding.bound:
+                raise RootRefusedError("Nothing was scanned.\n\n" + "\n".join(problems))
+            plan = [(r.id, r.path, r.volume_id, r.excludes) for r in binding.bound]
+
             files = 0
             for index, (rid, path, volume_id, excludes) in enumerate(plan, start=1):
                 cancel.raised()
@@ -237,8 +254,16 @@ class ScopeScreen(QWidget):
                     excludes=ExclusionSet.for_root(excludes),
                     progress=report,
                 )
+                if not result["root_listed"]:
+                    problems.append(result["coverage"])
+                    continue
                 files += result["counters"].files
             progress(Progress("Scan complete", len(plan), len(plan)))
+            if problems:
+                raise RootRefusedError(
+                    "Some roots were not scanned; the catalog keeps what it "
+                    "already had for them.\n\n" + "\n".join(problems)
+                )
             return files
 
         return body
