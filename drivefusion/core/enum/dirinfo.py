@@ -58,7 +58,7 @@ def list_directory(path: str, *, with_file_ids: bool | None = None) -> list[DirE
     )
     parse = parse_id_both_dir_info if with_file_ids else parse_full_dir_info
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = winio.kernel32()
     handle = winio.open_directory(winio_long_path(path))
     entries: list[DirEntry] = []
     buffer = ctypes.create_string_buffer(BUFFER_BYTES)

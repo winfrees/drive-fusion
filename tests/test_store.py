@@ -85,6 +85,51 @@ def test_upgrades_an_older_catalog_in_place(tmp_path: Path) -> None:
     assert list(tmp_path.glob("old.db.*.bak"))
 
 
+def test_backup_includes_transactions_still_in_the_wal(tmp_path: Path) -> None:
+    """REVIEW F-10: committed rows not yet checkpointed must reach the backup.
+
+    A plain copy of the main file misses them, and can miss the schema too.
+    """
+    path = tmp_path / "catalog.db"
+    live = sqlite3.connect(str(path), isolation_level=None)
+    live.execute("PRAGMA journal_mode=WAL")
+    live.execute("PRAGMA wal_autocheckpoint=0")   # keep everything in -wal
+    live.execute("CREATE TABLE t (x)")
+    live.execute("INSERT INTO t VALUES (1), (2), (3)")
+    assert (tmp_path / "catalog.db-wal").stat().st_size > 0
+
+    target = schema.backup_catalog(live, path)
+    live.close()
+
+    assert target is not None and target.exists()
+    assert not list(tmp_path.glob("*.partial"))
+    backup = sqlite3.connect(str(target))
+    try:
+        assert backup.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
+    finally:
+        backup.close()
+
+
+def test_backup_never_replaces_an_existing_backup(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "catalog.db"
+    live = sqlite3.connect(str(path))
+    live.execute("CREATE TABLE t (x)")
+    live.commit()
+
+    class FixedClock:
+        @staticmethod
+        def now(tz=None):
+            from datetime import datetime
+            return datetime(2026, 1, 1, tzinfo=tz)
+
+    monkeypatch.setattr(schema, "datetime", FixedClock)
+    first = schema.backup_catalog(live, path)
+    first.write_bytes(b"earlier backup")
+    assert schema.backup_catalog(live, path) == first
+    assert first.read_bytes() == b"earlier backup"
+    live.close()
+
+
 def test_future_schema_is_refused(tmp_path: Path) -> None:
     """A newer catalog must not be silently downgraded."""
     path = tmp_path / "catalog.db"

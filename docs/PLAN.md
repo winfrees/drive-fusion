@@ -120,12 +120,12 @@ volume is opened **read-only and nothing else**.
 
 | Layer | Mechanism |
 |---|---|
-| **Single gateway** | All access to catalogued volumes goes through `core/fsio.py`, whose entire public surface is `scandir()`, `stat()`, and `open_read()`. It opens with `GENERIC_READ` only and `FILE_SHARE_READ \| FILE_SHARE_WRITE \| FILE_SHARE_DELETE`, so the tool can never block or alter another process's file, and returns handles that raise on any write method. There is no `open_write` to call. |
+| **Single gateway** | All access to catalogued volumes goes through `core/fsio.py`, whose entire public surface is `scandir()`, `stat()`, and `open_read()`. It opens with `GENERIC_READ` only and `FILE_SHARE_READ \| FILE_SHARE_WRITE \| FILE_SHARE_DELETE`, so the tool can never block or alter another process's file, and returns handles that raise on any write method. There is no `open_write` to call. `open_read` refuses a link, and checks the opened handle as well as the path: a handle that isn't the file that was checked (a path swapped for a link in between), or that shows recall attributes, is closed unread (REVIEW F-16, fixed). |
 | **Raw-volume handles are read-only** | The fast enumeration path (§6.3) opens `\\.\X:` with `GENERIC_READ` alone. A volume handle opened without write access cannot write, at the OS level, regardless of what the code above it does. |
-| **Build-time lint** | A custom AST checker fails CI if any module outside `core/store/` and `core/export/` references `os.remove`, `os.unlink`, `os.rmdir`, `os.rename`, `os.replace`, `os.truncate`, `shutil.rmtree`, `shutil.move`, `shutil.copy*`, `Path.unlink`, `Path.rename`, `Path.write_*`, `os.chmod`, `os.utime`, or `open()` with any mode but `"rb"`. Required status check on every commit. **Not covered (REVIEW F-08):** `subprocess`/`os.system`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators other than `CreateFileW`/`DeviceIoControl` via `ctypes`, `sqlite3.connect`, `getattr` indirection. |
+| **Build-time lint** | A custom AST checker fails CI if any module outside `core/store/` and `core/export/` references `os.remove`, `os.unlink`, `os.rmdir`, `os.rename`, `os.replace`, `os.truncate`, `shutil.rmtree`, `shutil.move`, `shutil.copy*`, `Path.unlink`, `Path.rename`, `Path.write_*`, `os.chmod`, `os.utime`, or `open()` with any mode but `"rb"`. Required status check on every commit. **Extended for REVIEW F-08 (fixed):** process launches (`subprocess`, `os.system`/`startfile`/`spawn*`/`exec*`, `ShellExecuteW`, `CreateProcessW`) outside a reviewed allowlist that records why each entry may start a process; `os.write` and relatives; `io.open`, `io.FileIO`, `os.fdopen` and `codecs.open` held to `"rb"`; `os.open` flags that can't be proven read-only (numbers refused, variables followed to their assignments); `sqlite3.connect` outside `core/store`; ~60 Win32 mutators (delete, move, copy, attribute and time setters, `WriteFile`, volume and placeholder APIs) matched by name *and* as string literals; and `getattr`/`__import__` indirection on filesystem modules. **Still not covered:** a computed name on an arbitrary receiver, such as `getattr(dll, name)`, and handles obtained somewhere the AST can't follow. |
 | **Export-path assertion** | `core/export/` is the only writer of user-facing files. Every write routes through one function asserting the target resolves inside the chosen export root and does not already exist. It has no delete function. |
 | **No hydration of cloud placeholders** | OneDrive-style dehydrated files are detected by attribute and **never opened** (§6.7). Reading one would trigger a download — a state change, and potentially gigabytes of it. |
-| **No-touch regression test** | The suite builds a fixture tree, records a Merkle hash of every path, size, timestamp, and byte, runs a **full** scan → analysis → plan → export cycle, and re-hashes. The assertion is byte-and-metadata identity; access times are asserted on POSIX where `O_NOATIME` is permitted, and not on Windows. It covers every path the cycle calls. The elevated helper and the USN delta need a real NTFS volume handle and are **not** exercised. |
+| **No-touch regression test** | The suite builds a fixture tree, records a Merkle hash of every path, size, timestamp, and byte, runs a **full** scan → analysis → plan → export cycle, and re-hashes. The assertion is byte-and-metadata identity; access times are asserted on POSIX where `O_NOATIME` is permitted, and not on Windows. It covers every path the cycle calls. The elevated helper and the USN delta need a real NTFS volume handle and are **not** exercised. **Runtime guard:** the cycle runs under a `sys.addaudithook` guard (`tests/fixtures/audit_guard.py`) that refuses, and records, any write-mode open, remove, rename, link, `chmod`, `utime`, `truncate`, `mkdir` or `sqlite3.connect` under the tree, and any process launch at all, on every thread, at the moment it's attempted and whatever API made it. Win32 calls made directly through `ctypes` raise no audit event, so the snapshot and the lint remain the defence there. |
 | **Denylist on generated text** | Plan exports may include *copy-only* command previews (`robocopy` without `/MIR` or `/PURGE`, `rsync` without `--delete`) for you to review and run yourself. A linter rejects any generated string containing `del`, `rm`, `rmdir`, `erase`, `format`, `diskpart`, `unlink`, `/MIR`, `/PURGE`, `--delete`. The tool will not so much as *print* a destructive command. |
 
 ```mermaid
@@ -944,9 +944,10 @@ Two further rules M4 settled in code:
   F-03), and must not put `dfscan-helper.exe` in a user-writable directory without verifying
   it before elevation (REVIEW F-07).
 - Migrations run on launch; the catalog is **copied, never replaced**, before any schema change.
-  **As built:** the copy is a plain file copy taken while the database is in WAL mode, so it
-  can miss committed transactions. It should use SQLite's backup API or `VACUUM INTO`
-  (REVIEW F-10).
+  **As built:** the copy is taken with SQLite's online backup API on the open connection, so
+  it includes transactions still in the WAL. It is written under a temporary name and renamed
+  when complete, so a crash can't leave a partial backup that looks finished (REVIEW F-10,
+  fixed).
 - Bundle `smartctl` (smartmontools) — on Windows it is far more reliable than WMI, especially
   over USB bridges. Degrade to "health unknown" rather than failing.
 - **Authenticode signing** is the difference between "it runs" and "users can run it," and it
@@ -995,7 +996,12 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 - *Added from REVIEW:* a root on another volume being refused by scan, hash and verify
   (F-01); an unlistable directory or root not tombstoning its contents (F-02); a catalog
   inside a scope root being refused (F-03); unique-size files counting as under-protected
-  (F-04). *To add:* a placeholder with both reparse and recall attributes (F-11).
+  (F-04); the lint catching each blind-spot class, in both directions (F-08); a backup that
+  includes WAL-only transactions (F-10); Win32 handle signatures declared, checked on any
+  platform with a stand-in `WinDLL` (F-14); a link, a swapped-in link and a mismatched handle
+  each refused by `open_read` (F-16); and the audit-hook guard proven to stop each kind of
+  change before it happens. *To add:* a placeholder with both reparse and recall attributes
+  (F-11).
 - **Synthetic VHDX fixtures in both filesystems**, attached in CI: an NTFS image with known
   duplicate, version, hardlink, sparse, compressed, reparse-point, and long-path structure, and
   an **exFAT image with a large cluster size** carrying many small files. VHDX matters because
@@ -1095,7 +1101,7 @@ would mean reworking the scan pipeline.
 | **Inferred collections get silently wrong** | Inference proposes, never assigns; every candidate carries its evidence; confirmation is explicit; unfiled content is a first-class reported state (§8.4) |
 | **Hashing is seek-bound on external HDDs** | Tiered hashing plus reads ordered by File Reference Number; per-media concurrency limits; fully resumable |
 | **Cloud placeholders silently hydrate** | Detected by attribute and never opened; asserted by test |
-| **A future change reintroduces a write path** | Structural enforcement (§3.2): gateway with no writer, read-only volume handles, CI lint, no-touch test. The layers are complementary rather than independent; the lint's blind spots (REVIEW F-08) should be closed so that no class of mutation depends on a single layer |
+| **A future change reintroduces a write path** | Structural enforcement (§3.2): gateway with no writer, read-only volume handles, CI lint, no-touch test. The layers are complementary rather than independent. The lint's known blind spots are closed and a runtime audit hook guards the no-touch cycle (REVIEW F-08, fixed); direct `ctypes` calls to an unlisted API remain a lint-only case |
 | **The wrong drive is mounted at a remembered letter** | Bind every scan, hash and verify to the recorded volume GUID and refuse on mismatch (REVIEW F-01, fixed) |
 | **An unreadable directory is mistaken for a deleted one** | Tombstone only inside directories a scan actually listed, as the delta path already does (REVIEW F-02, fixed) |
 | **The catalog is written onto catalogued media** | Refuse catalog and export paths inside any scope root (REVIEW F-03, fixed for the catalog; export paths wait for M8) |

@@ -40,6 +40,7 @@ from drivefusion.core.errors import ReadOnlyViolation
 from drivefusion.core.identity import hash_pass, verify_pass
 from drivefusion.core.scan import scan_root
 from drivefusion.core.store.catalog import Catalog
+from tests.fixtures import audit_guard
 from tests.fixtures import tree as tree_fixture
 
 
@@ -57,7 +58,20 @@ def run_full_cycle(root: Path) -> dict[str, str]:
 
     The catalog is deliberately created outside the tree under test: writing it
     inside would be a change to the thing being observed.
+
+    The whole cycle runs under :func:`audit_guard.guard`, which refuses any
+    attempt to write under ``root`` or start a process at the moment it is
+    made, through whatever API (REVIEW F-08).
     """
+    with audit_guard.guard(root) as violations:
+        digests = _cycle(root)
+    assert not violations, "Drive Fusion attempted to change catalogued media:\n" + (
+        "\n".join(violations)
+    )
+    return digests
+
+
+def _cycle(root: Path) -> dict[str, str]:
     digests: dict[str, str] = {}
     for entry in fsio.walk(str(root)):
         if entry.is_dir or entry.is_symlink or entry.is_reparse_point:
@@ -322,6 +336,60 @@ def test_the_snapshot_detects_tampering(sample_tree: Path, damage, expected: str
     assert differences, f"snapshot failed to detect {expected} content"
     assert any(d.startswith(expected) for d in differences), differences
     assert before.digest != after.digest
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        lambda root: (root / "docs" / "report.txt").write_bytes(b"tampered"),
+        lambda root: open(root / "docs" / "new.txt", "xb"),
+        lambda root: os.open(root / "docs" / "report.txt", os.O_WRONLY),
+        lambda root: os.remove(root / "docs" / "report.txt"),
+        lambda root: os.rename(root / "docs" / "report.txt", root / "moved.txt"),
+        lambda root: os.utime(root / "docs" / "report.txt", (0, 0)),
+        lambda root: os.chmod(root / "docs" / "report.txt", 0o444),
+        lambda root: os.mkdir(root / "made"),
+        lambda root: shutil.rmtree(root / "docs"),
+        lambda root: __import__("sqlite3").connect(str(root / "catalog.db")),
+        lambda root: __import__("subprocess").run([sys.executable, "-c", "pass"]),
+        lambda root: getattr(os, "re" + "move")(root / "docs" / "report.txt"),
+    ],
+    ids=[
+        "write_bytes", "open-x", "os.open-wronly", "remove", "rename", "utime",
+        "chmod", "mkdir", "rmtree", "sqlite3.connect", "subprocess", "getattr",
+    ],
+)
+def test_the_audit_guard_stops_each_kind_of_change(sample_tree: Path, attempt) -> None:
+    """Proof that the runtime guard has teeth, and acts before the change."""
+    before = tree_fixture.snapshot(sample_tree)
+    with audit_guard.guard(sample_tree) as violations:
+        with pytest.raises(audit_guard.AuditViolation):
+            attempt(sample_tree)
+    assert violations, "the attempt was not recorded"
+    assert not before.diff(tree_fixture.snapshot(sample_tree)), "the change happened anyway"
+
+
+def test_the_audit_guard_permits_reads_and_writes_elsewhere(sample_tree: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    with audit_guard.guard(sample_tree) as violations:
+        (sample_tree / "docs" / "report.txt").read_bytes()
+        with fsio.open_read(str(sample_tree / "docs" / "report.txt")) as handle:
+            handle.read()
+        list(fsio.walk(str(sample_tree)))
+        (outside / "catalog.txt").write_bytes(b"fine")
+        os.remove(outside / "catalog.txt")
+    assert not violations
+
+
+def test_the_audit_guard_records_a_swallowed_violation(sample_tree: Path) -> None:
+    """Code under test may catch the exception; the record still fails the test."""
+    with audit_guard.guard(sample_tree) as violations:
+        try:
+            os.remove(sample_tree / "docs" / "report.txt")
+        except Exception:  # noqa: BLE001 - deliberately swallowed
+            pass
+    assert violations and (sample_tree / "docs" / "report.txt").exists()
 
 
 def test_handles_refuse_to_write(sample_tree: Path) -> None:

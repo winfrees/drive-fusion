@@ -102,6 +102,8 @@ class StatResult:
     nlink: int
     attributes: int
     file_id: int | None = None
+    device: int | None = None
+    is_link: bool = False
 
     @property
     def is_dehydrated(self) -> bool:
@@ -110,6 +112,23 @@ class StatResult:
     @property
     def is_reparse_point(self) -> bool:
         return is_reparse_point(self.attributes)
+
+
+def _stat_result(st: os.stat_result) -> StatResult:
+    import stat as stat_module
+
+    return StatResult(
+        size=st.st_size,
+        mtime_ns=st.st_mtime_ns,
+        ctime_ns=st.st_ctime_ns,
+        atime_ns=st.st_atime_ns,
+        is_dir=stat_module.S_ISDIR(st.st_mode),
+        nlink=st.st_nlink,
+        attributes=_attributes_from_stat(st),
+        file_id=getattr(st, "st_ino", None) or None,
+        device=getattr(st, "st_dev", None) or None,
+        is_link=stat_module.S_ISLNK(st.st_mode),
+    )
 
 
 class ReadOnlyBinaryFile:
@@ -278,18 +297,7 @@ def stat(path: str, *, follow_symlinks: bool = False) -> StatResult:
         st = os.stat(long_path(path), follow_symlinks=follow_symlinks)
     except OSError as exc:
         raise UnreadableError(f"cannot stat {path!r}: {exc}") from exc
-    import stat as stat_module
-
-    return StatResult(
-        size=st.st_size,
-        mtime_ns=st.st_mtime_ns,
-        ctime_ns=st.st_ctime_ns,
-        atime_ns=st.st_atime_ns,
-        is_dir=stat_module.S_ISDIR(st.st_mode),
-        nlink=st.st_nlink,
-        attributes=_attributes_from_stat(st),
-        file_id=getattr(st, "st_ino", None) or None,
-    )
+    return _stat_result(st)
 
 
 def _open_fd_windows(path: str) -> int:
@@ -345,15 +353,17 @@ def _open_fd_posix(path: str) -> int:
     ``O_NOATIME`` is only granted to a file's owner, so the fallback is normal
     read-only access. Windows disables access-time updates by default and the
     tool never calls ``SetFileTime``, so no equivalent is needed there.
+    ``O_NOFOLLOW`` makes a path that became a symlink since it was checked
+    fail to open rather than lead somewhere else (REVIEW F-16).
     """
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     noatime = getattr(os, "O_NOATIME", 0)
-    if noatime:
-        try:
-            return os.open(path, flags | noatime)
-        except PermissionError:
-            pass
     try:
+        if noatime:
+            try:
+                return os.open(path, flags | noatime)
+            except PermissionError:
+                pass
         return os.open(path, flags)
     except OSError as exc:
         raise UnreadableError(f"cannot open {path!r}: {exc}") from exc
@@ -364,8 +374,28 @@ def open_read(path: str, *, buffer_size: int = 1 << 20) -> ReadOnlyBinaryFile:
 
     Raises :class:`DehydratedFileError` for cloud placeholders — the one case
     where merely reading would change the user's storage.
+
+    The checks are made on the path before opening and again on the handle
+    after, because the path can change in between: a file replaced by a link
+    would otherwise lead the read outside the scope, or into a placeholder the
+    link points at (REVIEW F-16). The handle is closed before anything is read
+    if it is not the file that was checked.
     """
     info = stat(path)
+    _refuse_unless_plain_file(path, info)
+
+    fd = _open_fd_windows(path) if WINDOWS else _open_fd_posix(path)
+    try:
+        _check_handle(path, fd, info)
+        raw = io.FileIO(fd, mode="rb", closefd=True)
+        buffered = io.BufferedReader(raw, buffer_size=buffer_size)
+    except Exception:
+        os.close(fd)
+        raise
+    return ReadOnlyBinaryFile(buffered, path)
+
+
+def _refuse_unless_plain_file(path: str, info: StatResult) -> None:
     if info.is_dehydrated:
         raise DehydratedFileError(
             f"refusing to open cloud placeholder {path!r}: reading it would "
@@ -373,15 +403,29 @@ def open_read(path: str, *, buffer_size: int = 1 << 20) -> ReadOnlyBinaryFile:
         )
     if info.is_dir:
         raise UnreadableError(f"{path!r} is a directory")
+    if info.is_link:
+        raise UnreadableError(f"{path!r} is a link; links are reported, never followed")
 
-    fd = _open_fd_windows(path) if WINDOWS else _open_fd_posix(path)
+
+def _check_handle(path: str, fd: int, expected: StatResult) -> None:
+    """Refuse a handle that is not the file ``expected`` describes.
+
+    ``os.fstat`` reads the open handle itself: on Windows that includes its
+    attributes, volume serial and file index. A mismatch in identity means
+    the path was swapped between the check and the open.
+    """
     try:
-        raw = io.FileIO(fd, mode="rb", closefd=True)
-        buffered = io.BufferedReader(raw, buffer_size=buffer_size)
-    except Exception:
-        os.close(fd)
-        raise
-    return ReadOnlyBinaryFile(buffered, path)
+        opened = _stat_result(os.fstat(fd))
+    except OSError as exc:
+        raise UnreadableError(f"cannot inspect the handle for {path!r}: {exc}") from exc
+    _refuse_unless_plain_file(path, opened)
+    same_file = (opened.device, opened.file_id) == (expected.device, expected.file_id)
+    identified = None not in (opened.device, opened.file_id, expected.device, expected.file_id)
+    if identified and not same_file:
+        raise UnreadableError(
+            f"{path!r} changed between the check and the open (now a different "
+            "file, perhaps reached through a link); not read"
+        )
 
 
 def walk(

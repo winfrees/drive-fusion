@@ -10,7 +10,6 @@ rather than assumes.
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -319,15 +318,30 @@ def current_version(conn: sqlite3.Connection) -> int:
     return int(result["v"] or 0)
 
 
-def backup_catalog(path: Path) -> Path | None:
-    """Copy the catalog aside before a schema change. Never replaces a backup."""
+def backup_catalog(conn: sqlite3.Connection, path: Path) -> Path | None:
+    """Snapshot the catalog aside before a schema change. Never replaces a backup.
+
+    The snapshot goes through SQLite's online backup API on the open
+    connection, not a file copy. In WAL mode, committed transactions can sit in
+    ``-wal`` until a checkpoint, so a copy of the main file alone can miss them,
+    or even the schema (REVIEW F-10). The backup is written under a temporary
+    name and renamed once complete, so a crash mid-backup can't leave a partial
+    file that a later run would mistake for a finished one.
+    """
     if not path.exists():
         return None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = path.with_name(f"{path.name}.{stamp}.bak")
     if target.exists():
         return target
-    shutil.copy2(path, target)
+    partial = target.with_name(target.name + ".partial")
+    partial.unlink(missing_ok=True)
+    destination = sqlite3.connect(str(partial))
+    try:
+        conn.backup(destination)
+    finally:
+        destination.close()
+    partial.rename(target)
     return target
 
 
@@ -342,7 +356,7 @@ def migrate(conn: sqlite3.Connection, path: Path | None = None) -> int:
             f"supports ({SCHEMA_VERSION}); upgrade Drive Fusion"
         )
     if version > 0 and path is not None:
-        backup_catalog(path)
+        backup_catalog(conn, path)
 
     # Upgrades run their ALTERs first; a fresh database skips them because the
     # DDL below already declares the current shape.

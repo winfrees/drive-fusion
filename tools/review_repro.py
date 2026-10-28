@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from drivefusion.core.analysis import redundancy_summary, under_protected
 from drivefusion.core.identity import hash_pass, verify_pass
 from drivefusion.core.scan import scan_root
+from drivefusion.core.store import schema
 from drivefusion.core.store.catalog import Catalog
 from drivefusion.core import fsio
 from drivefusion.core.errors import CatalogLocationError
@@ -150,21 +151,42 @@ for label, src in probes.items():
     print(f"R8 lint {label:22} -> findings: {len(found)}",
           "| FOUND (gap)" if not found else "| caught")
 
-# R9: ctypes default restype truncates INVALID_HANDLE_VALUE comparison
-returned = ctypes.c_int(0xFFFFFFFF).value       # what a c_int restype yields
-invalid = ctypes.c_void_p(-1).value             # what winio compares against
-print("R9 c_int(-1)", returned, "== c_void_p(-1).value", invalid, "->",
-      returned == invalid, "|", "FOUND" if returned != invalid else "NOT FOUND")
+# R9 (F-14): CreateFileW must be declared to return a HANDLE, or a failed
+# open (-1 as a C int) never equals INVALID_HANDLE_VALUE (c_void_p(-1).value).
+class _Recorder:
+    def __init__(self, *_a, **_k):
+        self.calls = {}
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self.calls.setdefault(name, type("F", (), {"restype": ctypes.c_int})())
+from drivefusion.core.enum import winio
+_real_windll, _real_windows = getattr(ctypes, "WinDLL", None), winio.WINDOWS
+ctypes.WinDLL, winio.WINDOWS = _Recorder, True
+winio.kernel32.cache_clear()
+try:
+    restype = winio.kernel32().CreateFileW.restype
+finally:
+    winio.kernel32.cache_clear()
+    winio.WINDOWS = _real_windows
+    if _real_windll is None:
+        del ctypes.WinDLL
+    else:
+        ctypes.WinDLL = _real_windll
+declared = restype is ctypes.c_void_p        # wintypes.HANDLE is c_void_p
+print("R9 winio CreateFileW restype:", getattr(restype, "__name__", restype),
+      "|", "NOT FOUND" if declared else "FOUND")
 
-# R10 (F-10): a file copy of a WAL-mode database misses committed rows
+# R10 (F-10): the pre-migration backup must include rows still in the WAL
 wal = work / "wal.db"
 live = sqlite3.connect(wal, isolation_level=None)
 live.execute("PRAGMA journal_mode=WAL")
+live.execute("PRAGMA wal_autocheckpoint=0")
 live.execute("CREATE TABLE t(x)")
 live.execute("INSERT INTO t VALUES (1), (2), (3)")
-shutil.copy2(wal, work / "wal.db.bak")            # what backup_catalog does
+backup = schema.backup_catalog(live, wal)
 try:
-    rows = sqlite3.connect(work / "wal.db.bak").execute("SELECT COUNT(*) FROM t").fetchone()[0]
+    rows = sqlite3.connect(backup).execute("SELECT COUNT(*) FROM t").fetchone()[0]
 except sqlite3.Error:
     rows = None
 print("R10 WAL copy backup -> rows in backup:", rows, "(live: 3)",
@@ -196,5 +218,23 @@ scan(cat, root, vol, rid)
 seen = cat.conn.execute("SELECT last_seen_at FROM volume").fetchone()[0]
 print("R12 last_seen_at after scan:", seen,
       "|", "FOUND" if seen.startswith("2000") else "NOT FOUND")
+
+# R13 (F-16): open_read must not follow a link to a file outside the scope
+r13 = work / "r13"
+r13.mkdir()
+(work / "r13-outside.txt").write_bytes(b"outside")
+link = r13 / "looks-like-a-file.txt"
+try:
+    link.symlink_to(work / "r13-outside.txt")
+except OSError:
+    print("R13 open_read through a link -> skipped (cannot create symlinks here)")
+else:
+    try:
+        with fsio.open_read(str(link)) as handle:
+            followed = handle.read() == b"outside"
+    except Exception:
+        followed = False
+    print("R13 open_read through a link -> read the target:", followed,
+          "|", "FOUND" if followed else "NOT FOUND")
 
 shutil.rmtree(work, ignore_errors=True)

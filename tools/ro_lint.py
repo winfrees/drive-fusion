@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Static guard: no module may acquire the ability to modify user data.
 
-This is one of the four independent mechanisms behind the read-only guarantee
+This is one of four complementary mechanisms behind the read-only guarantee
 (docs/PLAN.md §3.2). It fails the build if any module outside the two permitted
-writer packages so much as references a mutating filesystem call.
+writer packages so much as references a mutating filesystem call, launches a
+process, or names a Win32 API that changes files.
 
 Run it directly::
 
@@ -15,12 +16,31 @@ locally still cannot merge past it.
 Scope and honesty about limits
 ------------------------------
 AST analysis cannot resolve arbitrary receivers: ``handle.write(...)`` where
-``handle`` came from somewhere untrackable will not be caught here. That gap is
-deliberate and covered by the other three mechanisms — the gateway exposes no
-writer, OS handles are opened without write access, and the no-touch test
-asserts fixture trees are byte-identical after a full run. This checker is the
-cheap, fast layer that catches the realistic mistake: someone reaching for
-``os.remove`` or ``shutil.move`` in a scanning code path.
+``handle`` came from somewhere untrackable will not be caught here, and neither
+will ``getattr(some_dll, computed_name)``. The other mechanisms overlap that gap
+only in part — the gateway exposes no writer, OS handles are opened without
+write access, and the no-touch test (with its audit hook) asserts fixture trees
+are byte-identical after a full run — so the rules below err on the side of
+flagging. REVIEW F-08 lists the classes this checker was extended to cover:
+process launches, raw descriptor writes, ``io``/``codecs`` opens, numeric
+``os.open`` flags, ``sqlite3.connect``, Win32 mutators, and name indirection.
+
+Rules
+-----
+DF001  call to a mutating ``os``/``shutil``/``pathlib`` function
+DF002  call to a method name with no non-mutating meaning
+DF003  file opened with a mode other than ``"rb"`` (``open``, ``Path.open``,
+       ``io.open``, ``io.FileIO``, ``os.fdopen``, ``codecs.open``)
+DF004  write-intent ``os.O_*`` flag
+DF005  import of a mutating name
+DF006  write access right named in a raw-handle module
+DF007  raw handle API outside a raw-handle module
+DF008  process launch outside a module in ``PROCESS_LAUNCH_MODULES``
+DF009  write to a raw descriptor (``os.write`` and relatives)
+DF010  ``os.open`` flags that cannot be proven read-only
+DF011  ``sqlite3.connect`` outside the catalog store
+DF012  Win32 API that changes files, attributes, volumes or placeholders
+DF013  name indirection (``getattr``/``__import__``) that defeats the rules above
 """
 
 from __future__ import annotations
@@ -62,6 +82,74 @@ WRITE_ACCESS_TOKENS = (
 )
 
 RAW_HANDLE_APIS = ("CreateFileW", "CreateFileA", "DeviceIoControl")
+
+#: Modules permitted to start another process, each with the reason it was
+#: allowed. A process can do anything, including delete files, so every entry
+#: is a deliberate review point; the reason is printed if the entry goes stale.
+PROCESS_LAUNCH_MODULES = {
+    "drivefusion/core/enum/helper/client.py": (
+        "spawns dfscan-helper.exe with a fixed argv to enumerate a volume "
+        "read-only (PLAN §6.5)"
+    ),
+    "drivefusion/gui/elevation.py": (
+        "ShellExecuteW('runas') of dfscan-helper.exe only, after a name check "
+        "(PLAN §6.5; hardening tracked as REVIEW F-07)"
+    ),
+}
+
+#: Ways to start a process. Flagged on reference, not only on call.
+PROCESS_LAUNCH_OS_NAMES = frozenset(
+    {
+        "system", "popen", "startfile", "fork", "forkpty", "posix_spawn",
+        "posix_spawnp", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv",
+        "spawnve", "spawnvp", "spawnvpe", "execl", "execle", "execlp",
+        "execlpe", "execv", "execve", "execvp", "execvpe",
+    }
+)
+PROCESS_LAUNCH_WIN32 = frozenset(
+    {
+        "ShellExecuteW", "ShellExecuteA", "ShellExecuteExW", "ShellExecuteExA",
+        "CreateProcessW", "CreateProcessA", "CreateProcessAsUserW",
+        "CreateProcessWithLogonW", "CreateProcessWithTokenW", "WinExec",
+    }
+)
+
+#: Writes through a descriptor bypass every mode check.
+DESCRIPTOR_WRITERS = frozenset(
+    {"write", "pwrite", "writev", "pwritev", "sendfile", "copy_file_range", "splice"}
+)
+
+#: Win32 entry points that change a file, its metadata, a directory, a volume,
+#: or a cloud placeholder's hydration state. Matched as attribute names and as
+#: exact string literals, so ``kernel32["DeleteFileW"]`` is caught too.
+WIN32_MUTATORS = frozenset(
+    {
+        "DeleteFileW", "DeleteFileA", "MoveFileW", "MoveFileA", "MoveFileExW",
+        "MoveFileExA", "MoveFileWithProgressW", "CopyFileW", "CopyFileA",
+        "CopyFileExW", "CopyFile2", "ReplaceFileW", "ReplaceFileA",
+        "SetFileTime", "SetFileAttributesW", "SetFileAttributesA",
+        "SetFileInformationByHandle", "SetFileShortNameW", "SetFileValidData",
+        "SetEndOfFile", "WriteFile", "WriteFileEx", "WriteFileGather",
+        "RemoveDirectoryW", "RemoveDirectoryA", "CreateDirectoryW",
+        "CreateDirectoryA", "CreateDirectoryExW", "CreateHardLinkW",
+        "CreateHardLinkA", "CreateSymbolicLinkW", "CreateSymbolicLinkA",
+        "DeleteVolumeMountPointW", "SetVolumeMountPointW", "SetVolumeLabelW",
+        "SetVolumeLabelA", "DefineDosDeviceW", "EncryptFileW", "DecryptFileW",
+        "SetFileSecurityW", "SetNamedSecurityInfoW", "NtWriteFile",
+        "NtSetInformationFile", "NtDeleteFile", "ZwWriteFile",
+        "ZwSetInformationFile", "SHFileOperationW", "SHFileOperationA",
+        "FormatEx", "WofSetFileDataLocation", "CfHydratePlaceholder",
+        "CfDehydratePlaceholder", "CfConvertToPlaceholder", "CfSetPinState",
+        "CfUpdatePlaceholder",
+    }
+)
+
+#: Modules whose names are tracked through ``import x as y``. Beyond the three
+#: filesystem modules, these are the ones the rules above care about.
+TRACKED_MODULES = frozenset({"os", "shutil", "pathlib", "io", "codecs", "subprocess", "sqlite3"})
+
+#: Calls that open a file the way ``open()`` does, keyed by module.
+OPEN_LIKE = {"io": {"open", "FileIO"}, "os": {"fdopen"}, "codecs": {"open"}}
 
 #: Method names with no plausible non-mutating meaning. Banned on any receiver.
 ALWAYS_BANNED = frozenset(
@@ -107,8 +195,10 @@ WRITE_INTENT_FLAGS = frozenset(
     {"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_EXCL", "O_TMPFILE"}
 )
 
-#: The only file mode the tool ever opens user data with.
+#: The only file mode the tool ever opens user data with. ``io.FileIO``
+#: spells binary read as ``"r"``.
 ALLOWED_OPEN_MODES = frozenset({"rb"})
+FILEIO_MODES = frozenset({"r", "rb"})
 
 
 @dataclass(frozen=True)
@@ -124,9 +214,20 @@ class Finding:
 
 
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, path: str, permit_raw_handles: bool) -> None:
+    def __init__(
+        self,
+        path: str,
+        permit_raw_handles: bool,
+        permit_process_launch: bool = False,
+        tree: ast.AST | None = None,
+    ) -> None:
         self.path = path
         self.permit_raw_handles = permit_raw_handles
+        self.permit_process_launch = permit_process_launch
+        self.tree = tree
+        # Innermost enclosing function first; the module is the fallback scope
+        # when resolving a variable passed as ``os.open`` flags.
+        self.scopes: list[ast.AST] = []
         self.findings: list[Finding] = []
         # alias -> canonical module name
         self.module_aliases: dict[str, str] = {}
@@ -142,14 +243,21 @@ class _Visitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             root = alias.name.split(".")[0]
-            if root in MODULE_MUTATORS:
-                self.module_aliases[alias.asname or alias.name] = root
+            if root in TRACKED_MODULES:
+                self.module_aliases[alias.asname or root] = root
+            if root == "subprocess":
+                self._launch(node, "imports subprocess")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = (node.module or "").split(".")[0]
         for alias in node.names:
             local = alias.asname or alias.name
+            if module == "subprocess":
+                self._launch(node, f"imports subprocess.{alias.name}")
+            if module in TRACKED_MODULES:
+                self._check_module_attribute(node, module, alias.name, imported=True)
+                self.imported_names[local] = (module, alias.name)
             if module in MODULE_MUTATORS:
                 if alias.name in MODULE_MUTATORS[module]:
                     self._add(
@@ -157,7 +265,6 @@ class _Visitor(ast.NodeVisitor):
                         "DF005",
                         f"imports mutating name {module}.{alias.name}",
                     )
-                self.imported_names[local] = module
                 if alias.name == "Path":
                     self.module_aliases[local] = "pathlib"
             if module == "os" and alias.name in WRITE_INTENT_FLAGS:
@@ -165,6 +272,22 @@ class _Visitor(ast.NodeVisitor):
                     node, "DF004", f"imports write-intent flag os.{alias.name}"
                 )
         self.generic_visit(node)
+
+    # -- scopes ------------------------------------------------------------
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.scopes.append(node)
+        self.generic_visit(node)
+        self.scopes.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    # -- string literals ----------------------------------------------------
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if isinstance(node.value, str):
+            if node.value in WIN32_MUTATORS:
+                self._win32_mutator(node, node.value)
+            elif node.value in PROCESS_LAUNCH_WIN32:
+                self._launch(node, f"names {node.value}")
 
     # -- attribute references ---------------------------------------------
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -177,6 +300,12 @@ class _Visitor(ast.NodeVisitor):
                     f"references write-intent flag os.{node.attr}; "
                     "catalogued media is opened read-only",
                 )
+            elif module:
+                self._check_module_attribute(node, module, node.attr)
+        if node.attr in WIN32_MUTATORS:
+            self._win32_mutator(node, node.attr)
+        elif node.attr in PROCESS_LAUNCH_WIN32:
+            self._launch(node, f"uses {node.attr}")
         if node.attr in RAW_HANDLE_APIS and not self.permit_raw_handles:
             self._add(
                 node,
@@ -191,7 +320,14 @@ class _Visitor(ast.NodeVisitor):
         func = node.func
 
         if isinstance(func, ast.Name):
-            if func.id == "open":
+            if func.id in self.imported_names:
+                module, name = self.imported_names[func.id]
+                if name in MODULE_MUTATORS.get(module, ()):  # pragma: no cover
+                    self._add(
+                        node, "DF001", f"calls mutating {module}.{name}"
+                    )
+                self._check_module_call(node, module, name)
+            elif func.id == "open":
                 self._check_open(node)
             elif func.id in RAW_HANDLE_APIS and not self.permit_raw_handles:
                 self._add(
@@ -199,12 +335,8 @@ class _Visitor(ast.NodeVisitor):
                     "DF007",
                     f"uses raw handle API {func.id} outside a permitted module",
                 )
-            elif func.id in self.imported_names:
-                module = self.imported_names[func.id]
-                if func.id in MODULE_MUTATORS.get(module, ()):  # pragma: no cover
-                    self._add(
-                        node, "DF001", f"calls mutating {module}.{func.id}"
-                    )
+            elif func.id in ("getattr", "__import__"):
+                self._check_indirection(node)
 
         elif isinstance(func, ast.Attribute):
             if func.attr in ALWAYS_BANNED:
@@ -216,16 +348,180 @@ class _Visitor(ast.NodeVisitor):
                 )
             elif isinstance(func.value, ast.Name):
                 module = self.module_aliases.get(func.value.id)
-                if module and func.attr in MODULE_MUTATORS[module]:
+                if module and func.attr in MODULE_MUTATORS.get(module, ()):
                     self._add(
                         node,
                         "DF001",
                         f"calls mutating {module}.{func.attr}()",
                     )
+                elif module:
+                    self._check_module_call(node, module, func.attr)
+                elif func.value.id == "importlib" and func.attr == "import_module":
+                    self._check_indirection(node)
             if func.attr == "open" and self._is_pathlib_receiver(func.value):
                 self._check_open(node, qualified="Path.open")
 
         self.generic_visit(node)
+
+    # -- the F-08 rules -----------------------------------------------------
+    def _launch(self, node: ast.AST, what: str) -> None:
+        if not self.permit_process_launch:
+            self._add(
+                node,
+                "DF008",
+                f"{what}: starting a process is permitted only in "
+                "PROCESS_LAUNCH_MODULES, each entry reviewed",
+            )
+
+    def _win32_mutator(self, node: ast.AST, name: str) -> None:
+        self._add(
+            node,
+            "DF012",
+            f"names Win32 API {name}, which changes files, volumes or "
+            "placeholders",
+        )
+
+    def _check_module_attribute(
+        self, node: ast.AST, module: str, attr: str, imported: bool = False
+    ) -> None:
+        """Rules that apply to merely naming ``module.attr``."""
+        if module == "os" and attr in PROCESS_LAUNCH_OS_NAMES:
+            self._launch(node, f"uses os.{attr}")
+        elif module == "os" and attr in DESCRIPTOR_WRITERS:
+            self._add(
+                node,
+                "DF009",
+                f"uses os.{attr}, which writes through a descriptor whatever "
+                "it was opened with",
+            )
+        elif module == "sqlite3" and attr == "connect":
+            self._add(
+                node,
+                "DF011",
+                "uses sqlite3.connect, which creates a database and its -wal "
+                "wherever it is pointed; only core/store opens databases",
+            )
+
+    def _check_module_call(self, node: ast.Call, module: str, name: str) -> None:
+        if name in OPEN_LIKE.get(module, ()):
+            self._check_open(node, qualified=f"{module}.{name}")
+        elif module == "os" and name == "open":
+            self._check_os_open(node)
+
+    def _check_indirection(self, node: ast.Call) -> None:
+        """Name indirection: ``getattr(os, name)`` is ``os.name`` unseen.
+
+        ``__import__(x)`` and ``importlib.import_module(x)`` with a computed
+        ``x`` are flagged outright. ``getattr`` on a tracked module is checked
+        as the attribute it names when the name is a literal, and flagged when
+        it is computed.
+        """
+        is_getattr = isinstance(node.func, ast.Name) and node.func.id == "getattr"
+        if not is_getattr:
+            first = node.args[0] if node.args else None
+            if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+                self._add(node, "DF013", "imports a module by a computed name")
+            return
+
+        if len(node.args) < 2 or not isinstance(node.args[0], ast.Name):
+            return
+        module = self.module_aliases.get(node.args[0].id)
+        if module is None:
+            return
+        name_node = node.args[1]
+        if not (isinstance(name_node, ast.Constant) and isinstance(name_node.value, str)):
+            self._add(
+                node,
+                "DF013",
+                f"getattr({module}, <computed name>) hides which {module} "
+                "function is used",
+            )
+            return
+        name = name_node.value
+        if name in MODULE_MUTATORS.get(module, ()):
+            self._add(node, "DF001", f"uses mutating {module}.{name} via getattr")
+        elif module == "os" and name in WRITE_INTENT_FLAGS:
+            self._add(node, "DF004", f"references write-intent flag os.{name} via getattr")
+        else:
+            self._check_module_attribute(node, module, name)
+
+    def _check_os_open(self, node: ast.Call) -> None:
+        flags = node.args[1] if len(node.args) > 1 else None
+        for keyword in node.keywords:
+            if keyword.arg == "flags":
+                flags = keyword.value
+        if flags is None or not self._flags_read_only(flags, set()):
+            self._add(
+                node,
+                "DF010",
+                "os.open() with flags that cannot be proven read-only; use "
+                "os.O_* names (or getattr(os, 'O_NAME', 0)) joined with |",
+            )
+
+    def _flags_read_only(self, node: ast.AST, seen: set[str]) -> bool:
+        """True when ``node`` is provably a combination of read-only flags.
+
+        Numbers are refused (``0x241`` is ``O_WRONLY|O_CREAT|O_TRUNC``), and a
+        variable is followed to every assignment of it in the enclosing
+        function, or failing that the module.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value == 0 and not isinstance(node.value, bool)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            return (
+                self.module_aliases.get(node.value.id) == "os"
+                and node.attr.startswith("O_")
+                and node.attr not in WRITE_INTENT_FLAGS
+            )
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return self._flags_read_only(node.left, seen) and self._flags_read_only(
+                node.right, seen
+            )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) in (2, 3)
+            and isinstance(node.args[0], ast.Name)
+            and self.module_aliases.get(node.args[0].id) == "os"
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            name = node.args[1].value
+            default_ok = len(node.args) == 2 or self._flags_read_only(node.args[2], seen)
+            return name.startswith("O_") and name not in WRITE_INTENT_FLAGS and default_ok
+        if isinstance(node, ast.Name):
+            if node.id in seen:
+                return True     # a cycle adds nothing new; the other edges decide
+            seen = seen | {node.id}
+            values = self._assignments(node.id)
+            return bool(values) and all(self._flags_read_only(v, seen) for v in values)
+        return False
+
+    def _assignments(self, name: str) -> list[ast.AST]:
+        for scope in [*reversed(self.scopes), self.tree]:
+            if scope is None:
+                continue
+            values: list[ast.AST] = []
+            for child in ast.walk(scope):
+                if isinstance(child, ast.Assign):
+                    if any(isinstance(t, ast.Name) and t.id == name for t in child.targets):
+                        values.append(child.value)
+                elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
+                    if isinstance(child.target, ast.Name) and child.target.id == name:
+                        if child.value is None:
+                            continue
+                        if isinstance(child, ast.AugAssign) and not isinstance(
+                            child.op, ast.BitOr
+                        ):
+                            values.append(ast.Constant(value=-1))   # unprovable
+                        else:
+                            values.append(child.value)
+                elif isinstance(child, ast.arg) and child.arg == name:
+                    values.append(ast.Constant(value=-1))   # a parameter: unknown
+            if values:
+                return values
+        return []
 
     def _is_pathlib_receiver(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -236,8 +532,8 @@ class _Visitor(ast.NodeVisitor):
 
     def _check_open(self, node: ast.Call, qualified: str = "open") -> None:
         mode_node: ast.AST | None = None
-        # open(path, mode) / Path.open(mode)
-        positional = node.args[1:] if qualified == "open" else node.args
+        # open(path, mode) / Path.open(mode) / io.open(path, mode) / ...
+        positional = node.args if qualified == "Path.open" else node.args[1:]
         if positional:
             mode_node = positional[0]
         for keyword in node.keywords:
@@ -253,7 +549,8 @@ class _Visitor(ast.NodeVisitor):
             )
             return
         if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
-            if mode_node.value not in ALLOWED_OPEN_MODES:
+            allowed = FILEIO_MODES if qualified == "io.FileIO" else ALLOWED_OPEN_MODES
+            if mode_node.value not in allowed:
                 self._add(
                     node,
                     "DF003",
@@ -290,7 +587,12 @@ def check_source(rel_path: str, source: str) -> list[Finding]:
         return [Finding(rel_path, exc.lineno or 0, exc.offset or 0, "DF999", str(exc))]
 
     permit_raw = rel_path in RAW_HANDLE_MODULES
-    visitor = _Visitor(rel_path, permit_raw_handles=permit_raw)
+    visitor = _Visitor(
+        rel_path,
+        permit_raw_handles=permit_raw,
+        permit_process_launch=rel_path in PROCESS_LAUNCH_MODULES,
+        tree=tree,
+    )
     visitor.visit(tree)
     findings = visitor.findings
 
@@ -347,6 +649,22 @@ def check_config() -> list[Finding]:
                 Finding(
                     "tools/ro_lint.py", 0, 0, "DF000",
                     f"RAW_HANDLE_MODULES lists {entry}, which does not exist",
+                )
+            )
+    for entry, reason in PROCESS_LAUNCH_MODULES.items():
+        if not reason.strip():
+            findings.append(
+                Finding(
+                    "tools/ro_lint.py", 0, 0, "DF000",
+                    f"PROCESS_LAUNCH_MODULES entry {entry} gives no reason",
+                )
+            )
+        if not (REPO_ROOT / entry).exists():
+            findings.append(
+                Finding(
+                    "tools/ro_lint.py", 0, 0, "DF000",
+                    f"PROCESS_LAUNCH_MODULES lists {entry} ({reason}), which "
+                    "does not exist",
                 )
             )
     return findings
