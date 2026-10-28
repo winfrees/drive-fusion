@@ -8,6 +8,7 @@ obtained.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 
@@ -88,6 +89,31 @@ def identify_volume(path: str) -> VolumeInfo:
     from drivefusion.core.discovery import posix
 
     return posix.identify_volume(path)
+
+
+def volume_guid_of(path: str) -> str:
+    """The identity of the volume holding ``path``, without querying the drive.
+
+    Cheaper than :func:`identify_volume`, which also reads the drive's
+    properties; used where only "same volume or not" matters.
+    """
+    if WINDOWS:
+        from drivefusion.core.discovery import windows
+
+        return windows.volume_guid_for_path(path)
+    from drivefusion.core.discovery import posix
+
+    return posix.volume_guid_for_path(path)
+
+
+def system_volume_guid() -> str:
+    """The volume Windows started from (``%SystemRoot%``), or ``/`` elsewhere."""
+    if WINDOWS:
+        system_root = os.environ.get("SystemRoot") or (
+            os.environ.get("SystemDrive", "C:") + "\\"
+        )
+        return volume_guid_of(system_root)
+    return volume_guid_of("/")
 
 
 def list_volumes() -> list[VolumeInfo]:

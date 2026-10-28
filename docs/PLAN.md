@@ -146,8 +146,13 @@ would get through. REVIEW F-08 lists those classes.*
 > **As built:** the catalog refuses to sit inside a scope root (REVIEW F-03, fixed).
 > `Catalog()` won't open a catalog inside any enabled root. It checks with a lock-free
 > read first, so a refused catalog gets no `-wal`/`-shm`. `scope add`, in the CLI and the
-> GUI, refuses a root that contains the catalog. Not yet checked: a catalog elsewhere on a
-> catalogued volume, and the export root (M8). Keep the catalog off catalogued volumes.
+> GUI, refuses a root that contains the catalog. **Since 2026-10-28 the rule covers the whole
+> drive** (ROADMAP D8): the catalog may not be on a volume that holds any enabled root, unless
+> that volume is the system drive (the one holding `%SystemRoot%`), where it may sit anywhere
+> outside the roots. So scanning a folder on `C:` works with the default catalog, while
+> scanning all of `C:` leaves nowhere on it for the catalog. `Catalog()` checks before
+> connecting, and `scope add` and the GUI check once the root's volume is identified, before
+> recording anything. There is no override. Not yet checked: the export root (M8).
 
 ### 3.3 What this changes about the design
 
@@ -940,7 +945,8 @@ Two further rules M4 settled in code:
   mode** keeping the catalog beside the executable so the tool and its catalog can travel on a
   thumb drive to whichever machine the drives are attached to. **As built:** the catalog is
   `~/.drivefusion/catalog.db`, overridable with `--catalog` or `DRIVEFUSION_CATALOG`; there is
-  no portable mode yet. A portable mode must refuse a catalog on a catalogued volume (REVIEW
+  no portable mode yet. A portable mode is bound by the same rule: a thumb drive carrying the
+  catalog can't also be scanned. It must refuse a catalog on a catalogued volume (REVIEW
   F-03), and must not put `dfscan-helper.exe` in a user-writable directory without verifying
   it before elevation (REVIEW F-07).
 - Migrations run on launch; the catalog is **copied, never replaced**, before any schema change.

@@ -6,6 +6,8 @@ from drivefusion.core.discovery.base import (
     VolumeInfo,
     identify_volume,
     list_volumes,
+    system_volume_guid,
+    volume_guid_of,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "VolumeInfo",
     "identify_volume",
     "list_volumes",
+    "system_volume_guid",
+    "volume_guid_of",
 ]

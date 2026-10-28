@@ -358,6 +358,10 @@ def _build(volume_guid: str) -> VolumeInfo:
     )
 
 
+def volume_guid_for_path(path: str) -> str:
+    return _volume_guid_for_path(os.path.abspath(path))
+
+
 def identify_volume(path: str) -> VolumeInfo:
     return _build(_volume_guid_for_path(os.path.abspath(path)))
 

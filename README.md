@@ -6,8 +6,9 @@ file exist**, and will produce **reviewable plans** for consolidating that conte
 traceable, FAIR-aligned order.
 
 > **Drive Fusion never modifies, moves, or deletes your data.** It reads only the folders you
-> add to its scan scope and writes only to its own catalog database. Keep that catalog **off**
-> the drives you scan; see [Known limits](#known-limits).
+> add to its scan scope and writes only to its own catalog database, which it refuses to keep
+> on a drive you scan. The one exception is the system drive: there the catalog may sit
+> anywhere outside the folders being scanned.
 
 Python 3.11+ · SQLite catalog · optional PySide6 GUI · packaged as a 64-bit Windows one-folder
 build.
@@ -119,9 +120,12 @@ What the layers guarantee today:
 
 These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
 
-* **The catalog is kept out of scope roots, but not off catalogued volumes.** A catalog inside
-  a scope root is refused, and so is a root that contains the catalog. A catalog elsewhere on
-  a catalogued drive is still allowed. Keep it on a drive you don't catalogue.
+* **Where the catalog may live.** Never inside a scanned folder, and never on a drive that
+  holds one, except the system drive: scanning `C:\Users\me\Research` with the default
+  catalog at `C:\Users\me\.drivefusion` is fine, scanning all of `C:` is not. Both a catalog
+  opened in the wrong place and a root added in the wrong place are refused. A catalog on a
+  volume Windows can't identify, such as a network share, can't be on a scanned drive, so it
+  is allowed.
 * **The lint can't follow everything.** It now catches process launches, descriptor writes,
   `io`/`codecs` opens, numeric `os.open` flags, `sqlite3.connect`, Win32 mutators by name, and
   `getattr` indirection on filesystem modules. A computed name on an arbitrary `ctypes`

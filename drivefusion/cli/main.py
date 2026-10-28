@@ -192,6 +192,11 @@ def cmd_scope_add(args) -> int:
         except discovery.DiscoveryError as exc:
             print(f"drivefusion: {exc}", file=sys.stderr)
             return 1
+        try:
+            catalog.check_root_location(root_path, volume.volume_guid)
+        except CatalogLocationError as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
 
         drive_id = None
         if volume.drive and volume.drive.serial:
