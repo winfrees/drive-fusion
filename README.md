@@ -175,6 +175,7 @@ and reports pass/fail per requirement against [docs/PLAN.md](docs/PLAN.md).
 
 ```bash
 python -m vv all --out ../vv/run1 --drives 6                       # simulated drives
+python -m vv all --out ../vv/run2 --drives 6 --drive-size 2GB      # ...each capped at 2 GB
 python -m vv all --out ../vv/phys --drive-path D01=E:\DriveFusionVV --drive-path D02=F:\DriveFusionVV
 python -m vv reset ../vv/run1 && python -m vv run ../vv/run1 --drivefusion-src ../other-checkout
 ```

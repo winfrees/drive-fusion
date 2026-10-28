@@ -101,7 +101,7 @@ class Builder:
     """Accumulates one dataset's ground truth."""
 
     def __init__(self, seed: int, drives: list[dict], files_per_drive: int,
-                 large_files: int, unscoped_root: str) -> None:
+                 large_files: int, unscoped_root: str, size_scale: float = 1.0) -> None:
         self.seed = seed
         self.rng = random.Random(seed)
         self.drives = drives
@@ -109,6 +109,7 @@ class Builder:
         self.files_per_drive = files_per_drive
         self.large_files = large_files
         self.unscoped_root = unscoped_root
+        self.size_scale = size_scale
 
         self.contents: dict[str, dict] = {}
         self.files: dict[tuple[str, str], dict] = {}
@@ -137,7 +138,22 @@ class Builder:
         self.scenarios.append(record)
         return record
 
+    def _scaled(self, band: tuple[int, int]) -> tuple[int, int]:
+        """A size band shrunk to fit the drives' capacity, keeping what it tests.
+
+        A band that starts above the small-file threshold exists to exercise
+        the tier-2 full hash, so it never shrinks below twice that threshold:
+        a smaller drive gets smaller large files, never no large files.
+        """
+        if self.size_scale >= 1:
+            return band
+        lo, hi = band
+        floor = 2 * oracle.SMALL_FILE_BYTES if lo > oracle.SMALL_FILE_BYTES else 1
+        lo = max(floor, int(lo * self.size_scale))
+        return lo, max(lo, int(hi * self.size_scale))
+
     def _pick_size(self, band: tuple[int, int]) -> int:
+        band = self._scaled(band)
         while True:
             size = self.rng.randint(*band)
             if size not in self.reserved_unique:
@@ -169,6 +185,7 @@ class Builder:
 
     def unique_size(self, band: tuple[int, int]) -> int:
         """A size no other file in the dataset has, or ever will."""
+        band = self._scaled(band)
         while True:
             size = self.rng.randint(*band)
             if self.sizes[size] == 0 and size not in self.reserved_unique:
@@ -673,7 +690,11 @@ class Builder:
 
         s = self.scenario("rescan-mkdir", "a new empty folder")
         drive = r.choice(self.ids)
-        parent = r.choice(self.general_dirs[drive])
+        # Not inside a deleted subtree: creating it there would bring the
+        # deleted folders back into existence.
+        removed = [m["path"] for m in self.mutations if m["op"] == "rmtree" and m["drive"] == drive]
+        parent = r.choice([p for p in self.general_dirs[drive]
+                           if not any(p == x or p.startswith(x + "/") for x in removed)])
         name = self.free_name(drive, parent, "New folder (rescan)")
         op("mkdir", s, drive=drive, path=f"{parent}/{name}".lstrip("/"))
 
@@ -743,10 +764,76 @@ def mock_drive_identity(rng: random.Random, index: int, fs: str) -> dict:
     }
 
 
+def default_cluster_bytes(fs: str, capacity: int) -> int:
+    """Windows' default cluster size for a volume of this filesystem and size.
+
+    Gives a simulated drive the cluster slack a real one would have: on a large
+    exFAT drive a 1 KB file still occupies 128 KiB (PLAN §6.7).
+    """
+    if fs == "exFAT":
+        if capacity <= 256 * 2**20:
+            return 4096
+        return 32 * 1024 if capacity <= 32 * 2**30 else 128 * 1024
+    return 4096
+
+
+def _on_disk(size: int, cluster: int) -> int:
+    return -(-size // cluster) * cluster if size else 0
+
+
+def footprints(manifest: dict, *, host_cluster: int = 4096) -> dict[str, dict]:
+    """Bytes each drive will occupy, in its own clusters and in the host's.
+
+    ``capacity_peak`` is what a real drive of the simulated filesystem would
+    need, cluster slack included: that is what must fit the chosen size.
+    ``host_peak`` is what the folder will actually consume on the disk hosting
+    it. Both are peaks over the run: between scans files are added and grown
+    before anything is deleted, so they are counted on top of the baseline.
+    """
+    sizes = manifest["contents"]
+    out = {}
+    for d in manifest["drives"]:
+        cluster = d.get("cluster_bytes") or host_cluster
+        seen_links: set[str] = set()
+        files: list[int] = []
+        for f in manifest["files"]:
+            if f["drive"] != d["id"]:
+                continue
+            group = f.get("link_group")
+            if group:
+                if group in seen_links:
+                    continue
+                seen_links.add(group)
+            files.append(sizes[f["content"]]["size"])
+        files += [sizes[f["content"]]["size"] for f in manifest["excluded"]["files"]
+                  if f["drive"] == d["id"]]
+        dirs = sum(1 for x in manifest["dirs"] + manifest["excluded"]["dirs"]
+                   if x["drive"] == d["id"])
+        current = {f["path"]: sizes[f["content"]]["size"] for f in manifest["files"]
+                   if f["drive"] == d["id"]}
+        growth: list[int] = []
+        for op in manifest["mutations"]:
+            if op["drive"] != d["id"]:
+                continue
+            if op["op"] == "add":
+                growth.append(sizes[op["content"]]["size"])
+            elif op["op"] == "modify":
+                growth.append(max(0, sizes[op["content"]]["size"] - current.get(op["path"], 0)))
+            elif op["op"] == "mkdir":
+                dirs += 1
+
+        def total(c: int) -> int:
+            return sum(_on_disk(s, c) for s in files + growth) + (dirs + 1) * c
+
+        out[d["id"]] = {"capacity_peak": total(cluster), "host_peak": total(host_cluster),
+                        "baseline": sum(_on_disk(s, cluster) for s in files) + (dirs + 1) * cluster}
+    return out
+
+
 def build(seed: int, drives: list[dict], *, files_per_drive: int, large_files: int,
-          unscoped_root: str, mode: str, params: dict) -> dict:
+          unscoped_root: str, mode: str, params: dict, size_scale: float = 1.0) -> dict:
     """Plan one dataset. ``drives`` must already carry ``root`` and ``caps``."""
-    b = Builder(seed, drives, files_per_drive, large_files, unscoped_root)
+    b = Builder(seed, drives, files_per_drive, large_files, unscoped_root, size_scale)
     b.skeleton()
     b.filler()
     b.cross_drive_copies()
@@ -767,3 +854,46 @@ def build(seed: int, drives: list[dict], *, files_per_drive: int, large_files: i
     b.mutations_plan()
     b.corruption_plan(b.manifest(mode, params))
     return b.manifest(mode, params)
+
+
+#: Each refit shrinks file sizes by this factor; below MIN_SCALE the file
+#: count alone, not file size, is what no longer fits.
+REFIT_FACTOR = 0.85
+MIN_SCALE = 0.01
+
+
+class CapacityError(ValueError):
+    """The chosen drive size cannot hold even a minimal dataset."""
+
+
+def build_fit(seed: int, drives: list[dict], *, files_per_drive: int, large_files: int,
+              unscoped_root: str, mode: str, params: dict) -> dict:
+    """Plan a dataset whose every drive fits the capacity it was given.
+
+    Drives without a ``capacity_bytes`` are unconstrained. Otherwise file
+    sizes are scaled down until the peak footprint — cluster slack and the
+    files added between scans included — fits every drive. The plan is a
+    pure function of seed and parameters, so the same command reproduces the
+    same dataset, scale and all.
+    """
+    scale = 1.0
+    while True:
+        manifest = build(seed, drives, files_per_drive=files_per_drive,
+                         large_files=large_files, unscoped_root=unscoped_root,
+                         mode=mode, params={**params, "size_scale": scale},
+                         size_scale=scale)
+        fits = footprints(manifest)
+        over = {d["id"]: fits[d["id"]]["capacity_peak"] for d in drives
+                if d.get("capacity_bytes") and fits[d["id"]]["capacity_peak"] > d["capacity_bytes"]}
+        if not over:
+            for d in drives:
+                d["baseline_bytes"] = fits[d["id"]]["baseline"]
+            return manifest
+        if scale * REFIT_FACTOR < MIN_SCALE:
+            worst = max(over, key=over.get)
+            raise CapacityError(
+                f"{worst} needs at least ~{over[worst] / 1e6:,.0f} MB even with every file "
+                "shrunk to a minimum; the number of files and folders, each taking at least "
+                "one cluster, is what does not fit. Use a larger --drive-size or a smaller "
+                "--files-per-drive.")
+        scale *= REFIT_FACTOR

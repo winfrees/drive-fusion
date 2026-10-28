@@ -56,10 +56,17 @@ def _rescan_state(manifest: dict, files: dict, dirs: set):
     vanished_dirs: set[Key] = set()
     sizes = manifest["contents"]
 
+    def revive_dirs(drive: str, paths: list[str]) -> None:
+        # A folder that exists at the rescan is live, whatever happened to it
+        # earlier in the sequence.
+        for p in paths:
+            dirs.add((drive, p))
+            vanished_dirs.discard((drive, p))
+
     def add(drive: str, path: str, entry: dict) -> None:
         files[(drive, path)] = entry
         vanished.discard((drive, path))
-        dirs.update((drive, a) for a in _ancestors(path))
+        revive_dirs(drive, _ancestors(path))
 
     for op in manifest["mutations"]:
         drive, path, kind = op["drive"], op["path"], op["op"]
@@ -80,8 +87,7 @@ def _rescan_state(manifest: dict, files: dict, dirs: set):
             vanished.add(key)
             add(drive, op["to"], {**entry, "changed": True, "scenario": op["scenario"]})
         elif kind == "mkdir":
-            dirs.add(key)
-            dirs.update((drive, a) for a in _ancestors(path))
+            revive_dirs(drive, [path, *_ancestors(path)])
         elif kind == "rmtree":
             prefix = path + "/"
             for k in [k for k in files if k[0] == drive and k[1].startswith(prefix)]:

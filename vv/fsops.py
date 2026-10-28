@@ -51,6 +51,58 @@ def ensure_empty_target(path: str) -> None:
             )
 
 
+def make_dirs_tracked(path: str, created: list[str]) -> None:
+    """``makedirs``, recording each folder that did not exist before."""
+    missing = []
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe):
+        missing.append(probe)
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    os.makedirs(path, exist_ok=True)
+    created.extend(reversed(missing))
+
+
+def remove_created(created: list[str]) -> None:
+    """Undo ``make_dirs_tracked``: only folders this run made, deepest first."""
+    for path in reversed(created):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _existing(path: str) -> str:
+    probe = os.path.abspath(path)
+    while not os.path.exists(probe):
+        probe = os.path.dirname(probe)
+    return probe
+
+
+def check_free_space(needs: dict[str, int]) -> None:
+    """Refuse a dataset that would crowd the disk it is written to.
+
+    ``needs`` maps each location to the bytes it will consume. Locations on
+    the same filesystem are summed — simulated drives all share the host disk —
+    and each filesystem must keep a reserve free afterwards: a tenth of its
+    size, capped at 1 GiB, so a small thumb drive is not held to a large disk's
+    margin.
+    """
+    by_device: dict[int, list] = {}
+    for path, n in needs.items():
+        probe = _existing(path)
+        entry = by_device.setdefault(os.stat(probe).st_dev, [probe, 0])
+        entry[1] += n
+    for probe, n in by_device.values():
+        usage = shutil.disk_usage(probe)
+        reserve = min(2**30, usage.total // 10)
+        if n + reserve > usage.free:
+            raise DatasetError(
+                f"not enough space at {probe}: this dataset needs ~{n / 1e6:,.0f} MB and "
+                f"{reserve / 1e6:,.0f} MB is kept free, but only {usage.free / 1e6:,.0f} MB "
+                "is available. Use a smaller --drive-size, fewer --drives or "
+                "--files-per-drive, or another disk.")
+
+
 # -- capability probing ---------------------------------------------------
 
 def probe_capabilities(root: str) -> dict:

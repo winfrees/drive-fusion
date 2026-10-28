@@ -87,11 +87,44 @@ def cmd_generate(args) -> Path:
         fsops.ensure_empty_target(root)
     if len(set(map(os.path.normcase, roots.values()))) != len(roots):
         raise fsops.DatasetError("two drives were given the same path")
+    sizes = _drive_sizes(args.drive_size, list(roots), mode)
 
-    out.mkdir(parents=True, exist_ok=True)
-    for root in roots.values():
-        os.makedirs(root, exist_ok=True)
+    # Every folder created from here on is new and empty until materialize,
+    # so if planning fails or the data will not fit, they can be removed
+    # again without risk to anything that was there before.
+    created: list[str] = []
+    try:
+        fsops.make_dirs_tracked(str(out), created)
+        for root in roots.values():
+            fsops.make_dirs_tracked(root, created)
+        manifest = _plan(args, seed, rng, mode, roots, sizes, out)
+        fsops.check_free_space(_host_needs(manifest, out))
+    except BaseException:
+        fsops.remove_created(created)
+        raise
 
+    runner.save_manifest(out, manifest)
+    print(f"seed {seed}: {len(manifest['files']):,} files, {len(manifest['dirs']):,} folders, "
+          f"{len(manifest['scenarios'])} scenario instances across {len(roots)} {mode} drive(s)")
+    fsops.materialize(manifest)
+    exp = oracle.expectations(manifest)
+    (out / "expected.json").write_text(json.dumps(oracle.summary_json(exp), indent=1))
+    runner.write_state(out, "pristine")
+    fits = generator.footprints(manifest)
+    for d in manifest["drives"]:
+        missing = [k for k, v in d["caps"].items() if not v]
+        note = f" (cannot hold: {', '.join(missing)})" if missing else ""
+        size = (f" {_human(d['capacity_bytes'])} drive, peak use "
+                f"{_human(fits[d['id']]['capacity_peak'])};" if d.get("capacity_bytes") else "")
+        print(f"  {d['id']} {d['fs']:6}{size} {d['root']}{note}")
+    scale = manifest["params"]["size_scale"]
+    if scale < 1:
+        print(f"  file sizes scaled to {scale:.0%} of normal to fit the drive size")
+    print(f"dataset: {out}")
+    return out
+
+
+def _plan(args, seed, rng, mode, roots, sizes, out) -> dict:
     fs_mix = ["NTFS", "exFAT"] * len(roots)
     rng.shuffle(fs_mix)
     drives = []
@@ -106,25 +139,84 @@ def cmd_generate(args) -> Path:
             # exFAT has neither; keep the simulation as honest as a real drive.
             caps["hardlinks"] = caps["symlinks"] = False
         identity = generator.mock_drive_identity(rng, index, fs)
-        drives.append({**identity, "id": drive_id, "root": root, "caps": caps})
+        drive = {**identity, "id": drive_id, "root": root, "caps": caps}
+        if sizes.get(drive_id):
+            drive["capacity_bytes"] = sizes[drive_id]
+            drive["cluster_bytes"] = generator.default_cluster_bytes(fs, sizes[drive_id])
+        drives.append(drive)
 
-    params = {"files_per_drive": args.files_per_drive, "large_files": args.large_files}
-    manifest = generator.build(seed, drives, files_per_drive=args.files_per_drive,
-                               large_files=args.large_files,
-                               unscoped_root=str(out / "unscoped"), mode=mode, params=params)
-    runner.save_manifest(out, manifest)
-    print(f"seed {seed}: {len(manifest['files']):,} files, {len(manifest['dirs']):,} folders, "
-          f"{len(manifest['scenarios'])} scenario instances across {len(drives)} {mode} drive(s)")
-    fsops.materialize(manifest)
-    exp = oracle.expectations(manifest)
-    (out / "expected.json").write_text(json.dumps(oracle.summary_json(exp), indent=1))
-    runner.write_state(out, "pristine")
-    for d in drives:
-        missing = [k for k, v in d["caps"].items() if not v]
-        note = f" (cannot hold: {', '.join(missing)})" if missing else ""
-        print(f"  {d['id']} {d['fs']:6} {d['root']}{note}")
-    print(f"dataset: {out}")
-    return out
+    params = {"files_per_drive": args.files_per_drive, "large_files": args.large_files,
+              "drive_sizes": {d: s for d, s in sizes.items() if s}}
+    try:
+        return generator.build_fit(seed, drives, files_per_drive=args.files_per_drive,
+                                   large_files=args.large_files,
+                                   unscoped_root=str(out / "unscoped"), mode=mode, params=params)
+    except generator.CapacityError as exc:
+        raise fsops.DatasetError(str(exc)) from exc
+
+
+def _host_needs(manifest: dict, out: Path) -> dict[str, int]:
+    """Bytes each location will really consume, for the free-space check."""
+    fits = generator.footprints(manifest)
+    needs = {d["root"]: fits[d["id"]]["host_peak"] for d in manifest["drives"]}
+    sizes = manifest["contents"]
+    unscoped = sum(sizes[f["content"]]["size"] + 4096 for f in manifest["unscoped"])
+    # Manifest, reports, and the catalog of each run: generous, and small.
+    needs[str(out)] = unscoped + 64 * 2**20
+    return needs
+
+
+_UNITS = {"": 1, "B": 1, "K": 10**3, "KB": 10**3, "M": 10**6, "MB": 10**6,
+          "G": 10**9, "GB": 10**9, "T": 10**12, "TB": 10**12,
+          "KIB": 2**10, "MIB": 2**20, "GIB": 2**30, "TIB": 2**40}
+
+
+def parse_size(text: str) -> int:
+    """``500MB``, ``1.5GB``, ``64GiB`` or plain bytes.
+
+    KB/MB/GB/TB are decimal, as drive makers label them; KiB/MiB/GiB/TiB are
+    binary.
+    """
+    value = text.strip().replace(" ", "").replace("_", "")
+    number = value.rstrip("KMGTBkmgtbIi")
+    unit = value[len(number):].upper()
+    if unit not in _UNITS or not number:
+        raise fsops.DatasetError(f"cannot read size {text!r}; use e.g. 500MB, 2GB or 64GiB")
+    try:
+        size = int(float(number) * _UNITS[unit])
+    except ValueError:
+        raise fsops.DatasetError(f"cannot read size {text!r}; use e.g. 500MB, 2GB or 64GiB") from None
+    if size <= 0:
+        raise fsops.DatasetError(f"a drive size must be positive, not {text!r}")
+    return size
+
+
+def _drive_sizes(values: list[str], drive_ids: list[str], mode: str) -> dict[str, int | None]:
+    """``--drive-size 2GB`` for every drive, ``--drive-size D03=500MB`` for one."""
+    if values and mode == "physical":
+        raise fsops.DatasetError(
+            "--drive-size is for simulated drives; a physical drive's size is what "
+            "Windows reports for it (the free-space check still protects it)")
+    default = None
+    overrides: dict[str, int] = {}
+    for value in values:
+        drive_id, sep, size = value.partition("=")
+        if not sep:
+            default = parse_size(value)
+            continue
+        key = f"D{int(drive_id[1:]):02d}" if drive_id[1:].isdigit() else drive_id
+        if key not in drive_ids:
+            raise fsops.DatasetError(f"--drive-size names {drive_id}, but the drives are "
+                                     f"{', '.join(drive_ids)}")
+        overrides[key] = parse_size(size)
+    return {d: overrides.get(d, default) for d in drive_ids}
+
+
+def _human(n: int) -> str:
+    for unit, step in (("TB", 10**12), ("GB", 10**9), ("MB", 10**6), ("KB", 10**3)):
+        if n >= step:
+            return f"{n / step:,.1f} {unit}"
+    return f"{n} B"
 
 
 def _evaluate_run(dataset: Path, run_dir: Path, observed_path: Path | None = None) -> int:
@@ -205,6 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="filler files per drive, ±20%% (default 120)")
         sp.add_argument("--large-files", type=int, default=3,
                         help="multi-megabyte contents to copy across drives (default 3)")
+        sp.add_argument("--drive-size", action="append", default=[], metavar="[Dnn=]SIZE",
+                        help="simulated drives: capacity each drive's data must fit in, e.g. "
+                             "500MB or 2GB for all, D03=250MB for one; file sizes shrink to fit")
 
     def run_args(sp, with_dataset=True):
         if with_dataset:
