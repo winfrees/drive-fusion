@@ -166,6 +166,21 @@ pyinstaller packaging/drivefusion.spec --noconfirm --clean
 * CI runs the lint and tests on Windows and Linux, then builds and smoke-tests three Windows
   executables: windowed `DriveFusion.exe`, console `drivefusion.exe`, and `dfscan-helper.exe`.
 
+### V&V tests
+
+`python -m vv` generates randomized test drives full of the cases Drive Fusion has to get right
+(copies, same-name-different-bytes, empty files and folders, hardlinks, exclusions, deep paths,
+edits, moves, silent corruption…), runs a Drive Fusion version through scan → rescan → verify,
+and reports pass/fail per requirement against [docs/PLAN.md](docs/PLAN.md).
+
+```bash
+python -m vv all --out ../vv/run1 --drives 6                       # simulated drives
+python -m vv all --out ../vv/phys --drive-path D01=E:\DriveFusionVV --drive-path D02=F:\DriveFusionVV
+python -m vv reset ../vv/run1 && python -m vv run ../vv/run1 --drivefusion-src ../other-checkout
+```
+
+See [docs/VV.md](docs/VV.md) for the requirements, dataset design, and how to read a report.
+
 ### The one rule
 
 Nothing outside `drivefusion/core/store/` and `drivefusion/core/export/` may reference a
@@ -179,3 +194,4 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 |---|---|
 | [docs/PLAN.md](docs/PLAN.md) | The build plan: read-only design, scan scope, Windows enumeration, data model and budgets at 50M files, durability scoring, FAIR/NDSA, planner, milestones |
 | [docs/REVIEW.md](docs/REVIEW.md) | Safety, file-integrity and security review: user needs → requirements → specification traceability, findings with reproductions, recommended order of fixes |
+| [docs/VV.md](docs/VV.md) | Verification & validation: testable requirements traced to the plan, randomized drive datasets (simulated or physical), the oracle, and the V&V tests |

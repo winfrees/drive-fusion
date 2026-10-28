@@ -1022,6 +1022,36 @@ already going to buy or reformat, never a proposal to reformat anything you own.
 - **Scorecard golden tests** pinned to a `standards/` version, so a rubric update appears as an
   intentional diff rather than silent drift.
 
+### 14.1 V&V tests
+
+Unit and fixture tests ask whether each part behaves as its author meant. V&V asks whether the
+tool as a whole gives a *user* true answers on drives that look like theirs. Full procedure:
+**[VV.md](VV.md)**.
+
+- **Requirements:** 26 testable requirements (`R-RO`, `R-SC`, `R-CAT`, `R-ID`, `R-RED`,
+  `R-INC`, `R-FIX`, `R-VER`), each traced to the section of this plan it restates.
+- **Datasets:** `python -m vv generate` builds a fresh, randomized dataset across a chosen
+  number of drives: **simulated** (folders registered as separate drives) or **physical** (one
+  folder per real device: USB-C thumb drives, spare spinners, any NTFS/exFAT/FAT32 mix). Each
+  dataset plants every trap: cross-drive and same-drive copies, renamed and case-variant copies,
+  same-name files with different bytes (including a difference the quick hash cannot see),
+  unique sizes, empty files and folders, hardlinks, link loops, default exclusions, out-of-scope
+  copies, hostile names, deep paths, version chains, unreadable files. Then come between-scan
+  edits, deletes, moves and a deleted subtree, then silent corruption. Data differs on every run;
+  the seed in every report rebuilds it exactly.
+- **Oracle and verdict:** `python -m vv run` drives a Drive Fusion version (`--drivefusion-src`
+  for any checkout) through baseline scan → rescan → verify with a no-touch snapshot around
+  each phase, and judges its conclusions against an oracle that imports nothing from the tool. The
+  output is per-requirement PASS / FAIL / N/A / DEFERRED, as Markdown, JSON and JUnit.
+- **Gate:** a release candidate should pass a physical-mode run with at least one NTFS and
+  one exFAT device, plus a simulated run of 10 drives. N/A is not a pass: any requirement left
+  N/A by one run's hardware must be covered by another.
+
+The first runs against 0.1.0 found a defect no unit test had caught: after a rescan, a new or
+moved copy of already fully hashed large content was split from its twins, under-counting
+copies. It is fixed in `Catalog.quick_hash_collisions()`, with regression tests at both levels
+(VV.md §7).
+
 ---
 
 ## 15. Milestones

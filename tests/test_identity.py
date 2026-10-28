@@ -210,6 +210,69 @@ def test_large_same_size_files_are_separated_by_the_full_pass(
     assert content_of(catalog, "a.bin") != content_of(catalog, "b.bin")
 
 
+def _fully_hashed_pair(catalog: Catalog, root: Path) -> bytes:
+    """Two identical large files, hashed until the full pass has run."""
+    root.mkdir()
+    payload = bytes(range(256)) * (hasher.SMALL_FILE_BYTES * 3 // 256)
+    (root / "a.bin").write_bytes(payload)
+    (root / "b.bin").write_bytes(payload)
+    scan(catalog, root)
+    assert hash_pass(catalog).full_hashed == 2
+    return payload
+
+
+def test_a_new_copy_of_fully_hashed_content_joins_its_group(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """Found by the V&V bench (docs/VV.md §7).
+
+    The full pass moves a group onto a full-hash content row and leaves the
+    quick-hash row empty. A copy arriving later quick-hashes onto that empty
+    row, alone; if nothing sends it to the full pass, it never meets its twins
+    and the report states one copy fewer than exist.
+    """
+    root = tmp_path / "vol"
+    payload = _fully_hashed_pair(catalog, root)
+    (root / "c.bin").write_bytes(payload)
+    scan(catalog, root)
+
+    hash_pass(catalog)
+
+    assert content_of(catalog, "c.bin") == content_of(catalog, "a.bin")
+    assert content_of(catalog, "a.bin") == content_of(catalog, "b.bin")
+
+
+def test_a_moved_copy_of_fully_hashed_content_keeps_its_identity(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """A move is a new path to the catalog, so it takes the same route."""
+    root = tmp_path / "vol"
+    _fully_hashed_pair(catalog, root)
+    (root / "moved").mkdir()
+    os.rename(root / "b.bin", root / "moved" / "b-renamed.bin")
+    scan(catalog, root)
+
+    hash_pass(catalog)
+
+    assert content_of(catalog, "b-renamed.bin") == content_of(catalog, "a.bin")
+
+
+def test_a_late_lookalike_of_fully_hashed_content_stays_distinct(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """Same sampled blocks, different bytes: the late file must be fully read."""
+    root = tmp_path / "vol"
+    payload = bytearray(_fully_hashed_pair(catalog, root))
+    payload[len(payload) // 4] ^= 0xFF  # outside every quick-hash sample
+    (root / "c.bin").write_bytes(bytes(payload))
+    scan(catalog, root)
+
+    hash_pass(catalog)
+
+    assert content_of(catalog, "c.bin") is not None
+    assert content_of(catalog, "c.bin") != content_of(catalog, "a.bin")
+
+
 def test_full_pass_is_skipped_when_the_quick_hash_was_exact(
     catalog: Catalog, tmp_path: Path
 ) -> None:
