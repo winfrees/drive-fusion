@@ -49,7 +49,8 @@ def populated(tmp_path: Path) -> Path:
     root = tmp_path / "media"
     (root / "sub").mkdir(parents=True)
     (root / "a.bin").write_bytes(b"a" * 100)
-    (root / "b.bin").write_bytes(b"b" * 200)
+    # Same size as a.bin, so the pair is genuinely unknown until hashed.
+    (root / "b.bin").write_bytes(b"b" * 100)
     (root / "sub" / "c.bin").write_bytes(b"c" * 300)
 
     catalog_path = tmp_path / "cat" / "catalog.db"
@@ -388,3 +389,47 @@ def _drain() -> None:
     for _ in range(10):
         QCoreApplication.processEvents()
         time.sleep(0.01)
+
+
+# -- refusals (docs/REVIEW.md F-01, F-03) --------------------------------------
+
+def test_scan_refuses_a_root_on_a_different_volume(window, populated: Path) -> None:
+    """The fixture records volume "shell:1"; the path is really on another one."""
+    from drivefusion.core.errors import RootRefusedError
+    from drivefusion.gui.workers import Cancellation
+
+    body = window.scope.scan_body()
+    with Catalog(populated) as catalog:
+        before = catalog.scans(limit=100)
+        with pytest.raises(RootRefusedError, match="not the catalogued volume"):
+            body(catalog, lambda _p: None, Cancellation())
+        assert catalog.scans(limit=100) == before, "nothing was scanned"
+
+
+def test_hash_refuses_a_root_on_a_different_volume(
+    window, populated: Path, monkeypatch
+) -> None:
+    from drivefusion.core.errors import RootRefusedError
+    from drivefusion.gui.workers import Cancellation
+
+    captured = []
+    # Capture the task body instead of starting it on the pool.
+    monkeypatch.setattr(window, "run_task", lambda body, _label: captured.append(body))
+    window.dashboard.request_hash()
+    with Catalog(populated) as catalog:
+        with pytest.raises(RootRefusedError, match="Nothing was hashed"):
+            captured[0](catalog, lambda _p: None, Cancellation())
+        assert catalog.counts()["identified"] == 0
+
+
+def test_adding_a_folder_that_holds_the_catalog_is_refused(
+    window, populated: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args: warnings.append(args[2])
+    )
+    assert window.scope.add_path(str(populated.parent)) is False
+    assert "contains the catalog" in warnings[0]

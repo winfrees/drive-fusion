@@ -16,17 +16,23 @@ from pathlib import Path
 from drivefusion import __version__
 from drivefusion.core import discovery
 from drivefusion.core.analysis import (
-    content_paths,
     duplicate_groups,
+    group_paths,
     integrity_incidents,
     reclamation_candidates,
     redundancy_summary,
     under_protected,
 )
 from drivefusion.core.enum.backend import describe_age, method_summary, plan_enumeration
+from drivefusion.core.errors import CatalogLocationError
 from drivefusion.core.identity import HASH_ALGO, hash_pass, verify_pass
 from drivefusion.core.scan import preview_root, scan_root
-from drivefusion.core.scope import ExclusionSet, ScopeError, validate_new_root
+from drivefusion.core.scope import (
+    ExclusionSet,
+    ScopeError,
+    bind_roots,
+    validate_new_root,
+)
 from drivefusion.core.store.catalog import Catalog
 
 BANNER = "Drive Fusion — read-only cataloging and consolidation planning"
@@ -176,7 +182,8 @@ def cmd_scope_add(args) -> int:
         existing = [root.path for root in catalog.scope_roots()]
         try:
             root_path = validate_new_root(args.path, existing)
-        except ScopeError as exc:
+            catalog.check_root_location(root_path)
+        except (ScopeError, CatalogLocationError) as exc:
             print(f"drivefusion: {exc}", file=sys.stderr)
             return 1
 
@@ -275,8 +282,18 @@ def cmd_scan(args) -> int:
             print("no scope roots; add one with: drivefusion scope add <path>")
             return 1
 
+        # A root is a path, and a path names whatever is mounted there today.
+        # Only roots whose volume is the catalogued one are scanned (F-01).
+        binding = bind_roots(catalog, roots)
+        for root, reason in binding.refused:
+            print(
+                f"drivefusion: not scanning [{root.id}] {root.path}: {reason}",
+                file=sys.stderr,
+            )
+
+        failed = bool(binding.refused)
         volumes = {row["id"]: row for row in catalog.volumes()}
-        for root in roots:
+        for root in binding.bound:
             volume = volumes.get(root.volume_id)
             decision = plan_enumeration(
                 supports_usn=bool(volume["supports_usn"]) if volume else False,
@@ -301,6 +318,10 @@ def cmd_scan(args) -> int:
             )
             counters = result["counters"]
             merged = result["merged"]
+            if not result["root_listed"]:
+                failed = True
+                print(f"drivefusion: {result['coverage']}", file=sys.stderr)
+                continue
             print(
                 f"  {counters.dirs:,} directories, {counters.files:,} files, "
                 f"{_human_bytes(counters.bytes)}"
@@ -315,7 +336,32 @@ def cmd_scan(args) -> int:
                 print("  first unreadable paths:")
                 for path in counters.unreadable_paths[:5]:
                     print(f"    {path}")
-        return 0
+        return 1 if failed else 0
+
+
+def _bound_root_ids(catalog, volume_id: int | None, verb: str):
+    """Roots a content-reading pass may read, after reporting the ones it may not.
+
+    Returns ``(root_ids, refused)``. ``root_ids`` is ``None`` when roots exist
+    but none may be read, so the caller can stop.
+    """
+    roots = catalog.scope_roots()
+    if volume_id is not None:
+        roots = [r for r in roots if r.volume_id == volume_id]
+    binding = bind_roots(catalog, roots)
+    for root, reason in binding.refused:
+        print(
+            f"drivefusion: skipping files under [{root.id}] {root.path}: {reason}",
+            file=sys.stderr,
+        )
+    if roots and not binding.bound:
+        print(
+            f"drivefusion: nothing to {verb}: no scope root "
+            "is on its catalogued volume right now",
+            file=sys.stderr,
+        )
+        return None, True
+    return binding.root_ids, bool(binding.refused)
 
 
 def cmd_find(args) -> int:
@@ -348,26 +394,34 @@ def cmd_hash(args) -> int:
     read-only through the gateway and writes nothing back to disk.
     """
     with Catalog(args.catalog) as catalog:
+        root_ids, refused = _bound_root_ids(catalog, args.volume, "hash")
+        if root_ids is None:
+            return 1
+
         def report(counters) -> None:
             print(f"  {counters.summary()}", flush=True)
 
         print(f"hashing with {HASH_ALGO} (files are opened read-only) ...")
         counters = hash_pass(
-            catalog, volume_id=args.volume, limit=args.limit, progress=report
+            catalog,
+            volume_id=args.volume,
+            limit=args.limit,
+            progress=report,
+            root_ids=root_ids,
         )
         if not counters.candidates:
             print(
                 "nothing to hash: every catalogued file already has an identity, "
                 "or has a size shared with no other file"
             )
-            return 0
+            return 1 if refused else 0
         print(f"  {counters.summary()}")
         print(f"  read {_human_bytes(counters.bytes_read)} of file contents")
         if counters.unreadable_paths:
             print("  first unreadable paths:")
             for line in counters.unreadable_paths[:5]:
                 print(f"    {line}")
-        return 0
+        return 1 if refused else 0
 
 
 def _print_group(catalog, group, *, show_paths: int = 4) -> None:
@@ -381,7 +435,7 @@ def _print_group(catalog, group, *, show_paths: int = 4) -> None:
     if group.reclaimable_bytes:
         line += f" — {_human_bytes(group.reclaimable_bytes)} duplicated on one drive"
     print(line)
-    for path in content_paths(catalog, group.content_id, limit=show_paths):
+    for path in group_paths(catalog, group, limit=show_paths):
         print(f"              {path}")
     if group.paths > show_paths:
         print(f"              ... and {group.paths - show_paths} more")
@@ -395,12 +449,14 @@ def cmd_report(args) -> int:
             # Stated, never implied: a report over a partly-hashed catalog
             # describes only the part that was hashed.
             print(
-                f"note: {summary['unhashed_files']:,} catalogued files have no "
-                "content identity yet.\n"
-                "      Files with a size shared by no other file are never "
-                "opened and never will be;\n"
-                "      run `drivefusion hash` if you expect more coverage than "
-                "this.\n"
+                f"note: {summary['unhashed_files']:,} catalogued files share a "
+                "size with another file but have\n"
+                "      no content identity yet, so they are left out of the "
+                "figures below;\n"
+                "      run `drivefusion hash` to identify them. Files whose size "
+                "no other file\n"
+                "      shares are counted as single copies without being "
+                "opened.\n"
             )
 
         if args.kind in ("summary", "redundancy"):
@@ -482,8 +538,13 @@ def cmd_report(args) -> int:
 
 def cmd_verify(args) -> int:
     with Catalog(args.catalog) as catalog:
+        root_ids, refused = _bound_root_ids(catalog, args.volume, "verify")
+        if root_ids is None:
+            return 1
         print("verifying content against recorded hashes ...")
-        result = verify_pass(catalog, volume_id=args.volume, limit=args.limit)
+        result = verify_pass(
+            catalog, volume_id=args.volume, limit=args.limit, root_ids=root_ids
+        )
         print(f"  checked:    {result['checked']:,}")
         print(f"  mismatched: {result['mismatched']:,}")
         print(f"  unreadable: {result['unreadable']:,}")
@@ -494,11 +555,12 @@ def cmd_verify(args) -> int:
                 "shared with no other file are never opened,\nso they carry no "
                 "hash and cannot be checked for corruption."
             )
-            return 0
+            return 1 if refused else 0
         for incident in result["incidents"][:20]:
             print(f"  {incident['result']:10} {incident['path']}")
-        # A mismatch is a finding, not a crash, but it should not look like success.
-        return 1 if result["mismatched"] else 0
+        # A mismatch is a finding, not a crash, but it should not look like
+        # success; nor should a pass that had to skip a root.
+        return 1 if result["mismatched"] or refused else 0
 
 
 def cmd_gui(args) -> int:
@@ -631,6 +693,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return handler(args)
+    except CatalogLocationError as exc:
+        print(f"drivefusion: {exc}", file=sys.stderr)
+        return 1
     except BrokenPipeError:
         # Piping into `head` closes stdout early; that is a normal way to use a
         # CLI, not an error worth a traceback.

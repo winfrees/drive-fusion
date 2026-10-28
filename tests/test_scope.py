@@ -86,3 +86,80 @@ def test_similar_prefixes_are_not_treated_as_nested(tmp_path: Path) -> None:
 
 def test_defaults_are_non_empty() -> None:
     assert len(DEFAULT_EXCLUDES) > 5
+
+
+# -- volume binding (docs/REVIEW.md F-01) -------------------------------------
+
+def _catalog_with_root(tmp_path: Path, guid: str):
+    from drivefusion.core.store.catalog import Catalog
+
+    root = tmp_path / "Research"
+    root.mkdir()
+    catalog = Catalog(tmp_path / "cat" / "catalog.db")
+    volume_id = catalog.upsert_volume(volume_guid=guid, label="ARCHIVE-A")
+    catalog.add_scope_root(volume_id, str(root))
+    return catalog, root
+
+
+def _volume_at(guid: str, label: str = "BACKUP-B"):
+    from drivefusion.core.discovery import VolumeInfo
+
+    return lambda path: VolumeInfo(volume_guid=guid, label=label)
+
+
+def test_a_root_on_its_catalogued_volume_is_bound(tmp_path: Path, monkeypatch) -> None:
+    from drivefusion.core import discovery
+    from drivefusion.core.scope import bind_roots
+
+    catalog, _root = _catalog_with_root(tmp_path, "vol:A")
+    monkeypatch.setattr(discovery, "identify_volume", _volume_at("vol:A", "ARCHIVE-A"))
+    with catalog:
+        binding = bind_roots(catalog, catalog.scope_roots())
+    assert binding.refused == []
+    assert len(binding.root_ids) == 1
+
+
+def test_another_drive_at_the_same_path_is_refused(tmp_path: Path, monkeypatch) -> None:
+    """Drive B given drive A's letter must not be read as drive A."""
+    from drivefusion.core import discovery
+    from drivefusion.core.scope import bind_roots
+
+    catalog, root = _catalog_with_root(tmp_path, "vol:A")
+    monkeypatch.setattr(discovery, "identify_volume", _volume_at("vol:B"))
+    with catalog:
+        binding = bind_roots(catalog, catalog.scope_roots())
+    assert binding.bound == []
+    [(refused_root, reason)] = binding.refused
+    assert refused_root.path == str(root)
+    assert "vol:B" in reason and "vol:A" in reason
+    assert "not the catalogued volume" in reason
+
+
+def test_a_root_whose_volume_cannot_be_identified_is_refused(tmp_path: Path) -> None:
+    """An unplugged drive: the path is gone, so nothing may be read there."""
+    from drivefusion.core.scope import bind_roots
+
+    catalog, root = _catalog_with_root(tmp_path, "vol:A")
+    root.rmdir()
+    with catalog:
+        binding = bind_roots(catalog, catalog.scope_roots())
+    assert binding.bound == []
+    assert "is not there" in binding.refused[0][1]
+
+
+def test_a_root_whose_volume_discovery_fails_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from drivefusion.core import discovery
+    from drivefusion.core.scope import bind_roots
+
+    catalog, _root = _catalog_with_root(tmp_path, "vol:A")
+
+    def fail(path):
+        raise discovery.DiscoveryError("no volume mount point")
+
+    monkeypatch.setattr(discovery, "identify_volume", fail)
+    with catalog:
+        binding = bind_roots(catalog, catalog.scope_roots())
+    assert binding.bound == []
+    assert "cannot identify the volume" in binding.refused[0][1]

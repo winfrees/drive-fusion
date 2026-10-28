@@ -119,18 +119,15 @@ What the layers guarantee today:
 
 These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
 
-* **The catalog location is not checked.** If you point `--catalog` at a folder inside a scan
-  root, scans will write the database there and catalogue it.
+* **The catalog is kept out of scope roots, but not off catalogued volumes.** A catalog inside
+  a scope root is refused, and so is a root that contains the catalog. A catalog elsewhere on
+  a catalogued drive is still allowed. Keep it on a drive you don't catalogue.
 * **The lint has blind spots.** It doesn't catch `subprocess`, `os.write`, `io.open`, numeric
   `os.open` flags or Win32 mutators called through `ctypes`. The other layers don't cover
   these either.
-* **Scope roots are paths, not volume identities.** Scan, hash and verify act on whatever
-  volume is currently mounted at the stored drive letter. Make sure the right drive is
-  attached before you run them.
-* **A directory that can't be listed is treated as gone.** So is an unplugged root. Its files
-  are tombstoned, never deleted, and come back on the next successful scan.
-* **Under-protected counts leave out files of unique size**, even though each of those has
-  exactly one copy.
+* **Scope roots are stored as drive-letter paths.** Scan, hash and verify first check that
+  the volume at the path is the catalogued one, and skip the root with a message if it isn't
+  or if the drive is unplugged. A root doesn't yet follow its drive to a new letter.
 
 ## Redundancy rules
 
@@ -140,7 +137,8 @@ These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
 | Same content twice on one drive | 1 copy (plus reclaimable space, reported as an observation) |
 | Hardlinks to one file | 1 physical copy |
 | Volume whose physical drive serial couldn't be read | its own drive (this can **overstate** copies; see the review) |
-| File not yet hashed | unknown, shown as "—" in the GUI |
+| File whose size no other catalogued file shares | 1 copy, known without opening it |
+| File sharing its size with another, not yet hashed | unknown, shown as "—" in the GUI |
 
 ## Scale
 

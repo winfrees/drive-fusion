@@ -10,6 +10,10 @@ The counting rule that matters, and the one that is easy to get wrong:
   would inflate the number that the whole tool exists to report.
 * A volume with no identified physical drive counts as its own drive, so an
   unmapped disk is never silently merged with another.
+* A file whose size no other catalogued file shares is one copy, known
+  without reading a byte of it. Hashing never opens such a file, so it has no
+  content identity, but leaving it out of the durability figures would hide the
+  files most certainly at risk (docs/REVIEW.md F-04).
 
 Everything here is a read-only query. Reclamation candidates are evidence for
 a human, never an instruction (docs/PLAN.md §3.3).
@@ -28,14 +32,35 @@ DRIVE_KEY = "COALESCE(v.drive_id, -v.id)"
 
 _LIVE = "f.vanished_at IS NULL AND f.content_id IS NOT NULL"
 
+#: Sizes held by exactly one live file. Counted over every read state: a size
+#: shared with an unreadable file or a placeholder might be a second copy.
+_UNIQUE_SIZES = (
+    "SELECT size_bytes FROM file WHERE vanished_at IS NULL "
+    "GROUP BY size_bytes HAVING COUNT(*) = 1"
+)
+
+#: Live files with no identity whose size is unique: single copies by
+#: construction. Empty files are left out; there is nothing in them to lose.
+_SINGLE_COPY = (
+    "f.vanished_at IS NULL AND f.content_id IS NULL AND f.size_bytes > 0 "
+    f"AND f.size_bytes IN ({_UNIQUE_SIZES})"
+)
+
 
 @dataclass(frozen=True)
 class ContentGroup:
-    content_id: int
+    """One content item and where it is held.
+
+    ``content_id`` is ``None`` for a single-copy file of unique size, which
+    has no identity because it never needed one; ``file_id`` names it instead.
+    """
+
+    content_id: int | None
     size_bytes: int
     paths: int
     drives: int
     physical_copies: int
+    file_id: int | None = None
 
     @property
     def reclaimable_bytes(self) -> int:
@@ -84,6 +109,24 @@ def _as_groups(rows) -> list[ContentGroup]:
     ]
 
 
+def single_copy_files(catalog: Catalog) -> list[ContentGroup]:
+    """Files whose size no other catalogued file shares: one copy each."""
+    return [
+        ContentGroup(
+            content_id=None,
+            size_bytes=int(r["size_bytes"]),
+            paths=1,
+            drives=1,
+            physical_copies=1,
+            file_id=int(r["id"]),
+        )
+        for r in catalog.conn.execute(
+            f"SELECT f.id, f.size_bytes FROM file f WHERE {_SINGLE_COPY} "
+            "ORDER BY f.size_bytes DESC"
+        )
+    ]
+
+
 def duplicate_groups(catalog: Catalog, *, limit: int | None = None) -> list[ContentGroup]:
     """Content that exists at more than one path, anywhere."""
     groups = _as_groups(_group_rows(catalog, "COUNT(f.id) > 1"))
@@ -101,6 +144,8 @@ def under_protected(
     groups = _as_groups(
         _group_rows(catalog, f"COUNT(DISTINCT {DRIVE_KEY}) < ?", (min_copies,))
     )
+    if min_copies > 1:
+        groups.extend(single_copy_files(catalog))
     groups.sort(key=lambda g: g.size_bytes * max(1, g.paths), reverse=True)
     return groups[:limit] if limit else groups
 
@@ -138,26 +183,35 @@ def redundancy_summary(catalog: Catalog, *, min_copies: int = 2) -> dict:
         "             WHERE vanished_at IS NULL AND content_id IS NOT NULL)"
     ).fetchone()["b"]
 
+    # Genuinely unknown: no identity yet, and a size some other file shares.
     unhashed = catalog.conn.execute(
         "SELECT COUNT(*) AS n FROM file "
-        "WHERE vanished_at IS NULL AND content_id IS NULL"
+        "WHERE vanished_at IS NULL AND content_id IS NULL "
+        f"AND size_bytes NOT IN ({_UNIQUE_SIZES})"
     ).fetchone()["n"]
 
+    single = single_copy_files(catalog)
+    single_bytes = sum(g.size_bytes for g in single)
     exposed = under_protected(catalog, min_copies=min_copies)
     reclaim = reclamation_candidates(catalog)
 
+    path_bytes = int(row["path_bytes"]) + single_bytes
+    unique_total = int(unique_bytes) + single_bytes
     return {
-        "distinct_content": int(row["distinct_content"]),
-        "catalogued_paths": int(row["catalogued_paths"]),
-        "path_bytes": int(row["path_bytes"]),
-        "unique_bytes": int(unique_bytes),
-        "duplicate_overhead_bytes": int(row["path_bytes"]) - int(unique_bytes),
+        "distinct_content": int(row["distinct_content"]) + len(single),
+        "catalogued_paths": int(row["catalogued_paths"]) + len(single),
+        "path_bytes": path_bytes,
+        "unique_bytes": unique_total,
+        "duplicate_overhead_bytes": path_bytes - unique_total,
         "under_protected_items": len(exposed),
         "under_protected_bytes": sum(g.size_bytes for g in exposed),
         "reclaimable_bytes": sum(g.reclaimable_bytes for g in reclaim),
-        # Coverage, stated rather than implied: analysis only describes what
-        # has been hashed, and a summary over a partly-hashed catalog would
-        # otherwise read as a summary over all of it.
+        # Files known to be single copies from their size alone; counted
+        # above, never opened.
+        "single_copy_files": len(single),
+        # Coverage, stated rather than implied: files whose size is shared but
+        # that have not been hashed could be copies of anything, and a summary
+        # that left them out silently would read as a summary over all of it.
         "unhashed_files": int(unhashed),
     }
 
@@ -199,6 +253,18 @@ def content_paths(catalog: Catalog, content_id: int, *, limit: int = 10) -> list
         os.path.join(catalog.dir_path(int(r["dir_id"]), os.sep), r["name"])
         for r in rows[:limit]
     ]
+
+
+def group_paths(catalog: Catalog, group: ContentGroup, *, limit: int = 10) -> list[str]:
+    """Where a group lives, whether it has a content identity or is a single file."""
+    if group.content_id is not None:
+        return content_paths(catalog, group.content_id, limit=limit)
+    row = catalog.conn.execute(
+        "SELECT dir_id, name FROM file WHERE id = ?", (group.file_id,)
+    ).fetchone()
+    if row is None:
+        return []
+    return [os.path.join(catalog.dir_path(int(row["dir_id"]), os.sep), row["name"])]
 
 
 def _other_copies(catalog: Catalog, content_id: int) -> int:

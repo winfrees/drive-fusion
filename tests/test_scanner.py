@@ -213,3 +213,97 @@ def test_dehydrated_files_are_catalogued_but_not_opened(
         "SELECT read_state FROM file WHERE name = 'report.txt'"
     ).fetchone()
     assert row["read_state"] == "skipped-dehydrated"
+
+
+# -- unknown is not gone (docs/REVIEW.md F-02) --------------------------------
+
+def _live_names(catalog: Catalog) -> set[str]:
+    return {
+        row["name"]
+        for row in catalog.conn.execute(
+            "SELECT name FROM file WHERE vanished_at IS NULL"
+        )
+    }
+
+
+def test_files_under_an_unlistable_directory_are_not_tombstoned(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    from drivefusion.core.enum.batchwalk import fsio_lister
+
+    root = tmp_path / "media"
+    (root / "locked" / "deeper").mkdir(parents=True)
+    (root / "top.txt").write_text("t")
+    (root / "locked" / "a.txt").write_text("a")
+    (root / "locked" / "deeper" / "b.txt").write_text("bb")
+    scan(catalog, root)
+    assert _live_names(catalog) == {"top.txt", "a.txt", "b.txt"}
+
+    def flaky(path):
+        if path.endswith("locked"):
+            raise PermissionError("access denied")
+        return fsio_lister(path)
+
+    result = rescan_with(catalog, flaky)
+    assert result["merged"]["vanished"] == 0
+    assert _live_names(catalog) == {"top.txt", "a.txt", "b.txt"}
+
+
+def test_a_directory_missing_from_a_listing_is_tombstoned_with_its_subtree(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """The listed-directory rule still records what really went away."""
+    import shutil
+
+    root = tmp_path / "media"
+    (root / "keep").mkdir(parents=True)
+    (root / "gone" / "deeper").mkdir(parents=True)
+    (root / "keep" / "k.txt").write_text("k")
+    (root / "gone" / "g.txt").write_text("g")
+    (root / "gone" / "deeper" / "d.txt").write_text("dd")
+    (root / "loose.txt").write_text("l")
+    scan(catalog, root)
+
+    shutil.rmtree(root / "gone")
+    (root / "loose.txt").unlink()
+    result = rescan(catalog, root)
+
+    assert result["merged"]["vanished"] == 3
+    assert _live_names(catalog) == {"k.txt"}
+    vanished_dirs = {
+        row["name"]
+        for row in catalog.conn.execute(
+            "SELECT name FROM dir WHERE vanished_at IS NOT NULL"
+        )
+    }
+    assert vanished_dirs == {"gone", "deeper"}
+
+
+def test_an_unlistable_root_merges_nothing(catalog: Catalog, tmp_path: Path) -> None:
+    """An unplugged drive is not a drive whose files were all deleted."""
+    root = tmp_path / "media"
+    root.mkdir()
+    for i in range(4):
+        (root / f"f{i}.txt").write_text("x" * (i + 1))
+    scan(catalog, root)
+    root.rename(tmp_path / "unplugged")
+
+    result = rescan(catalog, root)
+
+    assert result["root_listed"] is False
+    assert result["merged"]["vanished"] == 0
+    assert "nothing was merged" in result["coverage"]
+    assert len(_live_names(catalog)) == 4
+    latest = catalog.scans(limit=1)[0]
+    assert latest["status"] == "failed"
+
+
+def rescan_with(catalog: Catalog, lister) -> dict:
+    stored = catalog.scope_roots()[0]
+    return scan_root(
+        catalog,
+        root_path=stored.path,
+        root_id=stored.id,
+        volume_id=stored.volume_id,
+        lister=lister,
+    )

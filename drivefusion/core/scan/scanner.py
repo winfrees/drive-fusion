@@ -94,7 +94,13 @@ def scan_root(
     workers: int = DEFAULT_WORKERS,
     supports_file_ids: bool | None = None,
 ) -> dict:
-    """Enumerate one scope root into the catalog. Returns a result summary."""
+    """Enumerate one scope root into the catalog. Returns a result summary.
+
+    Only directories whose listing succeeded may have anything tombstoned
+    beneath them, and if the root itself cannot be listed nothing is merged at
+    all: an unplugged drive is not a drive whose files were deleted
+    (docs/REVIEW.md F-02). ``result["root_listed"]`` says which case this was.
+    """
     excludes = excludes or ExclusionSet.for_root(())
     counters = ScanCounters()
     scan_id = catalog.begin_scan(volume_id, root_id, method, elevated=False)
@@ -110,6 +116,11 @@ def scan_root(
     )
 
     pending: list[tuple] = []
+    # Directories whose listing succeeded, staged so the merge tombstones only
+    # inside them; the same rule the delta path follows.
+    listed_dirs: list[int] = []
+    root_listed = False
+    root_error: str | None = None
     since_checkpoint = 0
 
     def prune(parent: str, entry) -> bool:
@@ -151,11 +162,19 @@ def scan_root(
             current_dir_id, depth = known
 
             if not result.ok:
+                if current_dir_id == root_dir_id:
+                    root_error = result.error
                 counters.unreadable += 1
                 if len(counters.unreadable_paths) < 50:
                     counters.unreadable_paths.append(result.path)
                 continue
             counters.dirs += 1
+            if current_dir_id == root_dir_id:
+                root_listed = True
+            listed_dirs.append(current_dir_id)
+            if len(listed_dirs) >= BATCH_ROWS:
+                catalog.stage_dirs(scan_id, listed_dirs)
+                listed_dirs.clear()
 
             for entry in result.entries:
                 entry_path = os.path.join(result.path, entry.name)
@@ -217,6 +236,9 @@ def scan_root(
         if pending:
             catalog.stage_files(pending)
             pending.clear()
+        if listed_dirs:
+            catalog.stage_dirs(scan_id, listed_dirs)
+            listed_dirs.clear()
         conn.execute("COMMIT")
     except Exception as exc:
         conn.execute("ROLLBACK")
@@ -225,7 +247,12 @@ def scan_root(
         )
         raise
 
-    merged = catalog.merge_scan(scan_id, volume_id, root_id)
+    if not root_listed:
+        return _refuse_merge(catalog, scan_id, root_path, root_error, counters)
+
+    merged = catalog.merge_scan(
+        scan_id, volume_id, root_id, vanish_scope="listed-dirs"
+    )
     catalog.rebuild_rollups(volume_id)
     catalog.finish_scan(
         ScanStats(
@@ -245,6 +272,42 @@ def scan_root(
         "counters": counters,
         "merged": merged,
         "coverage": counters.coverage_line(),
+        "root_listed": True,
+    }
+
+
+def _refuse_merge(
+    catalog: Catalog,
+    scan_id: int,
+    root_path: str,
+    error: str | None,
+    counters: ScanCounters,
+) -> dict:
+    """Discard a scan whose root could not be listed, leaving the catalog as it was."""
+    reason = f"root could not be listed: {error or 'no listing returned'}"
+    conn = catalog.conn
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM stage_file WHERE scan_id = ?", (scan_id,))
+        conn.execute("DELETE FROM stage_dir WHERE scan_id = ?", (scan_id,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    catalog.finish_scan(
+        ScanStats(scan_id=scan_id, unreadable=counters.unreadable),
+        status="failed",
+        error=reason,
+    )
+    return {
+        "scan_id": scan_id,
+        "counters": counters,
+        "merged": {"staged": 0, "inserted": 0, "updated": 0, "vanished": 0},
+        "coverage": (
+            f"{root_path}: {reason}; nothing was merged and nothing was marked "
+            "vanished"
+        ),
+        "root_listed": False,
     }
 
 
