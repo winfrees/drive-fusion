@@ -67,24 +67,25 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "the regions the quick hash samples (the tier-2 full-hash case)."),
     Requirement("R-ID-03", "§6.6, §8.1",
                 "A file is opened for hashing only when its size is shared with another "
-                "catalogued file (or it was identified before and is unchanged); files "
-                "with a unique size are reported as unhashed rather than implied covered."),
+                "catalogued file (or it was identified before and is unchanged). Shared-size "
+                "files not yet identified are reported as unhashed rather than implied covered."),
     Requirement("R-RED-01", "§8.1",
                 "Copies are counted over distinct physical drives, never over paths: two "
                 "paths on one drive are one copy."),
     Requirement("R-RED-02", "§6.7, §8.1",
                 "Hardlinks are one physical copy, not two."),
-    Requirement("R-RED-03", "§8.1",
+    Requirement("R-RED-03", "§8.1, REVIEW SR-12",
                 "The under-protected set is exactly the content held on fewer distinct "
-                "drives than the policy minimum."),
+                "drives than the policy minimum, including every non-empty file whose size "
+                "no other file shares: one copy, known without reading it."),
     Requirement("R-RED-04", "§8.1, §3.3",
                 "Reclamation candidates are exactly the content duplicated within a single "
                 "drive, with reclaimable bytes = (physical copies - drives) x size; "
                 "cross-drive copies are never counted as waste."),
-    Requirement("R-RED-05", "§8.1, §11",
+    Requirement("R-RED-05", "§8.1, §11, REVIEW SR-12",
                 "Headline numbers (distinct content, catalogued paths, bytes, duplicate "
-                "weight, under-protected items and bytes, same-drive waste, unhashed "
-                "files) agree with the ground truth."),
+                "weight, under-protected items and bytes, same-drive waste, single-copy "
+                "files, unhashed files) agree with the ground truth."),
     Requirement("R-INC-01", "§6.3, §6.4",
                 "A rescan reflects files added and modified since the previous scan; a "
                 "modified file does not keep its old identity."),

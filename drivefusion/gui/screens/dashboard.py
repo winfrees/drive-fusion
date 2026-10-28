@@ -75,7 +75,7 @@ class DashboardScreen(QWidget):
         layout.addWidget(self.coverage)
 
         self.coverage_bar = QProgressBar()
-        self.coverage_bar.setFormat("%p% of catalogued files have content identity")
+        self.coverage_bar.setFormat("%p% of catalogued files have a known copy count")
         layout.addWidget(self.coverage_bar)
 
         grid = QGridLayout()
@@ -150,9 +150,10 @@ class DashboardScreen(QWidget):
             self.tiles[key].set_value(human_bytes(summary[key]))
 
         live = counts["files"]
-        identified = counts["identified"]
+        # A file of unique size needs no hash to be counted: it is one copy.
+        known = counts["identified"] + summary["single_copy_files"]
         self.coverage_bar.setMaximum(max(1, live))
-        self.coverage_bar.setValue(identified)
+        self.coverage_bar.setValue(min(known, live))
 
         if live == 0:
             self.coverage.setText(
@@ -160,16 +161,18 @@ class DashboardScreen(QWidget):
             )
         elif summary["unhashed_files"]:
             self.coverage.setText(
-                f"<b>Coverage: {percent(identified, live)}</b> — "
-                f"{summary['unhashed_files']:,} of {live:,} catalogued files have "
-                "no content identity yet, so the duplication and durability "
-                "figures below describe only the rest. Files whose size is "
-                "shared with no other file are never opened and never will be."
+                f"<b>Coverage: {percent(known, live)}</b> — "
+                f"{summary['unhashed_files']:,} of {live:,} catalogued files share "
+                "a size with another file but have no content identity yet, so "
+                "the duplication and durability figures below describe only the "
+                "rest. Files whose size no other file shares are counted as "
+                "single copies without being opened."
             )
         else:
             self.coverage.setText(
-                f"<b>Coverage: {percent(identified, live)}</b> — every catalogued "
-                "file that can have an identity has one."
+                f"<b>Coverage: {percent(known, live)}</b> — every catalogued "
+                "file is either identified or, having a size no other file "
+                "shares, known to be a single copy."
             )
 
         self.detail.setText(
@@ -181,9 +184,19 @@ class DashboardScreen(QWidget):
         )
 
     def request_hash(self) -> None:
+        from drivefusion.core.errors import RootRefusedError
         from drivefusion.core.identity import hash_pass
+        from drivefusion.core.scope import bind_roots
 
         def body(catalog, progress, cancel):
+            # Only files under roots whose volume is confirmed are read, so a
+            # drive that took another's letter is never hashed as that drive
+            # (docs/REVIEW.md F-01).
+            binding = bind_roots(catalog, catalog.scope_roots())
+            if binding.refused and not binding.bound:
+                raise RootRefusedError(
+                    "Nothing was hashed.\n\n" + "\n".join(binding.refusal_lines())
+                )
             progress(Progress("Hashing candidates…"))
 
             def report(counters):
@@ -197,6 +210,14 @@ class DashboardScreen(QWidget):
                 )
                 cancel.raised()
 
-            return hash_pass(catalog, progress=report)
+            counters = hash_pass(
+                catalog, progress=report, root_ids=binding.root_ids
+            )
+            if binding.refused:
+                raise RootRefusedError(
+                    "Files under these roots were not read:\n\n"
+                    + "\n".join(binding.refusal_lines())
+                )
+            return counters
 
         self.hashRequested.emit(body)

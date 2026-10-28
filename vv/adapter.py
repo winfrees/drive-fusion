@@ -178,30 +178,41 @@ class DriveFusionAdapter:
             out[dir_id] = (drive, rel, row["vanished_at"] is not None)
         return out
 
-    @staticmethod
-    def _group(g) -> dict:
-        return {"content_id": g.content_id, "size": g.size_bytes, "paths": g.paths,
-                "drives": g.drives, "physical_copies": g.physical_copies,
-                "reclaimable_bytes": g.reclaimable_bytes}
+    def _group(self, g, file_keys: dict[int, list]) -> dict:
+        out = {"content_id": g.content_id, "size": g.size_bytes, "paths": g.paths,
+               "drives": g.drives, "physical_copies": g.physical_copies,
+               "reclaimable_bytes": g.reclaimable_bytes}
+        # Versions with REVIEW F-04 report single-copy files as groups with no
+        # content id; the only way to say which file is meant is its file id.
+        file_id = getattr(g, "file_id", None)
+        if g.content_id is None and file_id is not None:
+            out["members"] = [file_keys[file_id]]
+        return out
 
     def collect(self, min_copies: int) -> dict:
         dirs = self._dir_paths()
         files = []
+        file_keys: dict[int, list] = {}
         for r in self.catalog.conn.execute(
-                "SELECT dir_id, name, size_bytes, content_id, vanished_at, read_state FROM file"):
+                "SELECT id, dir_id, name, size_bytes, content_id, vanished_at, read_state FROM file"):
             drive, rel = dirs[int(r["dir_id"])][:2]
             path = f"{rel}/{r['name']}" if rel else r["name"]
+            file_keys[int(r["id"])] = [drive, path]
             files.append([drive, path, int(r["size_bytes"]),
                           r["content_id"], r["vanished_at"] is not None, r["read_state"]])
         a = self.analysis
         everything = len(self.roots) + 1  # every content is "under" N+1 copies
+
+        def groups(found) -> list[dict]:
+            return [self._group(g, file_keys) for g in found]
+
         return {
             "files": files,
             "dirs": [[d, p, v] for d, p, v in dirs.values() if p],
-            "groups_all": [self._group(g) for g in a.under_protected(self.catalog, min_copies=everything)],
-            "duplicates": [self._group(g) for g in a.duplicate_groups(self.catalog)],
-            "under_protected": [self._group(g) for g in a.under_protected(self.catalog, min_copies=min_copies)],
-            "reclamation": [self._group(g) for g in a.reclamation_candidates(self.catalog)],
+            "groups_all": groups(a.under_protected(self.catalog, min_copies=everything)),
+            "duplicates": groups(a.duplicate_groups(self.catalog)),
+            "under_protected": groups(a.under_protected(self.catalog, min_copies=min_copies)),
+            "reclamation": groups(a.reclamation_candidates(self.catalog)),
             "summary": a.redundancy_summary(self.catalog, min_copies=min_copies),
             "volumes": {d: {"volume_id": i["volume_id"], "device": i["device"],
                             **self.discovered.get(d, {})} for d, i in self.roots.items()},

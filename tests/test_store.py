@@ -400,3 +400,53 @@ def test_find_excludes_vanished_by_default(catalog: Catalog, volume_id: int) -> 
 
     assert list(catalog.find("%a.txt%")) == []
     assert len(list(catalog.find("%a.txt%", include_vanished=True))) == 1
+
+
+# -- catalog location (docs/REVIEW.md F-03) -----------------------------------
+
+def test_a_root_containing_the_catalog_is_refused(tmp_path: Path) -> None:
+    from drivefusion.core.errors import CatalogLocationError
+
+    tree = tmp_path / "media"
+    with Catalog(tree / "catalog.db") as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="test:1")
+        with pytest.raises(CatalogLocationError, match="contains the catalog"):
+            catalog.add_scope_root(volume_id, str(tree))
+        # An ancestor of the catalog's folder is refused the same way.
+        with pytest.raises(CatalogLocationError):
+            catalog.add_scope_root(volume_id, str(tmp_path))
+        assert catalog.scope_roots() == []
+
+
+def test_a_catalog_inside_a_scope_root_is_not_opened(tmp_path: Path) -> None:
+    """Refused before connecting, so not even -wal/-shm appear in the tree."""
+    from drivefusion.core.errors import CatalogLocationError
+
+    tree = tmp_path / "media"
+    tree.mkdir()
+    (tree / "data.bin").write_bytes(b"d" * 10)
+    outside = tmp_path / "elsewhere" / "catalog.db"
+    with Catalog(outside) as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="test:1")
+        catalog.add_scope_root(volume_id, str(tree))
+
+    # The user later points the tool at a copy of the catalog inside the root.
+    inside = tree / "catalog.db"
+    inside.write_bytes(outside.read_bytes())
+    before = sorted(p.name for p in tree.iterdir())
+
+    with pytest.raises(CatalogLocationError, match="inside scope root"):
+        Catalog(inside)
+    assert sorted(p.name for p in tree.iterdir()) == before
+
+
+def test_a_catalog_beside_a_scope_root_opens(tmp_path: Path) -> None:
+    """Sibling folders are not nested, however similar their names."""
+    tree = tmp_path / "media"
+    tree.mkdir()
+    path = tmp_path / "media-catalog" / "catalog.db"
+    with Catalog(path) as catalog:
+        volume_id = catalog.upsert_volume(volume_guid="test:1")
+        catalog.add_scope_root(volume_id, str(tree))
+    with Catalog(path) as reopened:
+        assert len(reopened.scope_roots()) == 1

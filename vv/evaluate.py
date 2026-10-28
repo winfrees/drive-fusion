@@ -424,7 +424,9 @@ class Evaluator:
         r2.finish("no drive in this dataset supports hardlinks")
 
         def as_paths(groups: list[dict]) -> dict[frozenset, dict]:
-            return {obs.path_set(g["content_id"]): g for g in groups}
+            # A single-copy group has no content id; the adapter names its file.
+            return {frozenset(map(tuple, g["members"])) if g.get("members") is not None
+                    else obs.path_set(g["content_id"]): g for g in groups}
 
         true_sets = {frozenset(g["paths"]) for g in exp["groups"].values()}
 
@@ -441,8 +443,9 @@ class Evaluator:
         r = self.new("VV-RED-03", f"Under-protected set is exactly the content on fewer than "
                      f"{self.min_copies} drives", ["R-RED-03"], phase)
         expected = {frozenset(exp["groups"][c]["paths"]): c for c in exp["under_protected"]}
+        expected.update({frozenset([k]): k for k in exp["under_protected_singles"]})
         got = as_paths(raw["under_protected"])
-        r.checked = len(exp["groups"])
+        r.checked = len(exp["groups"]) + len(exp["singles"])
         for ps in sorted(set(expected) - set(got), key=sorted):
             r.fail(f"not reported as under-protected: {self.tag(sorted(ps)[0])} "
                    f"({len(ps)} path(s))")

@@ -129,8 +129,11 @@ def test_hash_report_and_verify(cli, tmp_path: Path, capsys) -> None:
     report = capsys.readouterr().out
     assert "one.bin" in report and "two.bin" in report
     # The solo file has a size no other file shares, so it is never opened —
-    # and the report has to say so rather than implying full coverage.
-    assert "no content identity yet" in report
+    # but that makes it a known single copy, reported as under-protected
+    # rather than as an unknown (docs/REVIEW.md F-04).
+    assert "no content identity yet" not in report
+    assert "solo.bin" in report
+    assert "under-protected:   2 items" in report
     # A reclamation figure must never read as an instruction.
     assert "never deletes" in report
 
@@ -214,4 +217,78 @@ def test_the_windowed_build_opens_a_window_instead_of_printing_help() -> None:
 
 def test_scan_without_scope_is_an_error(cli, capsys) -> None:
     assert cli("scan") == 1
+    assert "no scope roots" in capsys.readouterr().out
+
+
+# -- refusals (docs/REVIEW.md F-01, F-02, F-03) --------------------------------
+
+def _another_volume(monkeypatch) -> None:
+    """Make every path report a volume the catalog has never seen."""
+    from drivefusion.core import discovery
+
+    monkeypatch.setattr(
+        discovery,
+        "identify_volume",
+        lambda path: discovery.VolumeInfo(volume_guid="vol:impostor", label="B"),
+    )
+
+
+def test_scan_hash_and_verify_refuse_a_different_volume_at_the_root(
+    cli, tmp_path: Path, capsys, monkeypatch
+) -> None:
+    tree = tmp_path / "media"
+    tree.mkdir()
+    payload = b"bound" * 100
+    (tree / "a.bin").write_bytes(payload)
+    (tree / "b.bin").write_bytes(payload)
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    capsys.readouterr()
+
+    _another_volume(monkeypatch)
+    (tree / "c.bin").write_bytes(b"new")   # would be catalogued if scanned
+
+    assert cli("scan") == 1
+    err = capsys.readouterr().err
+    assert "not scanning" in err and "not the catalogued volume" in err
+
+    assert cli("hash") == 1
+    err = capsys.readouterr().err
+    assert "skipping files under" in err and "nothing to hash" in err
+
+    assert cli("verify") == 1
+    assert "nothing to verify" in capsys.readouterr().err
+
+    monkeypatch.undo()
+    assert cli("status") == 0
+    status = capsys.readouterr().out
+    assert "files:       2" in status, "the refused scan recorded nothing"
+    assert "identified:  0 files" in status, "the refused hash read nothing"
+
+
+def test_scan_of_an_unplugged_root_reports_and_keeps_its_files(
+    cli, tmp_path: Path, capsys
+) -> None:
+    tree = tmp_path / "media"
+    tree.mkdir()
+    (tree / "a.bin").write_bytes(b"a")
+    assert cli("scope", "add", str(tree)) == 0
+    assert cli("scan") == 0
+    tree.rename(tmp_path / "unplugged")
+    capsys.readouterr()
+
+    assert cli("scan") == 1
+    assert "is not there" in capsys.readouterr().err
+    assert cli("find", "a.bin") == 0, "still catalogued, not vanished"
+
+
+def test_a_catalog_inside_a_scope_root_is_refused(
+    tmp_path: Path, capsys
+) -> None:
+    tree = tmp_path / "media"
+    tree.mkdir()
+    inside = tree / "catalog.db"
+    assert main(["--catalog", str(inside), "scope", "add", str(tree)]) == 1
+    assert "contains the catalog" in capsys.readouterr().err
+    assert main(["--catalog", str(inside), "scope", "list"]) == 0
     assert "no scope roots" in capsys.readouterr().out

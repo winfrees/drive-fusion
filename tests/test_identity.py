@@ -445,3 +445,31 @@ def test_verify_passes_on_intact_content(catalog: Catalog, tmp_path: Path) -> No
 
     assert result["checked"] == 2
     assert result["mismatched"] == 0
+
+
+def test_hash_and_verify_read_only_the_roots_they_are_given(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """A root whose volume could not be confirmed is never read (REVIEW F-01)."""
+    payload = b"bound to a volume" * 40
+    confirmed, unconfirmed = tmp_path / "A", tmp_path / "B"
+    for root in (confirmed, unconfirmed):
+        root.mkdir()
+        (root / "x.bin").write_bytes(payload)
+        (root / "y.bin").write_bytes(payload)
+    scan(catalog, confirmed, guid="id:A")
+    scan(catalog, unconfirmed, guid="id:B")
+    allowed = {r.id for r in catalog.scope_roots() if r.path == str(confirmed)}
+
+    counters = hash_pass(catalog, root_ids=allowed)
+    assert counters.candidates == 2
+    identified = {
+        catalog.dir_path(row["dir_id"], os.sep)
+        for row in catalog.conn.execute(
+            "SELECT dir_id FROM file WHERE content_id IS NOT NULL"
+        )
+    }
+    assert identified == {str(confirmed)}
+
+    assert verify_pass(catalog, root_ids=allowed)["checked"] == 2
+    assert verify_pass(catalog, root_ids=frozenset())["checked"] == 0

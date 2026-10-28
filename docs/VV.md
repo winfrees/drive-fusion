@@ -96,12 +96,12 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-CAT-07 | §2, §5, §8.1 | Each drive is a distinct device in the catalog |
 | R-ID-01 | §6.6, §10.4 | Byte-identical files share one identity regardless of name, case, folder, drive or mtime |
 | R-ID-02 | §6.6 | Different bytes never share an identity, including same name, same size, and differences outside the quick-hash samples (tier 2) |
-| R-ID-03 | §6.6, §8.1 | Only shared-size files (or unchanged previously identified ones) are hashed; unique sizes are reported as unhashed |
+| R-ID-03 | §6.6, §8.1 | Only shared-size files (or unchanged previously identified ones) are hashed; shared-size files not yet identified are reported as unhashed |
 | R-RED-01 | §8.1 | Copies are counted over distinct drives, never paths |
 | R-RED-02 | §6.7, §8.1 | A hardlink is not a second copy |
-| R-RED-03 | §8.1 | The under-protected set is exactly the content on fewer drives than the policy minimum |
+| R-RED-03 | §8.1, REVIEW SR-12 | The under-protected set is exactly the content on fewer drives than the policy minimum, including every non-empty unique-size file as a known single copy |
 | R-RED-04 | §8.1, §3.3 | Reclamation is exactly same-drive duplication; reclaimable = (physical − drives) × size |
-| R-RED-05 | §8.1, §11 | Headline numbers agree with the ground truth |
+| R-RED-05 | §8.1, §11, REVIEW SR-12 | Headline numbers agree with the ground truth, single-copy files included |
 | R-INC-01 | §6.3, §6.4 | A rescan reflects additions and modifications; a modified file loses its old identity |
 | R-INC-02 | §7.1 (FAIR A2) | Vanished files and folders are tombstoned with metadata kept, not removed |
 | R-INC-03 | §6.4 | Moved/renamed content is recognized as the same content at a new path |
@@ -153,7 +153,7 @@ support. `tests/test_vv.py` asserts that.
 | same-name-head-diff / -tail-diff / -one-byte | Same path, **same size**, bytes differ at the start, at the end, or in one random byte | R-ID-02 |
 | same-name-hidden-diff | Same path, same size (>700 KB), one byte differs **between the quick hash's head and midpoint samples**: only the tier-2 full hash can separate them | R-ID-02 |
 | same-size-diff-name | Unrelated contents of identical size | R-ID-02 |
-| unique-size | A size reserved so no other file can ever have it: must never be opened | R-ID-03 |
+| unique-size | A size reserved so no other file can ever have it: must never be opened, and must be reported as a single copy | R-ID-03, R-RED-03 |
 | empty-files | Zero-byte files, some with the same name on several drives (`__init__.py`, `.keep`) | R-CAT-03 |
 | empty-dirs | Empty folders and nested empty chains (`TODO/nested/deeper`) | R-CAT-02 |
 | hardlinks | One inode at 2–3 paths, sometimes also copied to another drive | R-RED-02 |
@@ -228,9 +228,9 @@ tool's code would agree with the tool's bugs.
 | VV-ID-03 | baseline, rescan | R-ID-03 | The set of identified files equals the spec's coverage set exactly |
 | VV-RED-01 | baseline, rescan | R-RED-01 | Each content's reported drive count is its true distinct-drive count |
 | VV-RED-02 | baseline, rescan | R-RED-02 | Hardlinked content reports its true physical copy count |
-| VV-RED-03 | baseline, rescan | R-RED-03 | The under-protected list equals the expected list, compared as path sets |
+| VV-RED-03 | baseline, rescan | R-RED-03 | The under-protected list equals the expected list, compared as path sets; single-copy files are matched by their one path |
 | VV-RED-04 | baseline, rescan | R-RED-04 | The reclamation list and each reclaimable byte count are exact |
-| VV-RED-05 | baseline, rescan | R-RED-05 | Every headline number in `redundancy_summary` is exact |
+| VV-RED-05 | baseline, rescan | R-RED-05 | Every headline number in `redundancy_summary` is exact, including `single_copy_files` |
 | VV-INC-01 | rescan | R-INC-01, R-CAT-01 | The rescan file set and sizes are exact; no edited file keeps its old identity |
 | VV-INC-02 | rescan | R-INC-02 | Every deleted file is tombstoned, none removed, none tombstoned wrongly |
 | VV-INC-03 | rescan | R-INC-03 | A moved file's old path is tombstoned and its new path shares the identity of the content's other copies |

@@ -143,8 +143,13 @@ def test_oracle_counts_drives_not_paths_and_links_once() -> None:
     assert (h["drives"], h["physical"], h["reclaimable"]) == (1, 1, 0), "hardlink is one copy"
     assert base["under_protected"] == {"h"}
     assert ("D2", "u") not in base["identified"], "a unique size is never hashed"
+    # ...but it is a known single copy, and so under-protected (REVIEW SR-12).
+    assert base["under_protected_singles"] == {("D2", "u")}
+    assert base["summary"]["under_protected_items"] == 2
     assert not {("D1", "e1"), ("D2", "e2")} & base["identified"], "empty files hold no content"
-    assert base["summary"]["unhashed_files"] == 3
+    assert ("D1", "e1") not in base["singles"], "an empty file is not a copy of anything"
+    # Unknown means "could still be a copy": only the two shared-size empty files.
+    assert base["summary"]["unhashed_files"] == 2
 
 
 # -- the evaluator -----------------------------------------------------------
@@ -203,6 +208,19 @@ def test_evaluator_catches_a_wrong_headline_number(completed_run) -> None:
         obs["phases"]["baseline"]["summary"]["under_protected_items"] += 1
 
     assert _rejudge(manifest, observed, skew)[("VV-RED-05", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_a_single_copy_left_off_the_at_risk_list(completed_run) -> None:
+    """The REVIEW F-04 defect, planted: unique-size files missing from under-protected."""
+    manifest, observed, _ = completed_run
+    if not oracle.expectations(manifest)["baseline"]["under_protected_singles"]:
+        pytest.skip(f"seed {manifest['seed']}: no single-copy files")
+
+    def drop(obs):
+        phase = obs["phases"]["baseline"]
+        phase["under_protected"] = [g for g in phase["under_protected"] if not g.get("members")]
+
+    assert _rejudge(manifest, observed, drop)[("VV-RED-03", "baseline")]["verdict"] == ev.FAIL
 
 
 def test_evaluator_catches_a_touched_tree(completed_run) -> None:

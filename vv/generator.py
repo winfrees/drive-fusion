@@ -40,7 +40,7 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "same-name-one-byte": ("R-ID-02",),
     "same-name-hidden-diff": ("R-ID-02",),
     "same-size-diff-name": ("R-ID-02",),
-    "unique-size": ("R-ID-03",),
+    "unique-size": ("R-ID-03", "R-RED-03"),
     "empty-files": ("R-CAT-03",),
     "empty-dirs": ("R-CAT-02",),
     "hardlinks": ("R-RED-02",),

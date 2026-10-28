@@ -21,7 +21,7 @@ from typing import Callable
 
 from drivefusion.core.errors import DehydratedFileError, UnreadableError
 from drivefusion.core.identity import hasher
-from drivefusion.core.store.catalog import Catalog
+from drivefusion.core.store.catalog import Catalog, root_clause
 
 #: Commit after this many assignments so an interrupted pass keeps its work.
 CHECKPOINT_ROWS = 5_000
@@ -69,18 +69,26 @@ def hash_pass(
     volume_id: int | None = None,
     limit: int | None = None,
     progress: Callable[[HashCounters], None] | None = None,
+    root_ids=None,
 ) -> HashCounters:
     """Establish content identity for everything that needs it.
 
     Runs tier 1 over the candidates, then tier 2 over the groups tier 1 could
     not separate. Both passes read through the read-only gateway.
+
+    ``root_ids``, when given, confines every read to files under those roots.
+    Callers pass the roots whose volume they have just confirmed
+    (``core.scope.bind_roots``), so bytes from whatever drive now holds a
+    letter are never recorded as another drive's content.
     """
     counters = HashCounters()
-    candidates = catalog.hash_candidates(volume_id=volume_id, limit=limit)
+    candidates = catalog.hash_candidates(
+        volume_id=volume_id, limit=limit, root_ids=root_ids
+    )
     counters.candidates = len(candidates)
 
     _quick_pass(catalog, candidates, counters, progress)
-    _full_pass(catalog, counters, progress)
+    _full_pass(catalog, counters, progress, root_ids)
     catalog.analyze()
     return counters
 
@@ -132,7 +140,9 @@ def _quick_pass(catalog: Catalog, candidates, counters: HashCounters, progress) 
         raise
 
 
-def _full_pass(catalog: Catalog, counters: HashCounters, progress) -> None:
+def _full_pass(
+    catalog: Catalog, counters: HashCounters, progress, root_ids=None
+) -> None:
     """Separate files that shared a quick hash but may differ in full.
 
     Groups whose quick hash already covered every byte are exact and are left
@@ -145,7 +155,7 @@ def _full_pass(catalog: Catalog, counters: HashCounters, progress) -> None:
         if hasher.is_quick_hash_exact(size):
             continue
 
-        members = catalog.files_for_content(int(group["id"]))
+        members = catalog.files_for_content(int(group["id"]), root_ids)
         conn.execute("BEGIN")
         try:
             for row in members:
@@ -195,7 +205,11 @@ def _quick_of(catalog: Catalog, content_id: int) -> bytes:
 
 
 def verify_pass(
-    catalog: Catalog, *, volume_id: int | None = None, limit: int | None = None
+    catalog: Catalog,
+    *,
+    volume_id: int | None = None,
+    limit: int | None = None,
+    root_ids=None,
 ) -> dict:
     """Re-hash content against what was recorded and report what was found.
 
@@ -209,6 +223,9 @@ def verify_pass(
     hashes would silently exclude most of a real catalog — small files are the
     majority — and a fixity report that quietly skips the majority of the data
     is worse than none, because it reads as a clean bill of health.
+
+    ``root_ids`` confines the check to files under those roots, as in
+    :func:`hash_pass`.
     """
     sql = (
         "SELECT f.id, f.dir_id, f.name, f.size_bytes, f.content_id, "
@@ -222,6 +239,9 @@ def verify_pass(
     if volume_id is not None:
         sql += " AND f.volume_id = ?"
         params.append(volume_id)
+    clause, clause_params = root_clause(root_ids)
+    sql += clause
+    params.extend(clause_params)
     sql += " ORDER BY f.volume_id, f.frn IS NULL, f.frn"
     if limit:
         sql += " LIMIT ?"

@@ -125,23 +125,38 @@ def _analyse(manifest: dict, files: dict, identified: set[Key], min_copies: int)
             "reclaimable": max(0, len(physical) - len(drives)) * size,
         }
 
+    # REVIEW.md SR-12 (F-04): a live, non-empty file whose size no other live
+    # file shares, in any read state, is one copy on one drive. That is known
+    # without reading it, so it counts without a content identity.
+    all_sizes = Counter(e["size"] for e in files.values())
+    singles = {k: e["size"] for k, e in files.items()
+               if k not in identified and e["size"] > 0 and all_sizes[e["size"]] == 1}
+
     under = {c for c, g in groups.items() if g["drives"] < min_copies}
+    under_singles = singles if min_copies > 1 else {}
     reclaim = {c: g["reclaimable"] for c, g in groups.items() if g["physical"] > g["drives"]}
-    path_bytes = sum(files[k]["size"] for k in identified)
-    unique_bytes = sum(g["size"] for g in groups.values())
+    single_bytes = sum(singles.values())
+    path_bytes = sum(files[k]["size"] for k in identified) + single_bytes
+    unique_bytes = sum(g["size"] for g in groups.values()) + single_bytes
     summary = {
-        "distinct_content": len(groups),
-        "catalogued_paths": len(identified),
+        "distinct_content": len(groups) + len(singles),
+        "catalogued_paths": len(identified) + len(singles),
         "path_bytes": path_bytes,
         "unique_bytes": unique_bytes,
         "duplicate_overhead_bytes": path_bytes - unique_bytes,
-        "under_protected_items": len(under),
-        "under_protected_bytes": sum(groups[c]["size"] for c in under),
+        "under_protected_items": len(under) + len(under_singles),
+        "under_protected_bytes": sum(groups[c]["size"] for c in under)
+        + sum(under_singles.values()),
         "reclaimable_bytes": sum(reclaim.values()),
-        "unhashed_files": len(files) - len(identified),
+        "single_copy_files": len(singles),
+        # Only files that could still be copies of something are unknown.
+        "unhashed_files": sum(1 for k, e in files.items()
+                              if k not in identified and all_sizes[e["size"]] > 1),
     }
     return {
         "groups": groups,
+        "singles": singles,
+        "under_protected_singles": set(under_singles),
         "duplicates": {c for c, g in groups.items() if len(g["paths"]) > 1},
         "under_protected": under,
         "reclamation": reclaim,
