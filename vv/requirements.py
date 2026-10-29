@@ -59,6 +59,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Each physical device is catalogued as a distinct device, and the "
                 "volumes of one device as that one device, so copy counts can be taken "
                 "over physical drives."),
+    Requirement("R-CAT-08", "§6.4, §11, REVIEW F-12",
+                "Each volume's \"last scanned\" time is the time its last scan finished, "
+                "not the time it was added to the scope."),
     Requirement("R-ID-01", "§6.6, §10.4",
                 "Byte-identical files share one content identity regardless of name, "
                 "extension, case, directory, drive, or modification time."),
@@ -108,6 +111,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("R-FIX-03", "§8.1",
                 "Each fixity incident states how many drives hold the content, so a "
                 "repair source can be found."),
+    Requirement("R-FIX-04", "§8.1, REVIEW F-06",
+                "A file edited since the last scan (its modification time changed) is "
+                "reported as modified, never as corruption."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member.", status="planned", milestone="M6"),

@@ -39,6 +39,12 @@ def path_within(path: Path | str, root: Path | str) -> bool:
         return False
 
 
+#: When a scan of volume ``v`` last finished, for "last scanned" displays.
+_LAST_SCANNED_VOLUME = (
+    "SELECT MAX(s.finished_at) FROM scan s "
+    "WHERE s.volume_id = v.id AND s.status = 'done'"
+)
+
 #: Enabled roots and the volume each is on, for the catalog-location checks.
 _ENABLED_ROOT_LOCATIONS = (
     "SELECT r.path, v.volume_guid FROM scope_root r "
@@ -355,7 +361,24 @@ class Catalog:
         return int(cursor.lastrowid)
 
     def volumes(self) -> list[sqlite3.Row]:
-        return list(self.conn.execute("SELECT * FROM volume ORDER BY id"))
+        """Every volume, with ``last_scanned_at``: when a scan of it last
+        finished. ``last_seen_at`` is when discovery last recorded it, which a
+        scan doesn't change (docs/REVIEW.md F-12)."""
+        return list(self.conn.execute(
+            f"SELECT v.*, ({_LAST_SCANNED_VOLUME}) AS last_scanned_at "
+            "FROM volume v ORDER BY v.id"
+        ))
+
+    def root_last_scanned(self) -> dict[int, str]:
+        """When a scan of each scope root last finished, for roots ever scanned."""
+        return {
+            int(row["scope_root_id"]): row["finished_at"]
+            for row in self.conn.execute(
+                "SELECT scope_root_id, MAX(finished_at) AS finished_at FROM scan "
+                "WHERE status = 'done' AND scope_root_id IS NOT NULL "
+                "GROUP BY scope_root_id"
+            )
+        }
 
     # -- scope -------------------------------------------------------------
 

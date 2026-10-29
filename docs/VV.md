@@ -137,6 +137,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-CAT-04 | §6.7 | Names stored as observed: Unicode, spaces, dots, no extension, leading dot, punctuation, long names, case variants |
 | R-CAT-05 | §6.7 | Paths over 260 characters are catalogued |
 | R-CAT-06 | §6.7 | Unreadable files are recorded, not fatal, and get no unestablished identity |
+| R-CAT-08 | §6.4, §11, REVIEW F-12 | Each volume's "last scanned" time is when its last scan finished |
 | R-CAT-07 | §2, §5, §8.1 | Each physical device is a distinct device in the catalog, and the volumes of one device are that one device |
 | R-ID-01 | §6.6, §10.4 | Byte-identical files share one identity regardless of name, case, folder, drive or mtime |
 | R-ID-02 | §6.6 | Different bytes never share an identity, including same name, same size, and differences outside the quick-hash samples (tier 2) |
@@ -153,6 +154,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-FIX-01 | §8.1 | Silent corruption (bytes changed, size and mtime not) is reported |
 | R-FIX-02 | §8.1 | Verification has no false positives and covers both hash tiers |
 | R-FIX-03 | §8.1 | Each fixity incident states how many drives hold the content |
+| R-FIX-04 | §8.1, REVIEW F-06 | A file edited since the last scan (new modification time) is reported as modified, never as corruption |
 | R-VER-01 | §8.1 | *Planned (M6):* near-duplicates grouped into version sets. Test data is planted now; the test reports DEFERRED |
 
 Requirements for milestones not yet built (durability scoring, scorecards, the planner,
@@ -234,6 +236,10 @@ Size and modification time are restored exactly; nothing in the metadata says th
 changed. At least one target is a small file (≤ 192 KiB, exact quick hash) and one a
 large file (full hash) when the dataset has both.
 
+Then 1–2 files from other stable duplicate groups are edited the ordinary way: a byte
+changes and the modification time moves on two seconds. They are edits, not corruption
+(R-FIX-04), and are left out of VV-FIX-02's verifiable floor.
+
 ## 5. Test procedure
 
 ```
@@ -286,6 +292,8 @@ tool's code would agree with the tool's bugs.
 | VV-FIX-01 | verify | R-FIX-01 | Every corrupted file is reported as `mismatch` |
 | VV-FIX-02 | verify | R-FIX-02 | No intact file is reported, and at least every identified small file plus every corrupted large file was checked |
 | VV-FIX-03 | verify | R-FIX-03 | Each incident's drive count equals the drives truly holding the content |
+| VV-CAT-08 | baseline, rescan | R-CAT-08 | Every drive's "last scanned" is set, not before the run began, and not moved backwards by the rescan. N/A for versions that don't report it |
+| VV-FIX-04 | verify | R-FIX-04 | No edited file appears as an incident, and each is in the tool's `modified` list where the tool reports one |
 | VV-VER-01 | — | R-VER-01 | DEFERRED until M6 |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three

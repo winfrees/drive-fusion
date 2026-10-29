@@ -150,8 +150,13 @@ def test_simulated_drives_fit_the_size_they_were_given(tmp_path: Path) -> None:
     fits = generator.footprints(manifest)
     for d in manifest["drives"]:
         assert fits[d["id"]]["capacity_peak"] <= d["capacity_bytes"], f"seed {seed}: {d['id']}"
-        on_disk = sum(p.stat().st_size for p in Path(d["root"]).rglob("*")
-                      if p.is_file() and not p.is_symlink())
+        # Stored bytes: a hardlinked file is one file however many paths it
+        # has. Summing per path counted it two or three times, and failed
+        # whenever a seed put a large hardlink on the small drive (ROADMAP §3.4).
+        stored = {(st.st_dev, st.st_ino): st.st_size
+                  for p in Path(d["root"]).rglob("*")
+                  if p.is_file() and not p.is_symlink() for st in [p.stat()]}
+        on_disk = sum(stored.values())
         assert on_disk <= d["capacity_bytes"], f"seed {seed}: {d['id']} holds {on_disk}"
 
     # Every requirement is still planted in a shrunk dataset, tier 2 included.
@@ -169,6 +174,29 @@ def test_simulated_drives_fit_the_size_they_were_given(tmp_path: Path) -> None:
     assert d02["capacity_bytes"] == 12_000_000
     assert 0 < d02["free_bytes"] < 12_000_000
     assert d02["cluster_bytes"] == 4096
+
+
+def test_a_hardlinked_file_counts_once_against_a_drive_size(tmp_path: Path) -> None:
+    """The seed behind the suite's one intermittent failure (ROADMAP §3.4): a
+    large file hardlinked three times onto the 12 MB drive. Counted once per
+    file, what is stored fits the drive; counted per path, hardlinks inflate it.
+
+    The seed rebuilds the same dataset only on the same kind of host: the
+    plan depends on what the host's filesystem can hold (CI, running as a
+    normal user, can plant unreadable files, which root here cannot), so the
+    per-path total isn't asserted to overflow, only to exceed the stored one."""
+    manifest = _generate(tmp_path / "ds", "--drives", "3", "--drive-size", "20MB",
+                         "--drive-size", "D02=12MB", "--seed", "244279970315808")
+    d02 = next(d for d in manifest["drives"] if d["id"] == "D02")
+    stored = {(st.st_dev, st.st_ino): st.st_size
+              for p in Path(d02["root"]).rglob("*")
+              if p.is_file() and not p.is_symlink() for st in [p.stat()]}
+    by_path = sum(p.stat().st_size for p in Path(d02["root"]).rglob("*")
+                  if p.is_file() and not p.is_symlink())
+    if by_path == sum(stored.values()):
+        pytest.skip("no hardlinks on this filesystem; nothing to distinguish")
+    assert sum(stored.values()) <= d02["capacity_bytes"]
+    assert by_path > sum(stored.values()), "hardlinks must count once, not per path"
 
 
 def test_a_drive_too_small_for_the_file_count_is_refused_cleanly(tmp_path: Path) -> None:

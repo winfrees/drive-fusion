@@ -36,6 +36,7 @@ _V3_HEADER_SIZE = 76
 #: FILE_FULL_DIR_INFO up to (not including) the name.
 _FULL_DIR_INFO = struct.Struct("<IIqqqqqqIII")
 _FULL_DIR_INFO_SIZE = 68
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 #: FILE_ID_BOTH_DIR_INFO: ShortNameLength is a byte at 68, ShortName runs
 #: 70..93, then the 8-byte FileId is aligned to 96 and the name starts at 104.
@@ -99,6 +100,9 @@ class DirEntry:
     #: Set only by the portable lister, where a per-entry stat can fail. A
     #: Win32 batch read delivers metadata with the name, so it cannot.
     stat_failed: bool = False
+    #: The reparse tag of a reparse point, else 0. Directory-info classes carry
+    #: it in their EaSize field when the reparse attribute is set.
+    reparse_tag: int = 0
 
     @property
     def is_dir(self) -> bool:
@@ -213,7 +217,7 @@ def _parse_dir_info(
             )
         (
             next_offset, _index, creation, _access, write, _change,
-            end_of_file, allocation, attributes, name_length, _ea,
+            end_of_file, allocation, attributes, name_length, ea_size,
         ) = _FULL_DIR_INFO.unpack_from(view, position)
 
         file_id = None
@@ -231,6 +235,7 @@ def _parse_dir_info(
             mtime_ns=filetime_to_ns(write),
             ctime_ns=filetime_to_ns(creation),
             file_id=file_id,
+            reparse_tag=ea_size if attributes & _FILE_ATTRIBUTE_REPARSE_POINT else 0,
         )
 
         if next_offset == 0:

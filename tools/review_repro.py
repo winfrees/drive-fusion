@@ -131,10 +131,14 @@ root, cat, vol, rid = fresh("r7")
 for d in range(200):
     (root / f"d{d}").mkdir()
     (root / f"d{d}" / "f").write_bytes(b"1")
+# Cancellation is offered per directory; the progress callback stays batched.
 calls = []
-scan(cat, root, vol, rid, progress=lambda c: calls.append(c.dirs))
-print("R7 progress callbacks during a 201-dir scan:", len(calls),
-      "|", "FOUND" if not calls else "NOT FOUND")
+try:
+    scan(cat, root, vol, rid, cancel=lambda: calls.append(1))
+except TypeError:   # before F-13 there was no per-directory hook at all
+    scan(cat, root, vol, rid, progress=lambda c: calls.append(c.dirs))
+print("R7 cancellation checks during a 201-dir scan:", len(calls),
+      "|", "FOUND" if len(calls) < 201 else "NOT FOUND")
 
 # R8: lint blind spots (each should be a finding, and is not)
 probes = {
@@ -215,9 +219,11 @@ root, cat, vol, rid = fresh("r12")
 (root / "a.txt").write_text("a")
 cat.conn.execute("UPDATE volume SET last_seen_at = '2000-01-01T00:00:00+00:00'")
 scan(cat, root, vol, rid)
-seen = cat.conn.execute("SELECT last_seen_at FROM volume").fetchone()[0]
-print("R12 last_seen_at after scan:", seen,
-      "|", "FOUND" if seen.startswith("2000") else "NOT FOUND")
+# What "last scanned" displays must come from the scan, not from scope add.
+shown = cat.volumes()[0]["last_scanned_at"] if "last_scanned_at" in cat.volumes()[0].keys() \
+    else cat.volumes()[0]["last_seen_at"]
+print("R12 last scanned shown after a scan:", shown,
+      "|", "FOUND" if not shown or shown.startswith("2000") else "NOT FOUND")
 
 # R13 (F-16): open_read must not follow a link to a file outside the scope
 r13 = work / "r13"

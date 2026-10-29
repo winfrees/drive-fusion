@@ -189,7 +189,10 @@ exists to look at.
   `DumpStack.log*`, `*.tmp`, `~$*` (Office lock files), `.Trash-*`, `.Spotlight-V100`,
   `$WinREAgent` and `Config.Msi`; and, on Windows, the prefixes `C:\Windows`,
   `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData\Package Cache` and
-  `C:\$WinREAgent`. `AppData\Local\Temp` is not yet excluded.
+  `C:\$WinREAgent`, plus every profile's `?:\Users\*\AppData\Local\Temp`. Prefixes match
+  whole folders, so `C:\Windows` doesn't also exclude `C:\WindowsBackups` (ROADMAP A3). A default prefix
+  excludes what lies beneath a scope root, never the root itself: a folder you add inside
+  one, such as a Temp folder, is scanned.
   These are excluded because they are churn, not content — and at 50M files, not enumerating
   10M pieces of noise is a performance feature as much as a scoping one.
 - **Reparse-point policy**: junctions, symlinks, and volume mount points are recorded but
@@ -460,7 +463,7 @@ not a pass.
 
 | Reality | Handling |
 |---|---|
-| **Cloud placeholders** (OneDrive et al.) | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` / `RECALL_ON_OPEN` / `OFFLINE` → recorded as `dehydrated`, **never opened**. Opening one downloads it. They are catalogued by metadata and excluded from hashing, with a clear report line. **As built:** the scanner tests the reparse attribute first, so a placeholder that exposes `FILE_ATTRIBUTE_REPARSE_POINT` is counted as a link and not catalogued (REVIEW F-11) |
+| **Cloud placeholders** (OneDrive et al.) | `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` / `RECALL_ON_OPEN` / `OFFLINE` → recorded as `dehydrated`, **never opened**. Opening one downloads it. They are catalogued by metadata and excluded from hashing, with a clear report line. **As built (REVIEW F-11, fixed):** a reparse point is a link only when its reparse tag is a *name surrogate* (symlink, junction, mount point); the tag comes from `EaSize` in the batch directory read, or `st_reparse_tag`. A placeholder that also shows the reparse attribute is catalogued by metadata. A downloaded cloud file, a deduplicated file or a WOF-compressed file is catalogued as the real file it is; before, all three were dropped as links. A directory that is any kind of reparse point is still not traversed, because listing a cloud folder can make the provider fetch |
 | **Long paths** | All paths use the `\\?\` prefix; the app manifest also declares long-path awareness. A tool that dies at 260 characters is useless on an archive drive |
 | **Hardlinks** | NTFS `NumberOfLinks` + File Reference Number; entries sharing an FRN on a volume are **one physical copy**. Counting them twice would inflate redundancy — a correctness bug, not a cosmetic one. exFAT has no hardlinks, so the question does not arise there |
 | **Sparse / compressed files** | Record logical size *and* allocated size; report both, since capacity planning needs allocated and dedup needs logical |
@@ -714,8 +717,10 @@ FTS5 over 50M full paths would add several GB and a long build. Instead:
 - **Version sets** — near-duplicates grouped by perceptual/text similarity, with a *proposed*
   preferred member under configurable keep-rules. Proposed and exported, never applied.
 - **Integrity drift** — content whose hash changed while its mtime did not (silent corruption).
-  **As built:** `verify` doesn't yet compare size or mtime, so a file edited since the last
-  scan is reported as a mismatch (REVIEW F-06). Also tracked:
+  **As built (REVIEW F-06, fixed):** `verify` compares each file's mtime with the catalog
+  first. A file whose mtime changed was edited since the last scan: it is recorded as
+  `modified`, not hashed, and not reported as a fixity failure. A size change alone is still
+  hashed, because truncation by filesystem damage keeps the date. Also tracked:
   files now unreadable, and content that has vanished since a prior scan. Each incident names
   the other drives holding a verified copy that could repair it — a repair *you* perform.
   **Verification covers both hash tiers.** A full hash is exact by definition; at or
@@ -920,9 +925,9 @@ connection, and never `check_same_thread=False`, which converts a loud failure i
 interleaved transactions. WAL mode lets the UI thread read while a worker writes, which is what
 keeps the browser scrolling during a scan. Cancellation is cooperative and should be checked
 *per directory* rather than per root: a root can take hours, and a Cancel button that only
-takes effect when the work finishes is a lie. **As built:** it is checked in the scanner's
-progress callback, which fires every 10,000 staged files, so small roots can't be cancelled
-mid-scan (REVIEW F-13).
+takes effect when the work finishes is a lie. **As built (REVIEW F-13, fixed):** `scan_root`
+takes a `cancel` callback it calls once per directory listed, and `hash_pass` and
+`verify_pass` once per file. A cancelled scan is rolled back and recorded as `aborted`.
 
 **Virtualization rules, non-negotiable at 50M rows:** models fetch pages on demand via
 `canFetchMore`/`fetchMore`; **keyset pagination** (`WHERE (dir_id, name) > (?, ?) LIMIT 200`),
@@ -1015,8 +1020,10 @@ already going to buy or reformat, never a proposal to reformat anything you own.
   includes WAL-only transactions (F-10); Win32 handle signatures declared, checked on any
   platform with a stand-in `WinDLL` (F-14); a link, a swapped-in link and a mismatched handle
   each refused by `open_read` (F-16); and the audit-hook guard proven to stop each kind of
-  change before it happens. *To add:* a placeholder with both reparse and recall attributes
-  (F-11).
+  change before it happens; partitions of one device counted once, and unverified drives
+  counted safely (F-05); an edit since the last scan reported as `modified` (F-06); reparse
+  files classified by tag (F-11); "last scanned" taken from the scan (F-12); cancel per
+  directory and per file (F-13); unlistable folders reported apart from files (F-15).
 - **Synthetic VHDX fixtures in both filesystems**, attached in CI: an NTFS image with known
   duplicate, version, hardlink, sparse, compressed, reparse-point, and long-path structure, and
   an **exFAT image with a large cluster size** carrying many small files. VHDX matters because
@@ -1051,7 +1058,7 @@ Unit and fixture tests ask whether each part behaves as its author meant. V&V as
 tool as a whole gives a *user* true answers on drives that look like theirs. Full procedure:
 **[VV.md](VV.md)**.
 
-- **Requirements:** 27 testable requirements (`R-RO`, `R-SC`, `R-CAT`, `R-ID`, `R-RED`,
+- **Requirements:** 29 testable requirements (`R-RO`, `R-SC`, `R-CAT`, `R-ID`, `R-RED`,
   `R-INC`, `R-FIX`, `R-VER`), each traced to the section of this plan it restates.
 - **Datasets:** `python -m vv generate` builds a fresh, randomized dataset across a chosen
   number of drives: **simulated** (folders registered as separate drives) or **physical** (one

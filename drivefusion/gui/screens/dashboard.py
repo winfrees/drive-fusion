@@ -211,7 +211,8 @@ class DashboardScreen(QWidget):
                 cancel.raised()
 
             counters = hash_pass(
-                catalog, progress=report, root_ids=binding.root_ids
+                catalog, progress=report, root_ids=binding.root_ids,
+                cancel=cancel.raised,           # per file (REVIEW F-13)
             )
             if binding.refused:
                 raise RootRefusedError(

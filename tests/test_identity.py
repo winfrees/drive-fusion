@@ -473,3 +473,85 @@ def test_hash_and_verify_read_only_the_roots_they_are_given(
 
     assert verify_pass(catalog, root_ids=allowed)["checked"] == 2
     assert verify_pass(catalog, root_ids=frozenset())["checked"] == 0
+
+
+def test_an_edit_since_the_last_scan_is_modified_not_corrupt(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """REVIEW F-06: a normal edit changes the date; it is not a fixity failure."""
+    from drivefusion.core.analysis import integrity_incidents
+
+    root = tmp_path / "vol"
+    root.mkdir()
+    payload = b"edited later" * 10
+    (root / "a.bin").write_bytes(payload)
+    (root / "b.bin").write_bytes(payload)
+    scan(catalog, root)
+    hash_pass(catalog)
+
+    target = root / "a.bin"
+    before = os.stat(target)
+    target.write_bytes(payload.upper())            # same size, new bytes
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 10**9))
+
+    result = verify_pass(catalog)
+    assert (result["mismatched"], result["modified"], result["checked"]) == (0, 1, 1)
+    assert result["modified_paths"] == [str(target)]
+    assert integrity_incidents(catalog) == [], "an edit is not an incident"
+
+    # A rescan catalogues the edit, and the next verify is clean.
+    scan(catalog, root)
+    hash_pass(catalog)
+    again = verify_pass(catalog)
+    assert (again["mismatched"], again["modified"]) == (0, 0)
+
+
+def test_the_same_edit_with_its_date_put_back_is_corruption(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    """The definition that matters: bytes changed, date did not."""
+    root = tmp_path / "vol"
+    root.mkdir()
+    payload = b"silently changed" * 10
+    (root / "a.bin").write_bytes(payload)
+    (root / "b.bin").write_bytes(payload)
+    scan(catalog, root)
+    hash_pass(catalog)
+
+    target = root / "a.bin"
+    before = os.stat(target)
+    target.write_bytes(payload.upper())
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    result = verify_pass(catalog)
+    assert (result["mismatched"], result["modified"]) == (1, 0)
+
+
+def test_hash_and_verify_can_be_cancelled_per_file(catalog: Catalog, tmp_path: Path) -> None:
+    """REVIEW F-13: checked per file, not per 10,000."""
+    from drivefusion.core.errors import OperationCancelled
+
+    root = tmp_path / "vol"
+    root.mkdir()
+    for i in range(20):
+        (root / f"f{i}.bin").write_bytes(bytes([i]) * 64)   # one shared size
+    scan(catalog, root)
+
+    calls = []
+
+    def cancel_after(n):
+        def cancel() -> None:
+            calls.append(1)
+            if len(calls) >= n:
+                raise OperationCancelled()
+        return cancel
+
+    with pytest.raises(OperationCancelled):
+        hash_pass(catalog, cancel=cancel_after(3))
+    assert len(calls) == 3
+
+    hash_pass(catalog)
+    calls.clear()
+    with pytest.raises(OperationCancelled):
+        verify_pass(catalog, cancel=cancel_after(4))
+    assert len(calls) == 4

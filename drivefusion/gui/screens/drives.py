@@ -2,7 +2,7 @@
 
 §11 screen 3. Two things here are worth more than the rest:
 
-* **"Last seen" is in words**, because the question a user actually has is "is
+* **"Last scanned" is in words**, because the question a user actually has is "is
   this the drive I scanned in March?" — and a raw timestamp makes them do
   arithmetic to find out.
 * **A volume with no identified physical drive gets its own row**, marked
@@ -47,7 +47,7 @@ COLUMNS = (
     "Catalogued",
     "Files",
     "Rescan",
-    "Last seen",
+    "Last scanned",
 )
 
 #: How each drive identity is shown.
@@ -149,7 +149,7 @@ class DrivesScreen(QWidget):
                     human_bytes(row["bytes"]),
                     f"{row['files']:,}",
                     row["rescan_cost"] or "?",
-                    describe_age(row["last_seen_at"]),
+                    describe_age(row["last_scanned_at"]),
                 ]
             )
             item.setData(0, Qt.UserRole, (row["volume_id"], row["drive_id"] is None))

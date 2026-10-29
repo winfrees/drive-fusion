@@ -28,11 +28,16 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 
+from drivefusion.core.errors import OperationCancelled
 from drivefusion.gui.session import Session
 
 
-class Cancelled(RuntimeError):
-    """Raised inside a task body when the user asked it to stop."""
+class Cancelled(OperationCancelled):
+    """Raised inside a task body when the user asked it to stop.
+
+    An :class:`OperationCancelled`, so the scan and hash passes, which call
+    ``Cancellation.raised`` per directory and per file, recognise it.
+    """
 
 
 class Cancellation:

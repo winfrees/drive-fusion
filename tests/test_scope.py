@@ -163,3 +163,30 @@ def test_a_root_whose_volume_discovery_fails_is_refused(
         binding = bind_roots(catalog, catalog.scope_roots())
     assert binding.bound == []
     assert "cannot identify the volume" in binding.refused[0][1]
+
+
+def _windows_defaults():
+    from drivefusion.core.scope.registry import DEFAULT_EXCLUDE_PREFIXES, ExclusionSet
+
+    return ExclusionSet(prefixes=DEFAULT_EXCLUDE_PREFIXES)
+
+
+@pytest.mark.parametrize(
+    ("path", "excluded"),
+    [
+        (r"C:\Windows", True),
+        (r"C:\Windows\System32\drivers", True),
+        (r"c:\windows\temp", True),                        # case-insensitive
+        (r"C:\WindowsBackups\2019", False),                # a folder of the user's
+        (r"C:\Windows.old-photos", False),
+        (r"C:\Program Files (x86)\App", True),
+        (r"C:\Users\alice\AppData\Local\Temp", True),      # ROADMAP A3
+        (r"C:\Users\alice\AppData\Local\Temp\xyz.dat", True),
+        (r"E:\Users\bob\AppData\Local\Temp\old", True),    # a copied old profile
+        (r"C:\Users\alice\AppData\Local\Templates", False),
+        (r"C:\Users\alice\Documents\Temp", False),
+        (r"D:\Research\Windows", False),
+    ],
+)
+def test_default_prefixes_match_whole_folders(path: str, excluded: bool) -> None:
+    assert _windows_defaults().excludes_absolute(path) is excluded

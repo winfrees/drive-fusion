@@ -52,6 +52,16 @@ class Result:
         return self
 
 
+def _when(text: str | None):
+    """An ISO timestamp, or None when absent or unreadable."""
+    import datetime as dt
+
+    try:
+        return dt.datetime.fromisoformat(text) if text else None
+    except ValueError:
+        return None
+
+
 def _fmt(key) -> str:
     return f"{key[0]}:{key[1]}"
 
@@ -124,6 +134,7 @@ class Evaluator:
             else:
                 self.scope_tests(obs, exp, phases[name], name, scope_only=True)
                 self.rescan_tests(obs, exp)
+            self.last_scanned_test(phases, name)
             self.dirs_test(obs, exp, name)
             self.identity_tests(obs, exp, name)
             self.redundancy_tests(obs, exp, phases[name], name)
@@ -279,6 +290,28 @@ class Evaluator:
             if len(seen) > 1:
                 r.fail(f"the partitions of one device resolved to {len(seen)} devices")
         r.finish()
+
+    def last_scanned_test(self, phases: dict, phase: str) -> None:
+        r = self.new("VV-CAT-08", "\"Last scanned\" is when the last scan finished",
+                     ["R-CAT-08"], phase)
+        volumes = phases[phase].get("volumes", {})
+        before = phases.get("baseline", {}).get("volumes", {}) if phase == "rescan" else {}
+        started = _when(self.observed.get("started_at"))
+        for drive in self.manifest["drives"]:
+            v = volumes.get(drive["id"], {})
+            if "last_scanned_at" not in v:
+                continue
+            r.checked += 1
+            when = _when(v["last_scanned_at"])
+            earlier = _when(before.get(drive["id"], {}).get("last_scanned_at"))
+            if when is None:
+                r.fail(f"{drive['id']}: scanned in this phase, but shown as never scanned")
+            elif started is not None and when < started:
+                r.fail(f"{drive['id']}: last scanned {v['last_scanned_at']}, before this run "
+                       f"began ({self.observed['started_at']})")
+            elif earlier is not None and when < earlier:
+                r.fail(f"{drive['id']}: the rescan moved \"last scanned\" backwards")
+        r.finish("this version doesn't report when a volume was last scanned")
 
     def root(self, drive: str) -> str:
         return next(d["root"] for d in self.manifest["drives"] if d["id"] == drive)
@@ -532,6 +565,8 @@ class Evaluator:
                      ["R-FIX-02"], phase)
         r.checked = raw["checked"]
         for key, inc in sorted(incidents.items()):
+            if key in exp["edited"]:
+                continue        # VV-FIX-04's business
             if key not in exp["corrupted"] and inc["result"] == "mismatch":
                 r.fail(f"intact file reported as corrupted: {_fmt(key)}")
         if raw["checked"] < exp["min_checked"]:
@@ -539,6 +574,20 @@ class Evaluator:
                    "verifiable (every identified file at or below the small-file threshold, "
                    "plus the corrupted large files)")
         r.finish()
+
+        r = self.new("VV-FIX-04", "An edit since the last scan is modified, not corrupt",
+                     ["R-FIX-04"], phase)
+        reported_modified = raw.get("modified")
+        modified = (None if reported_modified is None
+                    else {tuple(k) for k in reported_modified})
+        r.checked = len(exp["edited"])
+        for key in sorted(exp["edited"]):
+            inc = incidents.get(key)
+            if inc is not None:
+                r.fail(f"edited file reported as {inc['result']!r}: {_fmt(key)}")
+            elif modified is not None and key not in modified:
+                r.fail(f"edited file not reported as modified: {_fmt(key)}")
+        r.finish("no stable duplicate content left to edit in this dataset")
 
         r = self.new("VV-FIX-03", "Each incident states how many drives hold the content",
                      ["R-FIX-03"], phase)

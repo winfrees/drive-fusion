@@ -167,8 +167,12 @@ class DriveFusionAdapter:
             drive, rel = self._locate(os.path.join(inc["path"], inc["name"]))
             incidents.append({"drive": drive, "path": rel, "result": inc["result"],
                               "other_copies": inc["other_copies"]})
+        modified = None
+        if "modified_paths" in result:          # versions with REVIEW F-06
+            modified = [list(self._locate(p)) for p in result["modified_paths"]]
         return {"checked": result["checked"], "mismatched": result["mismatched"],
-                "unreadable": result["unreadable"], "incidents": incidents}
+                "unreadable": result["unreadable"], "incidents": incidents,
+                "modified": modified}
 
     # -- reading conclusions back ---------------------------------------------
 
@@ -226,6 +230,9 @@ class DriveFusionAdapter:
                           r["content_id"], r["vanished_at"] is not None, r["read_state"]])
         a = self.analysis
         everything = len(self.roots) + 1  # every content is "under" N+1 copies
+        # Versions with REVIEW F-12 report when each volume was last scanned.
+        scanned = {int(v["id"]): v["last_scanned_at"] for v in self.catalog.volumes()
+                   if "last_scanned_at" in v.keys()}
 
         def groups(found) -> list[dict]:
             return [self._group(g, file_keys) for g in found]
@@ -239,5 +246,6 @@ class DriveFusionAdapter:
             "reclamation": groups(a.reclamation_candidates(self.catalog)),
             "summary": a.redundancy_summary(self.catalog, min_copies=min_copies),
             "volumes": {d: {"volume_id": i["volume_id"], "device": i["device"],
+                            "last_scanned_at": scanned.get(i["volume_id"]),
                             **self.discovered.get(d, {})} for d, i in self.roots.items()},
         }

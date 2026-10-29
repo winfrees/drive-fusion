@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
 
 #: Name patterns skipped on every scope, matched case-insensitively at any
@@ -39,6 +39,8 @@ DEFAULT_EXCLUDE_PREFIXES: tuple[str, ...] = (
     r"C:\Program Files (x86)",
     r"C:\ProgramData\Package Cache",
     r"C:\$WinREAgent",
+    # Per-user temp folders, wherever a profile sits: churn, never content.
+    r"?:\Users\*\AppData\Local\Temp",
 )
 
 
@@ -89,8 +91,25 @@ class ExclusionSet:
         )
 
     def excludes_absolute(self, path: str) -> bool:
-        lowered = path.lower()
-        return any(lowered.startswith(prefix.lower()) for prefix in self.prefixes)
+        """``path`` is a prefix, or lies beneath one.
+
+        Matched by whole path components, so ``C:\\Windows`` doesn't take
+        ``C:\\WindowsBackups`` with it. A prefix may hold ``?`` and ``*``
+        wildcards, each standing within one component.
+        """
+        return any(_prefix_covers(prefix, path) for prefix in self.prefixes)
+
+    def for_scan_of(self, root_path: str) -> "ExclusionSet":
+        """This set as it applies to a scan of ``root_path``.
+
+        A default prefix the root itself lies inside is dropped: adding a
+        folder to the scope is an explicit choice, and a default exclusion of
+        its surroundings must not empty it. A root at
+        ``C:\\Users\\me\\AppData\\Local\\Temp\\keep`` is scanned; a root at
+        ``C:\\`` still skips ``C:\\Windows``.
+        """
+        kept = tuple(p for p in self.prefixes if not _prefix_covers(p, root_path))
+        return self if kept == self.prefixes else replace(self, prefixes=kept)
 
     def excludes(self, *, name: str, relpath: str = "", absolute: str = "") -> bool:
         return (
@@ -98,6 +117,15 @@ class ExclusionSet:
             or (bool(relpath) and self.excludes_relpath(relpath))
             or (bool(absolute) and self.excludes_absolute(absolute))
         )
+
+
+def _prefix_covers(prefix: str, path: str) -> bool:
+    """``path`` is ``prefix`` or beneath it, compared by whole components."""
+    parts = path.lower().rstrip("\\/").replace("/", "\\").split("\\")
+    wanted = prefix.lower().rstrip("\\/").replace("/", "\\").split("\\")
+    return len(parts) >= len(wanted) and all(
+        fnmatch.fnmatchcase(part, pattern) for part, pattern in zip(parts, wanted)
+    )
 
 
 def normalise_root(path: str) -> str:

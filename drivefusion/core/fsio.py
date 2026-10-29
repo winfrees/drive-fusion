@@ -50,14 +50,42 @@ DEHYDRATED_MASK = (
 )
 
 
+#: Reparse tags with this bit set are *name surrogates*: they stand for another
+#: name (symlinks, junctions, volume mount points). Tags without it (cloud
+#: files, deduplicated and WOF-compressed files) mark a file whose bytes are
+#: its own.
+REPARSE_TAG_NAME_SURROGATE = 0x20000000
+IO_REPARSE_TAG_SYMLINK = 0xA000000C
+
+
 def is_dehydrated(attributes: int) -> bool:
     """True when a file's attributes say reading it would trigger a recall."""
     return bool(attributes & DEHYDRATED_MASK)
 
 
 def is_reparse_point(attributes: int) -> bool:
-    """True for junctions, symlinks, and volume mount points."""
+    """True for any reparse point: links, and also cloud, dedup and WOF files."""
     return bool(attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def skip_as_link(attributes: int, reparse_tag: int | None, *, is_dir: bool) -> bool:
+    """Whether a scan must record this entry as a link and go no further.
+
+    A reparse point is a link only when its tag is a name surrogate. A
+    directory that is any kind of reparse point is never traversed: listing a
+    cloud folder can make the provider fetch. A *file* whose tag is not a
+    name surrogate is a real file and is catalogued: a cloud placeholder by
+    metadata (docs/REVIEW.md F-11), a downloaded cloud file, a deduplicated or
+    a WOF-compressed file normally. With no tag to go on, only a placeholder
+    is catalogued; anything else is treated as the link it may be.
+    """
+    if not is_reparse_point(attributes):
+        return False
+    if is_dir:
+        return True
+    if reparse_tag:
+        return bool(reparse_tag & REPARSE_TAG_NAME_SURROGATE)
+    return not is_dehydrated(attributes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +108,8 @@ class Entry:
     nlink: int = 1
     file_id: int | None = None
     stat_failed: bool = False
+    #: The reparse tag when ``attributes`` has the reparse bit, else 0.
+    reparse_tag: int = 0
 
     @property
     def is_reparse_point(self) -> bool:
@@ -283,6 +313,7 @@ def scandir(path: str) -> Iterator[Entry]:
                         nlink=st.st_nlink if st else 1,
                         file_id=(st.st_ino or None) if st else None,
                         stat_failed=stat_failed,
+                        reparse_tag=int(getattr(st, "st_reparse_tag", 0) or 0) if st else 0,
                     )
         except OSError as exc:
             raise UnreadableError(f"cannot list {path!r}: {exc}") from exc
