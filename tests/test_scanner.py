@@ -402,3 +402,27 @@ def test_cancel_takes_effect_within_a_small_tree(catalog: Catalog, tmp_path: Pat
     assert catalog.counts()["files"] == 0, "a cancelled scan merges nothing"
     status = catalog.conn.execute("SELECT status FROM scan").fetchone()["status"]
     assert status == "aborted"
+
+
+def test_a_root_inside_a_default_excluded_prefix_is_still_scanned(
+    catalog: Catalog, sample_tree: Path
+) -> None:
+    """Adding a folder to scope is an explicit choice, and beats a default.
+
+    Windows CI keeps pytest's temp folders under ...\\AppData\\Local\\Temp,
+    which A3 excludes by default: every root there was emptied. The prefixes
+    exclude what lies beneath a root, never the root itself.
+    """
+    from drivefusion.core.scope.registry import ExclusionSet
+
+    covering = "\\".join(sample_tree.parent.as_posix().split("/"))   # backslash form
+    outside = covering + "\\elsewhere"
+    excludes = ExclusionSet(prefixes=(covering, outside))
+    result = scan(catalog, sample_tree, excludes=excludes)
+    assert result["counters"].files > 0, "the root's own contents were excluded"
+    assert result["counters"].excluded == 0
+
+    nested = covering + "\\fixture-tree\\docs"      # a prefix *beneath* the root
+    catalog_files = scan(catalog, sample_tree,
+                         excludes=ExclusionSet(prefixes=(covering, nested)))
+    assert catalog_files["counters"].excluded >= 1, "beneath the root, still excluded"

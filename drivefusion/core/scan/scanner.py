@@ -115,7 +115,7 @@ def scan_root(
     all: an unplugged drive is not a drive whose files were deleted
     (docs/REVIEW.md F-02). ``result["root_listed"]`` says which case this was.
     """
-    excludes = excludes or ExclusionSet.for_root(())
+    excludes = (excludes or ExclusionSet.for_root(())).for_scan_of(root_path)
     counters = ScanCounters()
     scan_id = catalog.begin_scan(volume_id, root_id, method, elevated=False)
     conn = catalog.conn
@@ -346,7 +346,7 @@ def preview_root(
     The dry run exists so a first scan of an unfamiliar drive is a decision
     rather than a surprise (docs/PLAN.md §4).
     """
-    excludes = excludes or ExclusionSet.for_root(())
+    excludes = (excludes or ExclusionSet.for_root(())).for_scan_of(root_path)
     counters = ScanCounters()
     stack = [root_path]
 

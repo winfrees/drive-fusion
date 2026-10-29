@@ -190,7 +190,9 @@ exists to look at.
   `$WinREAgent` and `Config.Msi`; and, on Windows, the prefixes `C:\Windows`,
   `C:\Program Files`, `C:\Program Files (x86)`, `C:\ProgramData\Package Cache` and
   `C:\$WinREAgent`, plus every profile's `?:\Users\*\AppData\Local\Temp`. Prefixes match
-  whole folders, so `C:\Windows` doesn't also exclude `C:\WindowsBackups` (ROADMAP A3).
+  whole folders, so `C:\Windows` doesn't also exclude `C:\WindowsBackups` (ROADMAP A3). A default prefix
+  excludes what lies beneath a scope root, never the root itself: a folder you add inside
+  one, such as a Temp folder, is scanned.
   These are excluded because they are churn, not content — and at 50M files, not enumerating
   10M pieces of noise is a performance feature as much as a scoping one.
 - **Reparse-point policy**: junctions, symlinks, and volume mount points are recorded but

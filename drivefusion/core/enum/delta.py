@@ -128,7 +128,7 @@ def apply_delta(
     from drivefusion.core.scan.scanner import stage_row_for
 
     lister = lister or fsio_lister
-    excludes = excludes or ExclusionSet.for_root(())
+    excludes = (excludes or ExclusionSet.for_root(())).for_scan_of(root_path)
     counters = DeltaCounters()
 
     parents, record_count, _ = touched_parent_frns(records)
