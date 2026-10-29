@@ -41,6 +41,8 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "same-name-hidden-diff": ("R-ID-02",),
     "same-size-diff-name": ("R-ID-02",),
     "unique-size": ("R-ID-03", "R-RED-03"),
+    "partition-copy": ("R-RED-06",),
+    "unverified-copy": ("R-RED-06",),
     "empty-files": ("R-CAT-03",),
     "empty-dirs": ("R-CAT-02",),
     "hardlinks": ("R-RED-02",),
@@ -248,6 +250,12 @@ class Builder:
     def other_drives(self, drive: str) -> list[str]:
         return [d for d in self.ids if d != drive]
 
+    def device(self, drive: str) -> str:
+        return next(d for d in self.drives if d["id"] == drive).get("device", drive)
+
+    def identified(self, drive: str) -> bool:
+        return next(d for d in self.drives if d["id"] == drive).get("identity", "serial") != "none"
+
     # -- the tree ---------------------------------------------------------
 
     def skeleton(self) -> None:
@@ -302,6 +310,36 @@ class Builder:
             s = self.scenario("all-drives-copy", "on every drive: never under-protected at 2")
             for drive in self.ids:
                 self.place(drive, key, s)
+
+    def drive_identity_copies(self) -> None:
+        """R-RED-06: content where counting volumes instead of devices goes wrong.
+
+        On both partitions of one device and nowhere else: one copy, and the
+        second is same-drive waste. On an identified drive plus a drive nothing
+        identifies: one proven copy, and neither is waste.
+        """
+        r = self.rng
+        by_device: dict[str, list[str]] = {}
+        for drive in self.ids:
+            by_device.setdefault(self.device(drive), []).append(drive)
+        for members in by_device.values():
+            if len(members) < 2:
+                continue
+            for _ in range(r.randint(1, 2)):
+                key = self.new_content()
+                s = self.scenario("partition-copy", "on two volumes of one physical device")
+                for drive in members[:2]:
+                    self.place(drive, key, s)
+
+        unknown = [d for d in self.ids if not self.identified(d)]
+        known = [d for d in self.ids if self.identified(d)]
+        for drive in unknown:
+            if not known:
+                break
+            key = self.new_content()
+            s = self.scenario("unverified-copy", "on a known drive and an unidentified one")
+            self.place(r.choice(known), key, s)
+            self.place(drive, key, s)
 
     def same_drive_dupes(self) -> None:
         r = self.rng
@@ -764,6 +802,29 @@ def mock_drive_identity(rng: random.Random, index: int, fs: str) -> dict:
     }
 
 
+def assign_devices(drives: list[dict], seed: int) -> None:
+    """Give simulated drives the identity troubles real ones have (R-RED-06).
+
+    With three or more drives, two of them become partitions of one physical
+    device: same device, same serial. With four or more, one other drive sits
+    behind a USB bridge that reports no identity at all. A separate random
+    stream keeps every other choice the seed makes unchanged.
+    """
+    rng = random.Random(seed ^ 0x5EED_DE71CE)
+    for drive in drives:
+        drive.setdefault("device", drive["id"])
+        drive.setdefault("identity", "serial")
+    if len(drives) >= 3:
+        first, second = rng.sample(drives, 2)
+        for field in ("device", "serial", "manufacturer", "model", "media"):
+            second[field] = first[field]
+    if len(drives) >= 4:
+        shared = {d["id"] for d in drives if d["device"] != d["id"]} | {
+            d["device"] for d in drives if d["device"] != d["id"]}
+        candidates = [d for d in drives if d["id"] not in shared]
+        rng.choice(candidates)["identity"] = "none"
+
+
 def default_cluster_bytes(fs: str, capacity: int) -> int:
     """Windows' default cluster size for a volume of this filesystem and size.
 
@@ -837,6 +898,7 @@ def build(seed: int, drives: list[dict], *, files_per_drive: int, large_files: i
     b.skeleton()
     b.filler()
     b.cross_drive_copies()
+    b.drive_identity_copies()
     b.same_drive_dupes()
     b.renamed_and_case()
     b.same_name_different_content()

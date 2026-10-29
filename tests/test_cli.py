@@ -311,3 +311,39 @@ def test_scope_add_refuses_a_root_on_the_catalogs_data_drive(
 
     with Catalog(catalog) as opened:
         assert opened.volumes() == [] and opened.scope_roots() == []
+
+
+def test_drives_list_confirm_and_assign(cli, sample_tree: Path, capsys, tmp_path: Path) -> None:
+    """REVIEW F-05: a volume with no identified drive, settled by the user."""
+    from drivefusion.core.store.catalog import Catalog
+
+    assert cli("scope", "add", str(sample_tree)) == 0
+    catalog_path = tmp_path / "catalog" / "catalog.db"
+    with Catalog(catalog_path) as catalog:
+        catalog.conn.execute("UPDATE volume SET drive_id = NULL")   # a bridge with no serial
+        volume = catalog.unverified_volumes()[0]["id"]
+        known = catalog.upsert_drive(serial="KNOWN-1", model="Archive")
+    capsys.readouterr()
+
+    assert cli("drives", "list") == 0
+    out = capsys.readouterr().out
+    assert "drive UNVERIFIED" in out and "drives confirm VOLUME" in out
+
+    assert cli("drives", "assign", str(volume), "999") == 1
+    assert "no drive 999" in capsys.readouterr().err
+
+    assert cli("drives", "assign", str(volume), str(known)) == 0
+    capsys.readouterr()
+    assert cli("drives", "list") == 0
+    out = capsys.readouterr().out
+    assert "UNVERIFIED" not in out and "identified by serial number" in out
+
+    # Now identified by hardware (through the drive it was assigned to): settled.
+    assert cli("drives", "confirm", str(volume)) == 1
+    assert "can't be overruled" in capsys.readouterr().err
+
+
+def test_drives_without_an_action_shows_help(cli, capsys) -> None:
+    with pytest.raises(SystemExit):
+        cli("drives")
+    assert "confirm" in capsys.readouterr().out

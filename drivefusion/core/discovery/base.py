@@ -17,9 +17,16 @@ WINDOWS = sys.platform == "win32"
 
 @dataclass(frozen=True)
 class DriveInfo:
-    """A physical device. ``serial`` is the identity anchor."""
+    """A physical device.
+
+    ``serial`` is the identity anchor. Many USB bridges report none, so
+    ``layout_id`` (the disk's MBR signature or GPT disk GUID, written on the
+    disk itself) is the fallback that still tells two disks apart and still
+    recognises one disk when it comes back (docs/REVIEW.md F-05).
+    """
 
     serial: str | None = None
+    layout_id: str | None = None
     model: str | None = None
     manufacturer: str | None = None
     bus: str | None = None

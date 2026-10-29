@@ -626,3 +626,95 @@ def test_an_unknown_system_drive_grants_no_exception(drives, monkeypatch) -> Non
         volume_id = catalog.upsert_volume(volume_guid="vol:system")
         with pytest.raises(CatalogLocationError, match="same drive"):
             catalog.add_scope_root(volume_id, str(system / "Research"))
+
+
+# -- drive identity (REVIEW F-05, schema v5) -----------------------------------
+
+def test_a_drive_without_a_serial_is_found_again_by_its_layout(catalog: Catalog) -> None:
+    first = catalog.upsert_drive(layout_id="gpt:{A}", model="USB disk")
+    assert catalog.upsert_drive(layout_id="gpt:{A}") == first
+    assert catalog.upsert_drive(layout_id="gpt:{B}") != first
+    row = catalog.conn.execute("SELECT identity FROM drive WHERE id = ?", (first,)).fetchone()
+    assert row["identity"] == "disk-layout"
+
+
+def test_a_layout_drive_seen_later_with_a_serial_stays_one_drive(catalog: Catalog) -> None:
+    """Through a bridge that hides the serial, then in a dock that doesn't."""
+    bridged = catalog.upsert_drive(layout_id="mbr:1234ABCD")
+    docked = catalog.upsert_drive(serial="WD-123", layout_id="mbr:1234ABCD")
+    assert docked == bridged
+    row = catalog.conn.execute("SELECT serial, identity FROM drive WHERE id = ?", (bridged,)).fetchone()
+    assert (row["serial"], row["identity"]) == ("WD-123", "serial")
+
+
+def test_cloned_disks_with_serials_stay_two_drives(catalog: Catalog) -> None:
+    """A sector-for-sector clone shares the layout; the serials still differ."""
+    a = catalog.upsert_drive(serial="A-1", layout_id="mbr:0000BEEF")
+    b = catalog.upsert_drive(serial="B-2", layout_id="mbr:0000BEEF")
+    assert a != b
+
+
+def test_a_drive_needs_some_identity(catalog: Catalog) -> None:
+    with pytest.raises(ValueError):
+        catalog.upsert_drive(model="anonymous")
+
+
+def test_discovery_without_any_identity_leaves_the_drive_unverified(catalog: Catalog) -> None:
+    from drivefusion.core.discovery import DriveInfo, VolumeInfo
+
+    volume_id = catalog.record_discovered_volume(
+        VolumeInfo(volume_guid="vol:anon", label="BACKUP", drive=DriveInfo(model="bridge"))
+    )
+    assert [row["id"] for row in catalog.unverified_volumes()] == [volume_id]
+
+
+def test_the_user_can_confirm_or_assign_an_unverified_volume(catalog: Catalog) -> None:
+    left = catalog.upsert_volume(volume_guid="vol:left", label="LEFT")
+    right = catalog.upsert_volume(volume_guid="vol:right", label="RIGHT")
+
+    drive = catalog.confirm_volume_drive(left)
+    catalog.assign_volume_drive(right, drive)       # a second partition of it
+    assert catalog.unverified_volumes() == []
+    rows = catalog.conn.execute("SELECT DISTINCT drive_id FROM volume").fetchall()
+    assert [r["drive_id"] for r in rows] == [drive]
+    assert catalog.conn.execute(
+        "SELECT identity FROM drive WHERE id = ?", (drive,)
+    ).fetchone()["identity"] == "user"
+
+
+def test_hardware_identity_cannot_be_overruled_by_hand(catalog: Catalog) -> None:
+    drive = catalog.upsert_drive(serial="S-1")
+    volume = catalog.upsert_volume(volume_guid="vol:s", drive_id=drive)
+    other = catalog.upsert_drive(serial="S-2")
+    with pytest.raises(ValueError, match="can't be overruled"):
+        catalog.assign_volume_drive(volume, other)
+    with pytest.raises(ValueError, match="can't be overruled"):
+        catalog.confirm_volume_drive(volume)
+
+
+def test_rediscovery_keeps_a_users_confirmation(catalog: Catalog) -> None:
+    from drivefusion.core.discovery import VolumeInfo
+
+    volume = catalog.record_discovered_volume(VolumeInfo(volume_guid="vol:anon"))
+    drive = catalog.confirm_volume_drive(volume)
+    catalog.record_discovered_volume(VolumeInfo(volume_guid="vol:anon"))
+    assert catalog.conn.execute(
+        "SELECT drive_id FROM volume WHERE id = ?", (volume,)
+    ).fetchone()["drive_id"] == drive
+
+
+def test_a_v4_catalog_gains_drive_identity(tmp_path: Path) -> None:
+    path = tmp_path / "v4.db"
+    with Catalog(path) as catalog:
+        catalog.upsert_drive(serial="OLD-1")
+        catalog.conn.execute("DROP INDEX ux_drive_layout")
+        catalog.conn.execute("ALTER TABLE drive DROP COLUMN layout_id")
+        catalog.conn.execute("ALTER TABLE drive DROP COLUMN identity")
+        catalog.conn.execute("DELETE FROM schema_version")
+        catalog.conn.execute(
+            "INSERT INTO schema_version VALUES (4, '2026-01-01T00:00:00+00:00')"
+        )
+    with Catalog(path) as upgraded:
+        row = upgraded.conn.execute("SELECT serial, identity, layout_id FROM drive").fetchone()
+        assert (row["serial"], row["identity"], row["layout_id"]) == ("OLD-1", "serial", None)
+        assert schema.current_version(upgraded.conn) == 5

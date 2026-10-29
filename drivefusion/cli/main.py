@@ -16,6 +16,7 @@ from pathlib import Path
 from drivefusion import __version__
 from drivefusion.core import discovery
 from drivefusion.core.analysis import (
+    drive_inventory,
     duplicate_groups,
     group_paths,
     integrity_incidents,
@@ -121,6 +122,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scope_preview.add_argument("root_id", type=int)
 
+    drives = subparsers.add_parser(
+        "drives", help="which physical drive each volume is on"
+    )
+    drives_sub = drives.add_subparsers(dest="drives_command", metavar="ACTION")
+    drives_sub.add_parser("list", help="volumes, their drives, and how each is identified")
+    drives_confirm = drives_sub.add_parser(
+        "confirm", help="record that a volume with an unverified drive is a drive of its own"
+    )
+    drives_confirm.add_argument("volume_id", type=int)
+    drives_confirm.add_argument("--nickname", default=None)
+    drives_assign = drives_sub.add_parser(
+        "assign", help="record that a volume with an unverified drive is on a known drive"
+    )
+    drives_assign.add_argument("volume_id", type=int)
+    drives_assign.add_argument("drive_id", type=int)
+
     scan = subparsers.add_parser("scan", help="enumerate scope roots into the catalog")
     scan.add_argument(
         "root_id", type=int, nargs="?", help="scope root to scan (default: all)"
@@ -198,19 +215,7 @@ def cmd_scope_add(args) -> int:
             print(f"drivefusion: {exc}", file=sys.stderr)
             return 1
 
-        drive_id = None
-        if volume.drive and volume.drive.serial:
-            drive_id = catalog.upsert_drive(
-                serial=volume.drive.serial,
-                model=volume.drive.model,
-                manufacturer=volume.drive.manufacturer,
-                bus=volume.drive.bus,
-                media=volume.drive.media,
-            )
-        fields = volume.as_volume_fields()
-        if drive_id is not None:
-            fields["drive_id"] = drive_id
-        volume_id = catalog.upsert_volume(volume_guid=volume.volume_guid, **fields)
+        volume_id = catalog.record_discovered_volume(volume)
 
         root_id = catalog.add_scope_root(volume_id, root_path, args.exclude)
         print(f"added scope root {root_id}: {root_path}")
@@ -439,6 +444,11 @@ def _print_group(catalog, group, *, show_paths: int = 4) -> None:
         line += f", {group.physical_copies} physical copies"
     if group.reclaimable_bytes:
         line += f" — {_human_bytes(group.reclaimable_bytes)} duplicated on one drive"
+    if group.identity_uncertain:
+        line += (
+            f" (up to {group.drives_possible}: a copy is on a volume whose drive "
+            "is unverified)"
+        )
     print(line)
     for path in group_paths(catalog, group, limit=show_paths):
         print(f"              {path}")
@@ -478,6 +488,12 @@ def cmd_report(args) -> int:
                 f"\ndurability (target: {args.min_copies} copies on distinct drives)"
             )
             print(f"  under-protected:   {summary['under_protected_items']:,} items")
+            if summary["unverified_drive_items"]:
+                print(
+                    f"    of which {summary['unverified_drive_items']:,} have a copy on "
+                    "a volume whose drive is unverified;\n"
+                    "    confirm it with `drivefusion drives` and they may be safe"
+                )
             print(
                 "  at risk:           "
                 f"{_human_bytes(summary['under_protected_bytes'])}"
@@ -621,6 +637,63 @@ def cmd_status(args) -> int:
         return 0
 
 
+#: How each drive identity is described to a user.
+IDENTITY_WORDS = {
+    "serial": "identified by serial number",
+    "disk-layout": "identified by partition table",
+    "user": "confirmed by you",
+}
+
+
+def cmd_drives_list(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        rows = drive_inventory(catalog)
+        if not rows:
+            print("no volumes in the catalog yet; add one with `drivefusion scope add`")
+            return 0
+        unverified = 0
+        for row in rows:
+            label = row["label"] or row["volume_guid"]
+            if row["drive_id"] is None:
+                unverified += 1
+                drive = "drive UNVERIFIED"
+            else:
+                name = row["nickname"] or row["model"] or row["serial"] or row["layout_id"]
+                how = IDENTITY_WORDS.get(row["identity"], row["identity"] or "?")
+                drive = f"drive {row['drive_id']} {name or ''} ({how})".replace("  ", " ")
+            print(f"volume {row['volume_id']}: {label} ({row['fs_type'] or '?'}) — {drive}")
+        if unverified:
+            print(
+                f"\n{unverified} volume(s) have no identified drive. Copies on them count "
+                "as at most one\nproven copy until you say which drive each is on:\n"
+                "  drivefusion drives confirm VOLUME          its own physical drive\n"
+                "  drivefusion drives assign VOLUME DRIVE     on a drive listed above"
+            )
+        return 0
+
+
+def cmd_drives_confirm(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        try:
+            drive_id = catalog.confirm_volume_drive(args.volume_id, nickname=args.nickname)
+        except ValueError as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
+        print(f"volume {args.volume_id} recorded as on a drive of its own (drive {drive_id})")
+        return 0
+
+
+def cmd_drives_assign(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        try:
+            catalog.assign_volume_drive(args.volume_id, args.drive_id)
+        except ValueError as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
+        print(f"volume {args.volume_id} recorded as on drive {args.drive_id}")
+        return 0
+
+
 def cmd_volumes(args) -> int:
     volumes = discovery.list_volumes()
     if not volumes:
@@ -653,6 +726,9 @@ DISPATCH = {
     ("scope", "list"): cmd_scope_list,
     ("scope", "remove"): cmd_scope_remove,
     ("scope", "preview"): cmd_scope_preview,
+    ("drives", "list"): cmd_drives_list,
+    ("drives", "confirm"): cmd_drives_confirm,
+    ("drives", "assign"): cmd_drives_assign,
     ("scan", None): cmd_scan,
     ("find", None): cmd_find,
     ("hash", None): cmd_hash,
@@ -687,11 +763,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if args.command == "scope" and not getattr(args, "scope_command", None):
-        parser.parse_args(["scope", "--help"])
+    action = getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
+    if args.command in ("scope", "drives") and not action:
+        parser.parse_args([args.command, "--help"])
         return 0
 
-    handler = DISPATCH.get((args.command, getattr(args, "scope_command", None)))
+    handler = DISPATCH.get((args.command, action))
     if handler is None:
         parser.print_help()
         return 2

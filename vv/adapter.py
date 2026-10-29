@@ -71,8 +71,15 @@ class DriveFusionAdapter:
             existing.append(root)
             if manifest["mode"] == "physical":
                 volume = self.discovery.identify_volume(root)
-                device = (volume.drive.serial if volume.drive and volume.drive.serial
-                          else volume.volume_guid)
+                hardware = volume.drive
+                device = ((hardware.serial or getattr(hardware, "layout_id", None))
+                          if hardware else None)
+                if device is None:
+                    raise AdapterError(
+                        f"{drive['id']} ({root}): Drive Fusion can't identify this device "
+                        "(no serial, no partition-table identity), so the bench can't know "
+                        "the true copy counts. Use identifiable devices in physical mode; "
+                        "the unidentified case (R-RED-06) is tested in simulated mode.")
                 if device in seen_devices:
                     raise AdapterError(
                         f"{drive['id']} ({root}) and {seen_devices[device]} are on the same "
@@ -80,16 +87,19 @@ class DriveFusionAdapter:
                         "drive; leave out --drive-path to simulate drives on one disk."
                     )
                 seen_devices[device] = drive["id"]
-                drive_id = None
-                if volume.drive and volume.drive.serial:
-                    drive_id = cat.upsert_drive(
-                        serial=volume.drive.serial, model=volume.drive.model,
-                        manufacturer=volume.drive.manufacturer, bus=volume.drive.bus,
-                        media=volume.drive.media)
-                fields = volume.as_volume_fields()
-                if drive_id is not None:
-                    fields["drive_id"] = drive_id
-                volume_id = cat.upsert_volume(volume_guid=volume.volume_guid, **fields)
+                if hasattr(cat, "record_discovered_volume"):
+                    volume_id = cat.record_discovered_volume(volume)
+                else:  # versions before REVIEW F-05
+                    drive_id = None
+                    if hardware and hardware.serial:
+                        drive_id = cat.upsert_drive(
+                            serial=hardware.serial, model=hardware.model,
+                            manufacturer=hardware.manufacturer, bus=hardware.bus,
+                            media=hardware.media)
+                    fields = volume.as_volume_fields()
+                    if drive_id is not None:
+                        fields["drive_id"] = drive_id
+                    volume_id = cat.upsert_volume(volume_guid=volume.volume_guid, **fields)
                 self.discovered[drive["id"]] = {
                     "volume_guid": volume.volume_guid, "fs_type": volume.fs_type,
                     "device": device, "label": volume.label,
@@ -101,11 +111,15 @@ class DriveFusionAdapter:
                 # what discovery would have reported for a real drive this size.
                 capacity = drive.get("capacity_bytes")
                 free = capacity - drive.get("baseline_bytes", 0) if capacity else None
-                drive_id = cat.upsert_drive(
-                    serial=f"VV-{manifest['seed']}-{drive['serial']}",
-                    model=drive["model"], manufacturer=drive["manufacturer"],
-                    media=drive["media"], bus="usb", nickname=drive["label"],
-                    capacity_bytes=capacity)
+                # Partitions of one simulated device share its serial; a drive
+                # behind an identity-hiding bridge gets no drive at all.
+                drive_id = None
+                if drive.get("identity", "serial") != "none":
+                    drive_id = cat.upsert_drive(
+                        serial=f"VV-{manifest['seed']}-{drive['serial']}",
+                        model=drive["model"], manufacturer=drive["manufacturer"],
+                        media=drive["media"], bus="usb", nickname=drive["label"],
+                        capacity_bytes=capacity)
                 file_ids = drive["fs"] == "NTFS"
                 volume_id = cat.upsert_volume(
                     volume_guid=f"vv:{manifest['seed']}:{drive['id']}", label=drive["label"],
@@ -113,7 +127,9 @@ class DriveFusionAdapter:
                     supports_file_ids=int(file_ids), supports_hardlink=int(drive["fs"] == "NTFS"),
                     capacity_bytes=capacity, free_bytes=free,
                     cluster_bytes=drive.get("cluster_bytes"), rescan_cost="full-walk")
-                device = f"simulated:{drive['serial']}"
+                device = (f"simulated:{drive['serial']}"
+                          if drive.get("identity", "serial") != "none"
+                          else f"unidentified:{drive['id']}")
             cat.conn.commit()
             root_id = cat.add_scope_root(volume_id, root)
             self.roots[drive["id"]] = {"root": root, "volume_id": volume_id, "root_id": root_id,
@@ -188,7 +204,8 @@ class DriveFusionAdapter:
     def _group(self, g, file_keys: dict[int, list]) -> dict:
         out = {"content_id": g.content_id, "size": g.size_bytes, "paths": g.paths,
                "drives": g.drives, "physical_copies": g.physical_copies,
-               "reclaimable_bytes": g.reclaimable_bytes}
+               "reclaimable_bytes": g.reclaimable_bytes,
+               "drives_possible": getattr(g, "drives_possible", None)}
         # Versions with REVIEW F-04 report single-copy files as groups with no
         # content id; the only way to say which file is meant is its file id.
         file_id = getattr(g, "file_id", None)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from drivefusion.core.analysis.duplicates import DRIVE_KEY
+from drivefusion.core.analysis.duplicates import DRIVES_POSSIBLE, DRIVES_PROVEN
 from drivefusion.core.store.catalog import Catalog
 
 #: Rows per page. Enough to fill any realistic viewport in one fetch, small
@@ -45,10 +45,17 @@ class FileRow:
     #: render it as unknown: showing "1" for an unhashed file would be a
     #: confident claim that no copy exists elsewhere.
     drives: int | None
+    #: Drives that *might* hold it, counting each volume whose drive is
+    #: unverified as its own (docs/REVIEW.md F-05). ``None`` when unknown.
+    drives_possible: int | None = None
 
     @property
     def copies_known(self) -> bool:
         return self.drives is not None
+
+    @property
+    def identity_uncertain(self) -> bool:
+        return (self.drives_possible or 0) > (self.drives or 0)
 
 
 def child_dirs(
@@ -105,10 +112,15 @@ def files_in_dir(
     sql = (
         "SELECT f.id, f.name, f.size_bytes, f.content_id, "
         "  CASE WHEN f.content_id IS NULL THEN NULL ELSE ("
-        f"    SELECT COUNT(DISTINCT {DRIVE_KEY}) FROM file f2 "
+        f"    SELECT {DRIVES_PROVEN} FROM file f2 "
         "     JOIN volume v ON v.id = f2.volume_id "
         "     WHERE f2.content_id = f.content_id AND f2.vanished_at IS NULL"
-        "  ) END AS drives "
+        "  ) END AS drives, "
+        "  CASE WHEN f.content_id IS NULL THEN NULL ELSE ("
+        f"    SELECT {DRIVES_POSSIBLE} FROM file f2 "
+        "     JOIN volume v ON v.id = f2.volume_id "
+        "     WHERE f2.content_id = f.content_id AND f2.vanished_at IS NULL"
+        "  ) END AS drives_possible "
         "FROM file f "
         "WHERE f.dir_id = ? AND f.vanished_at IS NULL AND f.name > ? "
         "ORDER BY f.name LIMIT ?"
@@ -121,6 +133,9 @@ def files_in_dir(
             size_bytes=int(row["size_bytes"]),
             content_id=None if row["content_id"] is None else int(row["content_id"]),
             drives=None if row["drives"] is None else int(row["drives"]),
+            drives_possible=(
+                None if row["drives_possible"] is None else int(row["drives_possible"])
+            ),
         )
         for row in rows
     ]
@@ -173,7 +188,8 @@ def drive_inventory(catalog: Catalog) -> list[dict]:
         "SELECT v.id AS volume_id, v.volume_guid, v.label, v.fs_type, "
         "       v.capacity_bytes, v.free_bytes, v.cluster_bytes, v.rescan_cost, "
         "       v.last_seen_at, v.supports_usn, "
-        "       d.id AS drive_id, d.serial, d.model, d.manufacturer, d.bus, "
+        "       d.id AS drive_id, d.serial, d.layout_id, d.identity, "
+        "       d.model, d.manufacturer, d.bus, "
         "       d.media, d.purchase_date, d.nickname, d.location, d.role, "
         "       d.capacity_bytes AS drive_capacity_bytes, "
         "       (SELECT COUNT(*) FROM file f "

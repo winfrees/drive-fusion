@@ -186,7 +186,10 @@ class FileTableModel(QAbstractTableModel):
             if column == SIZE:
                 return human_bytes(entry.size_bytes)
             if column == COPIES:
-                return UNKNOWN if entry.drives is None else str(entry.drives)
+                if entry.drives is None:
+                    return UNKNOWN
+                # "1?" not "1": a copy is on a drive the user hasn't confirmed.
+                return f"{entry.drives}?" if entry.identity_uncertain else str(entry.drives)
 
         if role == Qt.ToolTipRole and column == COPIES:
             if entry.drives is None:
@@ -194,9 +197,16 @@ class FileTableModel(QAbstractTableModel):
                     "No content identity yet — run a hash pass.\n"
                     "Unknown, not zero: this file may well exist elsewhere."
                 )
+            unverified = (
+                f"\nAnother copy is on a volume whose drive is unverified, so it "
+                f"may be on up to {entry.drives_possible} drives. Confirm the drive "
+                "on the Drives screen or with `drivefusion drives`."
+                if entry.identity_uncertain
+                else ""
+            )
             if entry.drives == 1:
-                return "On one drive only. If that drive fails, this is gone."
-            return f"On {entry.drives} distinct drives."
+                return "On one drive only. If that drive fails, this is gone." + unverified
+            return f"On {entry.drives} distinct drives." + unverified
 
         if role == Qt.TextAlignmentRole and column in (SIZE, COPIES):
             return int(Qt.AlignRight | Qt.AlignVCenter)

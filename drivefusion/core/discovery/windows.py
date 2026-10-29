@@ -19,6 +19,7 @@ import os
 from ctypes import wintypes
 
 from drivefusion.core.discovery.base import DriveInfo, DiscoveryError, VolumeInfo
+from drivefusion.core.discovery.layout import parse_drive_layout
 
 PROVIDER = "windows"
 
@@ -58,6 +59,8 @@ FILE_SUPPORTS_OPEN_BY_FILE_ID = 0x01000000
 FILE_SUPPORTS_USN_JOURNAL = 0x02000000
 
 IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400
+# FILE_ANY_ACCESS, so a handle opened with no access rights may ask it.
+IOCTL_DISK_GET_DRIVE_LAYOUT_EX = 0x00070050
 IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
 FSCTL_IS_VOLUME_DIRTY = 0x00090078
 
@@ -156,6 +159,14 @@ def _device_ioctl(handle, code: int, buffer, in_buffer=None) -> bool:
     return bool(ok)
 
 
+def _layout_id(handle) -> str | None:
+    # Room for 128 GPT partitions at 144 bytes each, plus the header.
+    buffer = ctypes.create_string_buffer(65536)
+    if not _device_ioctl(handle, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, buffer):
+        return None
+    return parse_drive_layout(buffer.raw)
+
+
 def _ascii_at(raw: bytes, offset: int) -> str | None:
     if not offset or offset >= len(raw):
         return None
@@ -167,6 +178,7 @@ def _ascii_at(raw: bytes, offset: int) -> str | None:
 def _describe_physical_drive(disk_number: int) -> DriveInfo:
     handle = _open_device(f"\\\\.\\PhysicalDrive{disk_number}")
     try:
+        layout_id = _layout_id(handle)
         query = STORAGE_PROPERTY_QUERY(
             PropertyId=StorageDeviceProperty, QueryType=PropertyStandardQuery
         )
@@ -174,7 +186,7 @@ def _describe_physical_drive(disk_number: int) -> DriveInfo:
         if not _device_ioctl(
             handle, IOCTL_STORAGE_QUERY_PROPERTY, buffer, query
         ):
-            return DriveInfo()
+            return DriveInfo(layout_id=layout_id)
 
         descriptor = ctypes.cast(
             buffer, ctypes.POINTER(STORAGE_DEVICE_DESCRIPTOR)
@@ -199,6 +211,7 @@ def _describe_physical_drive(disk_number: int) -> DriveInfo:
 
         return DriveInfo(
             serial=serial,
+            layout_id=layout_id,
             model=product,
             manufacturer=vendor,
             bus=BUS_TYPES.get(descriptor.BusType, "unknown"),

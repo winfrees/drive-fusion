@@ -76,6 +76,7 @@ drivefusion hash                   # the only verb that reads file contents
 drivefusion report                 # duplication, durability and fixity findings
 drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
+drivefusion drives list            # which physical drive each volume is on
 drivefusion gui                    # the desktop window
 ```
 
@@ -141,7 +142,8 @@ These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
 | Same content on two different drives | 2 copies |
 | Same content twice on one drive | 1 copy (plus reclaimable space, reported as an observation) |
 | Hardlinks to one file | 1 physical copy |
-| Volume whose physical drive serial couldn't be read | its own drive (this can **overstate** copies; see the review) |
+| Volume whose drive has no serial | identified by its partition table (MBR signature or GPT disk GUID) instead |
+| Volume whose drive nothing identifies | at most one proven copy, marked *unverified*, until you say which drive it is on (`drivefusion drives`); never counted as same-drive waste |
 | File whose size no other catalogued file shares | 1 copy, known without opening it |
 | File sharing its size with another, not yet hashed | unknown, shown as "—" in the GUI |
 
