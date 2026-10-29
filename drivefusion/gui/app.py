@@ -25,10 +25,19 @@ def main(argv: list[str] | None = None, catalog: Path | None = None) -> int:
         )
         return 2
 
+    from drivefusion.core.store import audit
     from drivefusion.gui.main_window import MainWindow
 
+    audit.set_front_end("gui")
+
     app = QApplication.instance() or QApplication(list(argv or sys.argv))
+    from drivefusion.gui import consent
+
     window = MainWindow(catalog or DEFAULT_CATALOG)
+    # Before the window, and before anything is read (docs/PLAN.md §1).
+    if not consent.ensure(None, window.session.catalog()):
+        window.close()
+        return 0
     window.show()
     return app.exec()
 

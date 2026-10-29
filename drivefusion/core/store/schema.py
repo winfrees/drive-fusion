@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -258,6 +258,13 @@ CREATE TABLE IF NOT EXISTS audit (
     prev_hash   BLOB,
     entry_hash  BLOB
 );
+
+-- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
+-- change made around these; they stop the ordinary ones.
+CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
+BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
+BEGIN SELECT RAISE(ABORT, 'the audit log is append-only'); END;
 """
 
 
@@ -277,6 +284,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE drive ADD COLUMN layout_id TEXT",
         "ALTER TABLE drive ADD COLUMN identity TEXT NOT NULL DEFAULT 'serial'",
     ),
+    # v6 adds only the audit triggers, which the DDL creates IF NOT EXISTS.
+    6: (),
 }
 
 

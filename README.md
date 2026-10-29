@@ -60,8 +60,11 @@ its catalog.*
 | **M4** GUI shell | done, with one gap | `gui`: Scope, Dashboard, Drives and Catalog screens; background scans and hashing with Cancel. The UAC elevation launcher exists but **no screen offers it yet** |
 | M5–M8 | planned | health and risk, curation and FAIR scorecards, the planner, exports. See [PLAN §15](docs/PLAN.md#15-milestones) and the [roadmap](docs/ROADMAP.md) |
 
-Not yet implemented, though described in the plan: first-run disclaimer acknowledgement, the
-hash-chained audit log, and portable mode.
+Before Drive Fusion first reads a drive it shows the scope disclaimer below and asks you to
+accept it (`--accept-disclaimer` or `DRIVEFUSION_ACCEPT_DISCLAIMER=1` for scripts). That,
+and every scope change, scan, hash and verify pass and drive confirmation, is recorded in an
+append-only, hash-chained audit log: `drivefusion audit list`, `drivefusion audit verify`.
+Not yet implemented, though described in the plan: portable mode.
 
 ## Quick start
 

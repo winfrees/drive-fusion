@@ -532,3 +532,56 @@ def test_adding_a_folder_on_the_catalogs_data_drive_is_refused(
     assert window.scope.add_path(str(elsewhere)) is False
     assert "same drive as the catalog" in warnings[0]
     assert len(window.session.catalog().scope_roots()) == roots_before
+
+
+# -- the first-run disclaimer (docs/PLAN.md §1, REVIEW SR-25) ------------------
+
+def test_no_drive_is_read_from_the_gui_before_the_disclaimer_is_accepted(
+    window, tmp_path: Path, monkeypatch
+) -> None:
+    from drivefusion.core import disclaimer
+    from drivefusion.gui import consent
+
+    monkeypatch.delenv("DRIVEFUSION_ACCEPT_DISCLAIMER", raising=False)
+    asked = []
+    monkeypatch.setattr(consent, "_ask", lambda parent: asked.append(parent) or False)
+    emitted = []
+    window.dashboard.hashRequested.connect(emitted.append)
+
+    folder = tmp_path / "another"
+    folder.mkdir()
+    roots_before = len(window.session.catalog().scope_roots())
+    assert window.scope.add_path(str(folder)) is False
+    assert window.scope.scan_body() is None
+    window.dashboard.request_hash()
+    assert emitted == [], "a hash task was started"
+    assert len(window.session.catalog().scope_roots()) == roots_before
+    assert len(asked) == 3, "each action asked, and each was declined"
+    assert not disclaimer.accepted(window.session.catalog())
+
+    monkeypatch.setattr(consent, "_ask", lambda parent: True)
+    assert window.scope.scan_body() is not None
+    assert disclaimer.accepted(window.session.catalog())
+
+
+def test_the_dialog_acceptance_is_recorded(window, monkeypatch) -> None:
+    import json
+
+    from drivefusion.core.store import audit
+    from drivefusion.gui import consent
+
+    monkeypatch.delenv("DRIVEFUSION_ACCEPT_DISCLAIMER", raising=False)
+    monkeypatch.setattr(consent, "_ask", lambda parent: True)
+    assert consent.ensure(None, window.session.catalog())
+    last = audit.entries(window.session.catalog().conn, limit=1)[0]
+    assert last["action"] == "disclaimer.accepted"
+    assert json.loads(last["detail_json"])["how"] == "dialog"
+
+
+def test_declining_at_startup_closes_without_reading(qt_app, populated: Path, monkeypatch) -> None:
+    from drivefusion.gui import app, consent
+
+    monkeypatch.delenv("DRIVEFUSION_ACCEPT_DISCLAIMER", raising=False)
+    monkeypatch.setattr(consent, "_ask", lambda parent: False)
+    monkeypatch.setattr(qt_app, "exec", lambda: pytest.fail("the window was opened"))
+    assert app.main([], catalog=populated) == 0

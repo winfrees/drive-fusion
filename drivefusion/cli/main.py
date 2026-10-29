@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import textwrap
 from pathlib import Path
 
 from drivefusion import __version__
@@ -101,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CATALOG,
         help=f"catalog database path (default: {DEFAULT_CATALOG})",
     )
+    parser.add_argument(
+        "--accept-disclaimer",
+        action="store_true",
+        help="accept the scope disclaimer without a prompt, for scripts (recorded "
+             "in the audit log); DRIVEFUSION_ACCEPT_DISCLAIMER=1 does the same",
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     scope = subparsers.add_parser(
@@ -137,6 +144,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     drives_assign.add_argument("volume_id", type=int)
     drives_assign.add_argument("drive_id", type=int)
+
+    audit_cmd = subparsers.add_parser(
+        "audit", help="the catalog's append-only, hash-chained record of what was done"
+    )
+    audit_sub = audit_cmd.add_subparsers(dest="audit_command", metavar="ACTION")
+    audit_list = audit_sub.add_parser("list", help="the most recent entries, newest first")
+    audit_list.add_argument("--limit", type=int, default=20)
+    audit_sub.add_parser("verify", help="check that no entry was changed, removed or reordered")
 
     scan = subparsers.add_parser("scan", help="enumerate scope roots into the catalog")
     scan.add_argument(
@@ -190,6 +205,53 @@ def build_parser() -> argparse.ArgumentParser:
         planned.set_defaults(milestone=milestone)
 
     return parser
+
+
+# -- the first-run disclaimer (docs/PLAN.md §1) ---------------------------------
+
+#: Commands that read the user's drives. Nothing is read before the scope
+#: disclaimer has been accepted (REVIEW SR-25).
+READS_DRIVES = {
+    ("scope", "add"), ("scope", "preview"), ("scan", None), ("hash", None),
+    ("verify", None),
+}
+
+
+def _disclaimer_gate(args) -> bool:
+    """True when the disclaimer is, or has just been, accepted."""
+    from drivefusion.core import disclaimer
+
+    with Catalog(args.catalog) as catalog:
+        if disclaimer.accepted(catalog):
+            return True
+        if args.accept_disclaimer:
+            disclaimer.accept(catalog, "flag")
+            return True
+        if disclaimer.accepted_by_environment():
+            disclaimer.accept(catalog, "env")
+            return True
+        if sys.stdin.isatty():
+            print("Before Drive Fusion reads any drive, please read and accept:\n")
+            print(textwrap.fill(disclaimer.TEXT, 78) + "\n")
+            try:
+                answer = input("Type 'accept' to continue: ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() == "accept":
+                disclaimer.accept(catalog, "prompt")
+                print("accepted; recorded in the audit log\n")
+                return True
+            print("not accepted; nothing was read", file=sys.stderr)
+            return False
+    print(
+        "drivefusion: the scope disclaimer has not been accepted for this catalog, "
+        "so no drive will be read:\n\n" + textwrap.fill(disclaimer.TEXT, 78) + "\n\n"
+        "Run once in a terminal to accept it, or pass --accept-disclaimer (or set "
+        f"{disclaimer.ENVIRONMENT_VARIABLE}=1) for scripted use. Either way, "
+        "acceptance is recorded in the audit log.",
+        file=sys.stderr,
+    )
+    return False
 
 
 # -- commands ----------------------------------------------------------------
@@ -702,6 +764,39 @@ def cmd_drives_assign(args) -> int:
         return 0
 
 
+def cmd_audit_list(args) -> int:
+    from drivefusion.core.store import audit
+
+    with Catalog(args.catalog) as catalog:
+        rows = audit.entries(catalog.conn, limit=args.limit)
+        if not rows:
+            print("the audit log is empty")
+            return 0
+        for row in rows:
+            print(f"[{row['id']}] {row['at']}  {row['action']:18} {row['actor']}")
+            if row["detail_json"] and row["detail_json"] != "{}":
+                print(f"      {row['detail_json']}")
+        return 0
+
+
+def cmd_audit_verify(args) -> int:
+    from drivefusion.core.store import audit
+
+    with Catalog(args.catalog) as catalog:
+        result = audit.verify(catalog.conn)
+    if result.ok:
+        print(f"audit log intact: {result.entries:,} entries")
+        if result.head:
+            # The chain can't vouch for entries cut off the end; a head hash
+            # noted elsewhere can.
+            print(f"  head: {result.head.hex()}")
+        return 0
+    print(f"audit log BROKEN ({result.entries:,} entries):", file=sys.stderr)
+    for problem in result.problems[:50]:
+        print(f"  {problem}", file=sys.stderr)
+    return 1
+
+
 def cmd_volumes(args) -> int:
     volumes = discovery.list_volumes()
     if not volumes:
@@ -737,6 +832,8 @@ DISPATCH = {
     ("drives", "list"): cmd_drives_list,
     ("drives", "confirm"): cmd_drives_confirm,
     ("drives", "assign"): cmd_drives_assign,
+    ("audit", "list"): cmd_audit_list,
+    ("audit", "verify"): cmd_audit_verify,
     ("scan", None): cmd_scan,
     ("find", None): cmd_find,
     ("hash", None): cmd_hash,
@@ -749,8 +846,11 @@ DISPATCH = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    from drivefusion.core.store import audit
+
     parser = build_parser()
     args = parser.parse_args(argv)
+    audit.set_front_end("cli")
 
     if not args.command:
         if wants_window(
@@ -771,8 +871,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    action = getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
-    if args.command in ("scope", "drives") and not action:
+    action = (getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
+              or getattr(args, "audit_command", None))
+    if args.command in ("scope", "drives", "audit") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 
@@ -782,6 +883,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        if (args.command, action) in READS_DRIVES and not _disclaimer_gate(args):
+            return 2
         return handler(args)
     except CatalogLocationError as exc:
         print(f"drivefusion: {exc}", file=sys.stderr)

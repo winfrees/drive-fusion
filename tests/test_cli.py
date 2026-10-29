@@ -360,3 +360,78 @@ def test_scope_list_shows_when_the_root_was_last_scanned(cli, sample_tree: Path,
     assert cli("scope", "list") == 0
     out = capsys.readouterr().out
     assert "never scanned" not in out and "last scanned:" in out
+
+
+# -- the first-run disclaimer (docs/PLAN.md §1, REVIEW SR-25) ------------------
+
+@pytest.fixture
+def no_scripted_acceptance(monkeypatch):
+    monkeypatch.delenv("DRIVEFUSION_ACCEPT_DISCLAIMER", raising=False)
+
+
+def _roots(catalog: Path) -> list:
+    from drivefusion.core.store.catalog import Catalog
+
+    with Catalog(catalog) as opened:
+        return opened.scope_roots()
+
+
+def test_nothing_is_read_before_the_disclaimer_is_accepted(
+    tmp_path: Path, sample_tree: Path, capsys, no_scripted_acceptance
+) -> None:
+    catalog = tmp_path / "cat" / "catalog.db"
+    for argv in (["scope", "add", str(sample_tree)], ["scan"], ["hash"], ["verify"]):
+        assert main(["--catalog", str(catalog), *argv]) == 2, argv
+        err = " ".join(capsys.readouterr().err.split())     # the text is wrapped
+        assert "not been accepted" in err and "regulated data" in err
+    assert _roots(catalog) == [], "a refused scope add recorded something"
+    # Reading the catalog itself is not gated.
+    assert main(["--catalog", str(catalog), "status"]) == 0
+
+
+def test_the_flag_accepts_once_and_is_recorded(
+    tmp_path: Path, sample_tree: Path, capsys, no_scripted_acceptance
+) -> None:
+    import json
+
+    from drivefusion.core import disclaimer
+    from drivefusion.core.store import audit
+    from drivefusion.core.store.catalog import Catalog
+
+    catalog = tmp_path / "cat" / "catalog.db"
+    assert main(["--catalog", str(catalog), "--accept-disclaimer", "scope", "add",
+                 str(sample_tree)]) == 0
+    assert main(["--catalog", str(catalog), "scan"]) == 0, "accepted once is accepted"
+    with Catalog(catalog) as opened:
+        first = list(reversed(audit.entries(opened.conn)))[0]
+        assert first["action"] == "disclaimer.accepted", "accepted before anything was read"
+        detail = json.loads(first["detail_json"])
+        assert detail == {"how": "flag", "text_sha256": disclaimer.text_sha256()}
+
+
+def test_the_prompt_accepts_or_refuses(
+    tmp_path: Path, sample_tree: Path, capsys, monkeypatch, no_scripted_acceptance
+) -> None:
+    catalog = tmp_path / "cat" / "catalog.db"
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "no thanks")
+    assert main(["--catalog", str(catalog), "scope", "add", str(sample_tree)]) == 2
+    assert _roots(catalog) == []
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "accept")
+    assert main(["--catalog", str(catalog), "scope", "add", str(sample_tree)]) == 0
+    assert "regulated data" in " ".join(capsys.readouterr().out.split())
+    assert len(_roots(catalog)) == 1
+
+
+def test_new_wording_must_be_accepted_again(
+    tmp_path: Path, sample_tree: Path, monkeypatch, no_scripted_acceptance
+) -> None:
+    from drivefusion.core import disclaimer
+
+    catalog = tmp_path / "cat" / "catalog.db"
+    assert main(["--catalog", str(catalog), "--accept-disclaimer", "scope", "add",
+                 str(sample_tree)]) == 0
+    monkeypatch.setattr(disclaimer, "TEXT", disclaimer.TEXT + " Revised.")
+    assert main(["--catalog", str(catalog), "scan"]) == 2
