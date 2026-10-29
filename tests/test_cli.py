@@ -435,3 +435,30 @@ def test_new_wording_must_be_accepted_again(
                  str(sample_tree)]) == 0
     monkeypatch.setattr(disclaimer, "TEXT", disclaimer.TEXT + " Revised.")
     assert main(["--catalog", str(catalog), "scan"]) == 2
+
+
+# -- drive metadata (ROADMAP M5.2) ------------------------------------------------
+
+def test_drives_edit_and_show(cli, sample_tree: Path, capsys) -> None:
+    assert cli("--accept-disclaimer", "scope", "add", str(sample_tree)) == 0
+    capsys.readouterr()
+    assert cli("drives", "edit", "1", "--purchase-date", "2021-03-14", "--price", "129.99",
+               "--role", "archive", "--location", "Shelf B") == 0
+    assert "recorded purchase-date, price, role, location" in capsys.readouterr().out
+
+    assert cli("drives", "edit", "1", "--price", "cheap") == 1
+    assert "not a price" in capsys.readouterr().err
+    assert cli("drives", "edit", "1", "--location", "x", "--clear", "location") == 2
+    assert cli("drives", "edit", "1") == 2
+    capsys.readouterr()
+
+    assert cli("drives", "show", "1") == 0
+    out = capsys.readouterr().out
+    assert "purchased:       2021-03-14" in out and "price:           129.99" in out
+    assert "role:            archive" in out
+    assert cli("drives", "show", "99") == 1
+
+
+def test_an_invalid_role_is_refused_by_the_parser(cli, capsys) -> None:
+    with pytest.raises(SystemExit):
+        cli("drives", "edit", "1", "--role", "backup")

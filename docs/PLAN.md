@@ -594,7 +594,7 @@ CREATE TABLE drive (
   capacity_bytes INTEGER,
   nickname TEXT,                 -- "Shelf B, blue Seagate"
   purchase_date TEXT, purchase_price_cents INTEGER, vendor TEXT, warranty_end TEXT,
-  batch_key TEXT,                -- manufacturer+model+purchase month → correlation group
+  batch_key TEXT,                -- an override only; otherwise derived as maker+model+purchase month
   role TEXT,                     -- working|replica|archive|offsite
   location TEXT, disaster_zone TEXT,
   encryption TEXT, retired_at TEXT, notes TEXT
@@ -665,6 +665,8 @@ CREATE TABLE drive_health (
   self_test_status TEXT, smart_json TEXT,
   annual_failure_prob REAL, confidence TEXT   -- measured|estimated|unknown
 );
+-- As built (schema v7, ROADMAP M5.1): plus id, source (e.g. smartctl version) and an
+-- index on (drive_id, observed_at). One row per observation, never overwritten.
 
 -- Plans are documents. No state beyond "exported", no step kind that removes.
 CREATE TABLE plan (id INTEGER PRIMARY KEY, created_at TEXT, name TEXT,
@@ -921,6 +923,9 @@ because no such capability exists behind them.
    duplicate overhead, under-protected bytes, expected loss/yr, scorecard distribution.
 3. **Drives** — inventory; edit purchase date, price, vendor, warranty, location, disaster zone,
    role, nickname; SMART detail with history sparklines; "connected / last seen 12 days ago."
+   **As built (ROADMAP M5.2):** "Edit drive…" opens a form over the same fields
+   `drivefusion drives edit` takes, validated in `core/health/metadata.py` and audited with old
+   and new values; Purchased and Role columns. SMART detail arrives with M5.3.
 4. **Catalog** — tree plus virtualized table; size, copies, holding drives, riskiest holder,
    collection; subtree sizes served instantly from `dir_rollup`.
 5. **Collections** — two panes. A **review queue** of *inferred* collection candidates (§8.4),

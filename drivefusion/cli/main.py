@@ -144,6 +144,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     drives_assign.add_argument("volume_id", type=int)
     drives_assign.add_argument("drive_id", type=int)
+    drives_show = drives_sub.add_parser(
+        "show", help="everything known about a drive: hardware, purchase, location, batch"
+    )
+    drives_show.add_argument("drive_id", type=int)
+    drives_edit = drives_sub.add_parser(
+        "edit", help="record what you know about a drive (purchase date, role, location, …)"
+    )
+    drives_edit.add_argument("drive_id", type=int)
+    from drivefusion.core.health.metadata import FIELDS, ROLES
+
+    for field in FIELDS:
+        extra = {"choices": ROLES} if field.name == "role" else {}
+        drives_edit.add_argument(
+            f"--{field.name}", dest=f"set_{field.column}", metavar="VALUE",
+            help=field.label.lower(), **extra,
+        )
+    drives_edit.add_argument(
+        "--clear", action="append", default=[], metavar="FIELD",
+        choices=[f.name for f in FIELDS], help="remove a value; repeatable",
+    )
 
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
@@ -764,6 +784,70 @@ def cmd_drives_assign(args) -> int:
         return 0
 
 
+def cmd_drives_show(args) -> int:
+    from drivefusion.core.health import metadata
+
+    with Catalog(args.catalog) as catalog:
+        row = catalog.drive(args.drive_id)
+        if row is None:
+            print(f"drivefusion: no drive {args.drive_id}", file=sys.stderr)
+            return 1
+        how = IDENTITY_WORDS.get(row["identity"], row["identity"] or "?")
+        print(f"drive {row['id']}: {row['nickname'] or row['model'] or '—'} ({how})")
+        for label, value in (
+            ("serial", row["serial"]), ("partition table", row["layout_id"]),
+            ("manufacturer", row["manufacturer"]), ("model", row["model"]),
+            ("bus / media", f"{row['bus'] or '?'} / {row['media'] or '?'}"),
+        ):
+            print(f"  {label + ':':17}{value or '—'}")
+        for field in metadata.FIELDS:
+            if field.column == "batch_key":
+                continue
+            value = metadata.format_value(field.column, row[field.column])
+            print(f"  {field.label.lower() + ':':17}{value}")
+        key, source = metadata.batch_key(row)
+        print(f"  {'batch:':17}{key or '—'} ({source})")
+        volumes = catalog.conn.execute(
+            "SELECT id, label, volume_guid FROM volume WHERE drive_id = ? ORDER BY id",
+            (row["id"],),
+        ).fetchall()
+        for volume in volumes:
+            print(f"  volume {volume['id']}: {volume['label'] or volume['volume_guid']}")
+        return 0
+
+
+def cmd_drives_edit(args) -> int:
+    from drivefusion.core.health.metadata import FIELDS, MetadataError
+
+    changes: dict[str, str | None] = {}
+    for field in FIELDS:
+        value = getattr(args, f"set_{field.column}")
+        if value is not None:
+            changes[field.name] = value
+    for name in args.clear:
+        if name in changes:
+            print(f"drivefusion: --{name} is both set and cleared", file=sys.stderr)
+            return 2
+        changes[name] = None
+    if not changes:
+        print("drivefusion: nothing to change; see `drivefusion drives edit --help`",
+              file=sys.stderr)
+        return 2
+    with Catalog(args.catalog) as catalog:
+        try:
+            applied = catalog.update_drive(args.drive_id, changes)
+        except (MetadataError, ValueError) as exc:
+            print(f"drivefusion: {exc}", file=sys.stderr)
+            return 1
+    if not applied:
+        print(f"drive {args.drive_id}: already recorded that way; nothing changed")
+    else:
+        names = {f.column: f.name for f in FIELDS}
+        recorded = ", ".join(names[c] for c in sorted(applied, key=list(names).index))
+        print(f"drive {args.drive_id}: recorded {recorded} (audited)")
+    return 0
+
+
 def cmd_audit_list(args) -> int:
     from drivefusion.core.store import audit
 
@@ -832,6 +916,8 @@ DISPATCH = {
     ("drives", "list"): cmd_drives_list,
     ("drives", "confirm"): cmd_drives_confirm,
     ("drives", "assign"): cmd_drives_assign,
+    ("drives", "show"): cmd_drives_show,
+    ("drives", "edit"): cmd_drives_edit,
     ("audit", "list"): cmd_audit_list,
     ("audit", "verify"): cmd_audit_verify,
     ("scan", None): cmd_scan,

@@ -80,6 +80,7 @@ drivefusion report                 # duplication, durability and fixity findings
 drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
 drivefusion drives list            # which physical drive each volume is on
+drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "Shelf B"
 drivefusion gui                    # the desktop window
 ```
 
