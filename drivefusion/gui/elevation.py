@@ -11,20 +11,29 @@ of its work needs:
 * **Elevation is optional, and the tool states what is lost without it.**
   Declining costs a faster rescan on NTFS, nothing else. A dialog implying the
   program is broken without administrator rights would be false.
-* **Only the helper is ever launched, by absolute path, resolved from our own
-  executable's directory.** Never a shell, never a name looked up on PATH, never
-  a path from the catalog or a config file. A ``runas`` launch of an
-  attacker-supplied path would hand them Administrator, so the path is derived
-  and then verified rather than accepted.
-* **Arguments are passed as arguments.** ``ShellExecuteW`` takes the file and its
-  parameters as separate strings, so there is no command line for a quoting
-  mistake to escape from.
+* **Only the genuine helper is ever launched, by absolute path, resolved from
+  our own executable's directory.** Never a shell, never a name looked up on
+  PATH, never a path from the catalog or a config file. A ``runas`` launch of
+  an attacker-supplied file would hand them Administrator, so the file is
+  *proven* before the prompt (docs/REVIEW.md F-07): the build pins the
+  helper's SHA-256 inside the main executable, and the helper is hashed through
+  a handle that denies writing and deleting to everyone else, kept open until
+  Windows has started it, so it can't be swapped between check and launch. A
+  build without a pin refuses to elevate a helper in a folder the user can
+  write to.
+* **Arguments are quoted for the command line.** ``ShellExecuteW`` takes the
+  parameters as one string, which the helper splits again, so they are built
+  with ``subprocess.list2cmdline``: an argument with a space or a quote stays
+  one argument.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
+import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -127,6 +136,90 @@ class ElevationError(RuntimeError):
     """Raised when a prompt could not be shown, or was declined."""
 
 
+def pinned_helper_sha256() -> str | None:
+    """The helper's SHA-256 as the build recorded it, or None for an unpinned
+    build (a source checkout). The pin is a module packed inside the main
+    executable by ``packaging/drivefusion.spec``, not a file beside the helper,
+    so replacing the helper can't replace the pin with it."""
+    try:
+        from drivefusion_helper_pin import HELPER_SHA256  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return HELPER_SHA256.lower()
+
+
+def _user_can_write(directory: Path) -> bool:
+    """Whether this (unelevated) process can write to ``directory``: if it can,
+    so can anything else running as this user."""
+    return os.access(directory, os.W_OK)
+
+
+@contextmanager
+def _locked(path: Path):
+    """Open ``path`` for reading, denying everyone else write and delete access
+    for as long as the handle is held.
+
+    Windows only grants a later open that the share mode allows, so while this
+    is held the file can't be changed, replaced or renamed over. Elsewhere it is
+    a plain read (the launcher exists only on Windows; tests run its checks).
+    """
+    if not WINDOWS:
+        with open(path, "rb") as handle:
+            yield handle
+        return
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    GENERIC_READ = 0x80000000
+    FILE_SHARE_READ = 0x00000001        # read only: no FILE_SHARE_WRITE or _DELETE
+    OPEN_EXISTING = 3
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel32.CreateFileW(str(path), GENERIC_READ, FILE_SHARE_READ, None,
+                                  OPEN_EXISTING, 0, None)
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        raise ElevationError(
+            f"cannot open {path} exclusively (WinError {ctypes.get_last_error()}); "
+            "something else has it open for writing"
+        )
+    fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    with open(fd, "rb", closefd=True) as reader:
+        yield reader
+
+
+def check_helper(path: Path, digest: str, *, pinned: str | None, writable: bool) -> None:
+    """Raise :class:`ElevationError` unless ``path`` may be run as Administrator.
+
+    ``digest`` is the SHA-256 of the file as read through the locked handle.
+    """
+    if pinned is not None:
+        if digest.lower() != pinned:
+            raise ElevationError(
+                f"refusing to elevate {path}: it is not the helper this build "
+                "shipped (its SHA-256 differs). Reinstall Drive Fusion."
+            )
+        return
+    if writable:
+        raise ElevationError(
+            f"refusing to elevate {path}: this build records no fingerprint of "
+            "its helper, and the folder it is in can be written to without "
+            "administrator rights, so the file can't be trusted. Install Drive "
+            "Fusion in a protected folder such as Program Files, or use a "
+            "release build."
+        )
+
+
+def helper_parameters(arguments: list[str] | None) -> str | None:
+    """One command-line string the helper will split back into ``arguments``."""
+    return subprocess.list2cmdline(arguments) if arguments else None
+
+
 def request(state: ElevationState, arguments: list[str] | None = None) -> int:
     """Launch the helper elevated, showing Windows' own consent prompt.
 
@@ -144,19 +237,28 @@ def request(state: ElevationState, arguments: list[str] | None = None) -> int:
     if not path.is_file():
         raise ElevationError(f"helper not found at {path}")
 
-    import ctypes
+    parameters = helper_parameters(arguments)
+    with _locked(path) as handle:
+        # Hashed through the locked handle, and launched while it is still
+        # held: the bytes checked are the bytes Windows starts.
+        digest = hashlib.sha256()
+        while chunk := handle.read(1 << 20):
+            digest.update(chunk)
+        check_helper(path, digest.hexdigest(), pinned=pinned_helper_sha256(),
+                     writable=_user_can_write(path.parent))
 
-    parameters = " ".join(arguments or [])
-    result = int(
-        ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",            # the verb that raises the consent prompt
-            str(path),
-            parameters or None,
-            str(path.parent),
-            0,                  # SW_HIDE: the helper has no window of its own
+        import ctypes
+
+        result = int(
+            ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",            # the verb that raises the consent prompt
+                str(path),
+                parameters,
+                str(path.parent),
+                0,                  # SW_HIDE: the helper has no window of its own
+            )
         )
-    )
     # ShellExecuteW returns <= 32 for failure; 5 is ERROR_ACCESS_DENIED, which is
     # what a declined prompt looks like.
     if result == 5:

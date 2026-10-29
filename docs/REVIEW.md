@@ -82,7 +82,7 @@ findings.*
 | [F-04](#f-04) | **High** | File facts | Files of unique size, which by definition have exactly one copy, are missing from the under-protected report | R4 | **Fixed** |
 | [F-05](#f-05) | Medium | File facts | Volumes whose drive serial can't be read each count as a separate drive, which can overstate copies | R6 | **Fixed** |
 | [F-06](#f-06) | Medium | File facts | `verify` reports an ordinary edit as a fixity mismatch, because it never compares size or mtime | R5 | **Fixed** |
-| [F-07](#f-07) | Medium | Security | The elevation launcher checks only the helper's filename and existence: no signature or hash check, and parameters are joined unquoted | code | Open |
+| [F-07](#f-07) | Medium | Security | The elevation launcher checks only the helper's filename and existence: no signature or hash check, and parameters are joined unquoted | code | **Fixed** |
 | [F-08](#f-08) | Medium | Safety | `ro_lint` misses `subprocess`, `os.write`, `io.open`, numeric `os.open` flags, Win32 mutators via ctypes, `sqlite3.connect`, and `getattr` indirection | R8 | **Fixed** |
 | [F-09](#f-09) | Medium | Accuracy | Docs describe unwired or unimplemented features as done (corrected by this change) | code | Docs corrected |
 | [F-10](#f-10) | Medium | Catalog integrity | The pre-migration backup is a file copy taken while the database is in WAL mode, so it can miss committed data | R10 | **Fixed** |
@@ -146,7 +146,7 @@ implemented as a library with no user-facing entry point.
 | SR-12 | UN-3, UN-9 | The under-protected report includes every item with fewer copies than the target. | `under_protected` adds every live, non-empty file whose size no other live file shares, as one copy on one drive (`single_copy_files`), without hashing it. `redundancy_summary` counts them in its totals and reports them as `single_copy_files`; `unhashed_files` now counts only files whose size is shared. | `test_analysis.py`, `test_cli.py`; R4 | **Met** ([F-04](#f-04)) |
 | SR-13 | UN-4 | Fixity separates corruption (bytes changed, metadata unchanged) from modification. | `verify_pass` compares mtime first: changed → `modified`, not hashed, not an incident; unchanged → re-hash and compare. | `test_identity.py`; V&V R-FIX-04 | **Met** ([F-06](#f-06)) |
 | SR-14 | UN-6 | The main application runs as invoker and never silently elevates. | `drivefusion.manifest`: `requestedExecutionLevel="asInvoker"` for all three executables. | CI build smoke test | **Met** |
-| SR-15 | UN-6 | Before anything is elevated, the binary is proven to be the genuine helper and its arguments can't be reinterpreted. | `elevation.request` checks the filename equals `dfscan-helper.exe` and the file exists; parameters `" ".join(...)` (`elevation.py:130–170`). | `test_gui_shell.py` (rejects a wrong filename) | **Partial**: no signature or hash check, no quoting ([F-07](#f-07)). Latent: no caller |
+| SR-15 | UN-6 | Before anything is elevated, the binary is proven to be the genuine helper and its arguments can't be reinterpreted. | The build pins the helper's SHA-256 in a module packed inside the main executables; `elevation.request` hashes the helper through a handle that denies write and delete sharing, held until `ShellExecuteW` returns, and refuses a mismatch; an unpinned build refuses a helper in a user-writable folder; parameters via `subprocess.list2cmdline`. CI checks the pin against the shipped helper. | `test_elevation.py` (incl. a Windows-only lock test); CI build step | **Met** ([F-07](#f-07)). Authenticode waits for a signing certificate |
 | SR-16 | UN-6 | Elevation is offered per scan, and consent is recorded. | `elevation.request` exists; **no GUI or CLI code calls it**; `scan.elevated` is always written as 0. | n/a | **Unwired** ([F-09](#f-09)) |
 | SR-17 | UN-2 | An NTFS rescan reads only what changed (USN delta). | `core/enum/delta.apply_delta`, journal validity logic, helper protocol, all unit-tested; **not called by `cmd_scan` or the GUI**; `decide()` returns `walk` whenever not elevated. | `test_enum_delta.py`, `test_enum_journal.py`, `test_enum_helper.py` | **Unwired** |
 | SR-18 | UN-7 | A schema migration first takes a consistent backup of the catalog. | `schema.backup_catalog` snapshots through `Connection.backup()` on the open connection, to a temporary name renamed when complete. | `test_store.py` (`test_backup_includes_transactions_still_in_the_wal`); R10 | **Met** ([F-10](#f-10)) |
@@ -164,8 +164,8 @@ implemented as a library with no user-facing entry point.
 ```mermaid
 pie showData
     title Requirement status (28 requirements)
-    "Met" : 22
-    "Partial" : 3
+    "Met" : 23
+    "Partial" : 2
     "Not met" : 0
     "Unwired" : 2
     "Planned" : 1
@@ -460,6 +460,17 @@ user no signal.
 2. Build the parameter string with `subprocess.list2cmdline`.
 3. Carry output over a named pipe whose ACL admits only the launching user's SID.
 4. Sign all three executables.
+
+**Status: fixed (2026-10-29, ROADMAP B1).** Fixes 1 and 2 are done; 3 (the pipe) is ROADMAP
+B2 and 4 (signing) needs a certificate. `packaging/drivefusion.spec` builds the helper first,
+hashes it, and packs the SHA-256 into a module inside the main executables' archive, so
+swapping the helper can't swap the pin. `elevation.request` opens the helper with
+`FILE_SHARE_READ` only, hashes it through that handle, compares with the pin, and launches
+while still holding the handle, so the file can't be changed or renamed over between the
+check and `ShellExecuteW`. A build with no pin (a source checkout) refuses to elevate a
+helper in a folder the user can write to. Parameters go through `subprocess.list2cmdline`.
+The module docstring's "no command line" claim is corrected. A CI step fails the build
+if the pin doesn't match the shipped `dfscan-helper.exe`. Tests: `test_elevation.py`.
 
 <a id="f-08"></a>
 ### F-08 · Medium · `ro_lint` blind spots
