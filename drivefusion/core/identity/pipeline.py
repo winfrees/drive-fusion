@@ -92,6 +92,12 @@ def hash_pass(
     _quick_pass(catalog, candidates, counters, progress, cancel)
     _full_pass(catalog, counters, progress, root_ids, cancel)
     catalog.analyze()
+    catalog.record("hash.pass", {
+        "candidates": counters.candidates, "quick_hashed": counters.quick_hashed,
+        "full_hashed": counters.full_hashed, "unreadable": counters.unreadable,
+        "dehydrated": counters.dehydrated,
+        "root_ids": sorted(root_ids) if root_ids is not None else None,
+    })
     return counters
 
 
@@ -314,6 +320,11 @@ def verify_pass(
         )
         incidents.append({"path": path, "result": "mismatch", "detail": ""})
 
+    catalog.record("verify.pass", {
+        "checked": checked, "mismatched": mismatched, "unreadable": unreadable,
+        "modified": len(modified),
+        "root_ids": sorted(root_ids) if root_ids is not None else None,
+    })
     return {
         "checked": checked,
         "mismatched": mismatched,

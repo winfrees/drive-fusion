@@ -717,4 +717,17 @@ def test_a_v4_catalog_gains_drive_identity(tmp_path: Path) -> None:
     with Catalog(path) as upgraded:
         row = upgraded.conn.execute("SELECT serial, identity, layout_id FROM drive").fetchone()
         assert (row["serial"], row["identity"], row["layout_id"]) == ("OLD-1", "serial", None)
-        assert schema.current_version(upgraded.conn) == 5
+        assert schema.current_version(upgraded.conn) == schema.SCHEMA_VERSION
+
+
+def test_a_v5_catalog_gains_the_append_only_triggers(tmp_path: Path) -> None:
+    path = tmp_path / "v5.db"
+    with Catalog(path) as catalog:
+        catalog.conn.execute("DROP TRIGGER audit_no_update")
+        catalog.conn.execute("DROP TRIGGER audit_no_delete")
+        catalog.conn.execute("DELETE FROM schema_version")
+        catalog.conn.execute("INSERT INTO schema_version VALUES (5, '2026-01-01T00:00:00+00:00')")
+    with Catalog(path) as upgraded:
+        triggers = {r[0] for r in upgraded.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+        assert {"audit_no_update", "audit_no_delete"} <= triggers

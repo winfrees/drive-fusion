@@ -16,6 +16,23 @@ from tests.fixtures import vhdx as vhdx_fixture  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _disclaimer_accepted_for_tests(monkeypatch) -> None:
+    """Scripted acceptance (docs/PLAN.md §1), as a CI job would give it. The
+    gate's own tests remove it."""
+    monkeypatch.setenv("DRIVEFUSION_ACCEPT_DISCLAIMER", "1")
+
+
+@pytest.fixture(autouse=True)
+def _audit_actor_is_reset():
+    """The CLI and GUI name themselves process-wide; each test starts clean."""
+    from drivefusion.core.store import audit
+
+    audit.set_front_end("library")
+    yield
+    audit.set_front_end("library")
+
+
+@pytest.fixture(autouse=True)
 def _temp_drive_counts_as_the_system_drive(monkeypatch) -> None:
     """Tests keep the catalog and the scanned folders under one temp directory.
 

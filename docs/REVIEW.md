@@ -156,19 +156,19 @@ implemented as a library with no user-facing entry point.
 | SR-22 | UN-9 | Scan coverage (unreadable, excluded, dehydrated, links) is reported. | `ScanCounters.coverage_line()`, with unlistable folders counted apart from files. | `test_scanner.py` | **Met** ([F-15](#f-15)) |
 | SR-23 | UN-10 | Cancel takes effect within one directory. | `scan_root(cancel=)` per directory; `hash_pass` / `verify_pass(cancel=)` per file; the GUI passes `Cancellation.raised`. | `test_scanner.py`, `test_identity.py`, `test_gui_shell.py` (a real scan body); R7 | **Met** ([F-13](#f-13)) |
 | SR-24 | UN-1 | The UI offers no destructive control. | Widget-tree test bans destructive verbs on every control. | `test_no_control_offers_a_destructive_action` | **Met** |
-| SR-25 | UN-11 | First-run disclaimer, acknowledged and recorded. | Not implemented. | n/a | **Planned** |
-| SR-26 | UN-7, UN-11 | Append-only, hash-chained audit log. | `audit` table created; nothing writes to it. | n/a | **Planned** |
+| SR-25 | UN-11 | First-run disclaimer, acknowledged and recorded. | `core/disclaimer.py`; CLI gate on every command that reads a drive (prompt, `--accept-disclaimer`, env); GUI dialog before the window and on each reading action; acceptance audited with the text's SHA-256. | `test_cli.py`, `test_gui_shell.py` | **Met** |
+| SR-26 | UN-7, UN-11 | Append-only, hash-chained audit log. | `core/store/audit.py`: SHA-256 chain over every entry; schema-v6 triggers refuse UPDATE/DELETE; appends under `BEGIN IMMEDIATE`; `drivefusion audit verify`. Truncation of the newest entries is not detectable by the chain alone; the head hash is printed for that. | `test_audit.py` (tamper, deletion, recomputed hash, concurrent writers) | **Met** |
 | SR-27 | UN-1 | Exports go only to a new, timestamped folder inside a chosen root. | `core/export/` is a docstring. | n/a | **Planned** (M8) |
 | SR-28 | UN-6 | The elevated helper has a minimal, read-only surface. | `helper/__main__.py`: argparse, `query`/`enum`/`delta` modes, `GENERIC_READ` volume handle, frames to stdout. | `test_enum_helper.py` (stand-in child) | **Met** for the code; no real-volume test |
 
 ```mermaid
 pie showData
     title Requirement status (28 requirements)
-    "Met" : 20
+    "Met" : 22
     "Partial" : 3
     "Not met" : 0
     "Unwired" : 2
-    "Planned" : 3
+    "Planned" : 1
 ```
 
 *Figure 2 — Status across the 28 requirements. SR-03 and SR-07 count as Met, with the notes

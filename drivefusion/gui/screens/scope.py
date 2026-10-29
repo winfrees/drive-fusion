@@ -37,6 +37,7 @@ from drivefusion.core.scope import (
     bind_roots,
     validate_new_root,
 )
+from drivefusion.gui import consent
 from drivefusion.gui.format import describe_age, human_bytes
 from drivefusion.gui.workers import Progress
 
@@ -150,6 +151,8 @@ class ScopeScreen(QWidget):
     def add_path(self, path: str) -> bool:
         """Register a root. Separated from the file dialog so it can be tested."""
         catalog = self.session.catalog()
+        if not consent.ensure(self, catalog):
+            return False
         try:
             root_path = validate_new_root(path, [r.path for r in catalog.scope_roots()])
             catalog.check_root_location(root_path)
@@ -167,6 +170,8 @@ class ScopeScreen(QWidget):
         return True
 
     def preview_selected(self) -> None:
+        if not consent.ensure(self, self.session.catalog()):
+            return
         root_id = self.selected_root_id()
         if root_id is None:
             QMessageBox.information(self, "Select a root", "Choose a root to preview.")
@@ -208,6 +213,8 @@ class ScopeScreen(QWidget):
         F-01, F-02).
         """
         catalog = self.session.catalog()
+        if not consent.ensure(self, catalog):
+            return None
         roots = catalog.scope_roots(enabled_only=True)
         if root_id is not None:
             roots = [r for r in roots if r.id == root_id]

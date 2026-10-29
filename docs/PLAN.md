@@ -70,8 +70,14 @@ of these numbers and would be over-built without them.
 
 First run requires explicit acknowledgement, recorded in the audit log with a timestamp.
 
-> **As built (M4):** not yet implemented. There is no first-run screen, and the `audit` table
-> exists but is never written.
+> **As built (ROADMAP A4):** the text lives in `core/disclaimer.py`. Before the CLI first reads a
+> drive (`scope add`, `scope preview`, `scan`, `hash`, `verify`) it shows the text and asks
+> for `accept`; without a terminal it refuses and says how to accept. The GUI shows it before
+> the window opens, and declining quits; every GUI action that reads a drive checks again.
+> Scripts accept with `--accept-disclaimer` or `DRIVEFUSION_ACCEPT_DISCLAIMER=1`. Each
+> acceptance is an audit-log entry carrying the SHA-256 of the exact text and how it was
+> given, so a reworded disclaimer must be accepted again. Reading the catalog (reports,
+> `find`, `status`) is not gated.
 
 ---
 
@@ -674,6 +680,15 @@ CREATE TABLE plan_step (
 CREATE TABLE audit (id INTEGER PRIMARY KEY, at TEXT, actor TEXT, action TEXT,
                     detail_json TEXT, prev_hash BLOB, entry_hash BLOB);
 ```
+
+> **As built (ROADMAP A4):** `core/store/audit.py`. `entry_hash = SHA-256(prev_hash, id, at,
+> actor, action, detail_json)`; triggers (schema v6) refuse UPDATE and DELETE; appends take the
+> write lock first, so concurrent connections keep one chain. Recorded: scope add and remove,
+> every scan's outcome, hash and verify passes, drive confirmations, schema upgrades, and the
+> disclaimer. The actor is the OS user and the front end. `drivefusion audit verify` reports
+> any changed, missing or reordered entry, and prints the head hash: the chain cannot vouch
+> for entries cut off the end, so that hash is worth noting elsewhere.
+
 
 ### 7.4 Search at this scale
 

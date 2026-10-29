@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from drivefusion.core.analysis import redundancy_summary
+from drivefusion.gui import consent
 from drivefusion.gui.format import human_bytes, percent
 from drivefusion.gui.workers import Progress
 
@@ -184,6 +185,8 @@ class DashboardScreen(QWidget):
         )
 
     def request_hash(self) -> None:
+        if not consent.ensure(self, self.session.catalog()):
+            return
         from drivefusion.core.errors import RootRefusedError
         from drivefusion.core.identity import hash_pass
         from drivefusion.core.scope import bind_roots

@@ -16,7 +16,7 @@ from typing import Iterable, Iterator, Sequence
 
 from drivefusion import __version__
 from drivefusion.core.errors import CatalogLocationError
-from drivefusion.core.store import schema
+from drivefusion.core.store import audit, schema
 from drivefusion.core.store.schema import utcnow
 
 #: Rows per executemany batch. Large enough to amortise statement overhead,
@@ -101,11 +101,20 @@ class Catalog:
         self._refuse_location(self._roots_on_disk())
         self.conn = schema.connect(self.path)
         try:
-            schema.migrate(self.conn, self.path)
+            before = schema.current_version(self.conn)
+            after = schema.migrate(self.conn, self.path)
             self._refuse_location(self._enabled_root_locations())
+            if before and before != after:
+                self.record("catalog.upgraded", {"from": before, "to": after})
         except BaseException:
             self.conn.close()
             raise
+
+    # -- audit ---------------------------------------------------------------
+
+    def record(self, action: str, detail: dict | None = None) -> int:
+        """Append to the hash-chained audit log (``core/store/audit.py``)."""
+        return audit.append(self.conn, action, detail)
 
     def _roots_on_disk(self) -> list[tuple[str, str | None]]:
         """Enabled roots of an existing catalog as ``(path, volume_guid)``,
@@ -310,17 +319,21 @@ class Catalog:
         self.conn.execute(
             "UPDATE volume SET drive_id = ? WHERE id = ?", (drive_id, volume_id)
         )
+        self.record("drive.confirm", {"volume_id": volume_id, "drive_id": drive_id,
+                                      "volume_guid": volume["volume_guid"]})
         return drive_id
 
     def assign_volume_drive(self, volume_id: int, drive_id: int) -> None:
         """The user's word that this volume is on ``drive_id``, for instance a
         second partition of a disk that is already catalogued."""
-        self._unverified_volume(volume_id)
+        volume = self._unverified_volume(volume_id)
         if self.conn.execute("SELECT 1 FROM drive WHERE id = ?", (drive_id,)).fetchone() is None:
             raise ValueError(f"no drive {drive_id} in the catalog")
         self.conn.execute(
             "UPDATE volume SET drive_id = ? WHERE id = ?", (drive_id, volume_id)
         )
+        self.record("drive.assign", {"volume_id": volume_id, "drive_id": drive_id,
+                                     "volume_guid": volume["volume_guid"]})
 
     def _unverified_volume(self, volume_id: int) -> sqlite3.Row:
         volume = self.conn.execute(
@@ -432,14 +445,19 @@ class Catalog:
                 "excludes = ? WHERE id = ?",
                 (json.dumps(list(excludes)), row["id"]),
             )
-            return int(row["id"])
-
-        cursor = self.conn.execute(
-            "INSERT INTO scope_root (volume_id, path, excludes, added_at) "
-            "VALUES (?, ?, ?, ?)",
-            (volume_id, path, json.dumps(list(excludes)), utcnow()),
-        )
-        return int(cursor.lastrowid)
+            root_id = int(row["id"])
+        else:
+            cursor = self.conn.execute(
+                "INSERT INTO scope_root (volume_id, path, excludes, added_at) "
+                "VALUES (?, ?, ?, ?)",
+                (volume_id, path, json.dumps(list(excludes)), utcnow()),
+            )
+            root_id = int(cursor.lastrowid)
+        self.record("scope.add", {
+            "root_id": root_id, "path": path, "excludes": list(excludes),
+            "volume_guid": recorded["volume_guid"] if recorded else None,
+        })
+        return root_id
 
     def remove_scope_root(self, root_id: int) -> bool:
         """Stop scanning a root without discarding what it already catalogued.
@@ -454,6 +472,8 @@ class Catalog:
             "WHERE id = ? AND removed_at IS NULL",
             (utcnow(), root_id),
         )
+        if cursor.rowcount > 0:
+            self.record("scope.remove", {"root_id": root_id})
         return cursor.rowcount > 0
 
     def scope_roots(
@@ -513,6 +533,18 @@ class Catalog:
                 stats.excluded, error, stats.scan_id,
             ),
         )
+        row = self.conn.execute(
+            "SELECT volume_id, scope_root_id, method FROM scan WHERE id = ?",
+            (stats.scan_id,),
+        ).fetchone()
+        self.record("scan.finished", {
+            "scan_id": stats.scan_id, "status": status,
+            "root_id": row["scope_root_id"] if row else None,
+            "volume_id": row["volume_id"] if row else None,
+            "method": row["method"] if row else None,
+            "files": stats.files_seen, "dirs": stats.dirs_seen,
+            "unreadable": stats.unreadable, "error": error,
+        })
 
     def scans(self, limit: int = 20) -> list[sqlite3.Row]:
         return list(
