@@ -406,11 +406,14 @@ the exFAT half of the fleet:
   is no second decoder to keep in step.
 - **How the helper gets its rights.** `helper/client.run_helper` spawns it directly, so it
   inherits the parent's token: it works when Drive Fusion already runs elevated and reports a
-  clear reason when it doesn't. **As built at M4:** `gui/elevation.py` decides what to offer
-  and has a `ShellExecuteW("runas")` launcher, but no screen calls it, and there's no named
-  pipe to carry output back. Before it is wired up, the launcher must verify the helper's
-  signature or a pinned hash, quote its parameters, and use an ACL-restricted pipe
-  (REVIEW F-07).
+  clear reason when it doesn't. **As built:** `gui/elevation.py` decides what to offer and
+  has a `ShellExecuteW("runas")` launcher, still not called by any screen. Since ROADMAP B1
+  (REVIEW F-07, fixed) it proves the helper first: the build pins the helper's SHA-256 inside
+  the main executables, and the launcher hashes the helper through a handle that denies
+  writes and deletes, held until Windows has started it, and refuses any difference; an
+  unpinned build won't elevate a helper in a user-writable folder; parameters are quoted with
+  `subprocess.list2cmdline`. Still to do before it is wired up: an ACL-restricted pipe to carry
+  output back (ROADMAP B2), and Authenticode once there is a certificate.
 - The helper is covered by the same AST lint as the main application. The no-touch test
   doesn't exercise it, because it needs a real NTFS volume handle; its protocol is tested
   against a stand-in child process.
@@ -976,8 +979,8 @@ Two further rules M4 settled in code:
   `~/.drivefusion/catalog.db`, overridable with `--catalog` or `DRIVEFUSION_CATALOG`; there is
   no portable mode yet. A portable mode is bound by the same rule: a thumb drive carrying the
   catalog can't also be scanned. It must refuse a catalog on a catalogued volume (REVIEW
-  F-03), and must not put `dfscan-helper.exe` in a user-writable directory without verifying
-  it before elevation (REVIEW F-07).
+  F-03). A helper in a portable folder is user-writable, so it is elevated only when it
+  matches the build's pinned hash (REVIEW F-07, fixed).
 - Migrations run on launch; the catalog is **copied, never replaced**, before any schema change.
   **As built:** the copy is taken with SQLite's online backup API on the open connection, so
   it includes transactions still in the WAL. It is written under a temporary name and renamed

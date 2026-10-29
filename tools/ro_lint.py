@@ -66,6 +66,9 @@ RAW_HANDLE_MODULES = (
     "drivefusion/core/fsio.py",
     "drivefusion/core/discovery/windows.py",
     "drivefusion/core/enum/winio.py",
+    # Opens dfscan-helper.exe read-only and share-read-only, so it can't be
+    # swapped between being hashed and being elevated (REVIEW F-07).
+    "drivefusion/gui/elevation.py",
 )
 
 #: Win32 access rights that would make a handle capable of writing. Their mere
