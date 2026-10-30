@@ -1,0 +1,16 @@
+{
+  "kind": "afr-rates",
+  "source": "provisional",
+  "version": "1",
+  "basis": "provisional",
+  "title": "Provisional class-level base rates",
+  "url": null,
+  "retrieved": null,
+  "note": "Placeholders until a pinned fleet snapshot is imported with tools/import_backblaze.py (ROADMAP D6). One rate per media class, of the order published fleet statistics report for drives in their middle years; no per-model figures. Every rate taken from this file is labelled 'estimated' at best.",
+  "classes": {
+    "hdd": 0.015,
+    "ssd": 0.01,
+    "unknown": 0.015
+  },
+  "models": []
+}

@@ -598,6 +598,16 @@ def _with_a_drive(window) -> int:
     return drive
 
 
+def test_each_drive_shows_its_estimated_failure_rate(window) -> None:
+    from drivefusion.gui.screens.drives import COLUMNS
+
+    _with_a_drive(window)
+    item = window.drives.tree.topLevelItem(0)
+    column = COLUMNS.index("Failure rate")
+    assert item.text(column) == "1.5%/yr (unknown)"     # no media, model or purchase date
+    assert "no SMART reading" in item.toolTip(column)
+
+
 def test_the_edit_button_needs_a_drive(window) -> None:
     window.drives.tree.setCurrentItem(window.drives.tree.topLevelItem(0))
     assert not window.drives.edit_button.isEnabled(), "an unverified volume has no drive"

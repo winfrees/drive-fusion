@@ -81,6 +81,7 @@ drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
 drivefusion drives list            # which physical drive each volume is on
 drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "Shelf B"
+drivefusion drives show 1            # what is known, and its estimated failure rate a year
 drivefusion gui                    # the desktop window
 ```
 

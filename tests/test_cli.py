@@ -456,6 +456,8 @@ def test_drives_edit_and_show(cli, sample_tree: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert "purchased:       2021-03-14" in out and "price:           129.99" in out
     assert "role:            archive" in out
+    assert "failure rate:" in out and "a year (estimated; base" in out
+    assert "no SMART reading" in out
     assert cli("drives", "show", "99") == 1
 
 

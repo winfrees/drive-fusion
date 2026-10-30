@@ -824,6 +824,14 @@ def cmd_drives_show(args) -> int:
             print(f"  {field.label.lower() + ':':17}{value}")
         key, source = metadata.batch_key(row)
         print(f"  {'batch:':17}{key or '—'} ({source})")
+        from drivefusion.core.health import afr, smart
+
+        risk = afr.drive_risk(row, health=smart.latest(catalog, row["id"]))
+        print(f"  {'failure rate:':17}{risk.afr:.1%} a year ({risk.confidence}; "
+              f"base {risk.base:.1%} from the {risk.base_from})")
+        print(f"  {'':17}× " + " × ".join(f"{k} {v:g}" for k, v in risk.factors.items()))
+        for note in risk.assumptions:
+            print(f"  {'':17}{note}")
         volumes = catalog.conn.execute(
             "SELECT id, label, volume_guid FROM volume WHERE drive_id = ? ORDER BY id",
             (row["id"],),

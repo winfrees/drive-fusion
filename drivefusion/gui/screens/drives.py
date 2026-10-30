@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from drivefusion.core.analysis import drive_inventory
-from drivefusion.core.health import smart
+from drivefusion.core.health import afr, smart
 from drivefusion.gui.format import describe_age, human_bytes, percent
 
 COLUMNS = (
@@ -58,6 +58,7 @@ COLUMNS = (
     "Purchased",
     "Role",
     "Health",
+    "Failure rate",
 )
 
 #: How each drive identity is shown.
@@ -184,8 +185,18 @@ class DrivesScreen(QWidget):
                     row["role"] or "—",
                     smart.verdict(smart.latest(self.session.catalog(), row["drive_id"]))
                     if row["drive_id"] is not None else "—",
+                    "",
                 ]
             )
+            if row["drive_id"] is not None:
+                risk = afr.drive_risk(
+                    row, health=smart.latest(self.session.catalog(), row["drive_id"]))
+                column = COLUMNS.index("Failure rate")
+                item.setText(column, f"{risk.afr:.1%}/yr ({risk.confidence})")
+                item.setToolTip(column, "\n".join(
+                    [f"Base {risk.base:.1%} from the {risk.base_from}",
+                     "× " + " × ".join(f"{k} {v:g}" for k, v in risk.factors.items()),
+                     *risk.assumptions]))
             item.setData(0, Qt.UserRole,
                          (row["volume_id"], row["drive_id"] is None, row["drive_id"]))
             if row["drive_id"] is None:

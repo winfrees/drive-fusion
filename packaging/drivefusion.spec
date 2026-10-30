@@ -75,6 +75,9 @@ VENDOR = os.path.join(ROOT, "packaging", "vendor")
 SMARTCTL = os.path.join(VENDOR, "smartctl.exe")
 SMARTCTL_SHA256 = None
 bundled_binaries, bundled_datas = [], []
+# Versioned AFR tables and factors (ROADMAP M5.4), read with importlib.resources.
+bundled_datas.append((os.path.join(ROOT, "drivefusion", "standards", "afr", "*.json"),
+                      os.path.join("drivefusion", "standards", "afr")))
 if os.path.isfile(SMARTCTL):
     with open(SMARTCTL, "rb") as vendored:
         SMARTCTL_SHA256 = hashlib.sha256(vendored.read()).hexdigest()
@@ -104,6 +107,7 @@ analysis = Analysis(
     hiddenimports=[
         "drivefusion_helper_pin",
         "drivefusion.cli.main",
+        "drivefusion.standards.afr",       # found by name, through importlib.resources
         # Reached only through `drivefusion gui`, so PyInstaller cannot see them.
         "drivefusion.gui.app",
         "drivefusion.gui.main_window",
