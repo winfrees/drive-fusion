@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -293,6 +293,75 @@ CREATE TABLE IF NOT EXISTS afr_table (
     table_json  TEXT NOT NULL
 );
 
+-- Curation (PLAN §7.3, §8.4, ROADMAP M6). A collection exists only once a
+-- person confirms it; until then a subtree is at most a candidate in the queue.
+CREATE TABLE IF NOT EXISTS collection (
+    id              INTEGER PRIMARY KEY,
+    local_pid       TEXT UNIQUE NOT NULL,   -- stable local identifier (FAIR F1)
+    title           TEXT NOT NULL,
+    description     TEXT,
+    creators_json   TEXT,
+    contact         TEXT,
+    license         TEXT,                   -- FAIR R1.1; NULL is a reportable gap
+    external_pid    TEXT,                   -- DOI or accession, once deposited
+    data_type       TEXT,
+    project         TEXT,
+    ndsa_target     INTEGER,                -- 1..4
+    min_copies      INTEGER,
+    require_diversity INTEGER,
+    require_offsite INTEGER,
+    retention_note  TEXT,
+    created_at      TEXT NOT NULL
+);
+
+-- Membership by rule, not by list, so files that later appear inside a
+-- confirmed subtree join it. kind 'subtree': every file under dir_id.
+CREATE TABLE IF NOT EXISTS collection_rule (
+    id              INTEGER PRIMARY KEY,
+    collection_id   INTEGER NOT NULL REFERENCES collection(id),
+    kind            TEXT NOT NULL,
+    dir_id          INTEGER REFERENCES dir(id),
+    pattern         TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_collection_rule_dir ON collection_rule(dir_id);
+
+CREATE TABLE IF NOT EXISTS collection_relation (
+    id              INTEGER PRIMARY KEY,
+    from_collection INTEGER NOT NULL REFERENCES collection(id),
+    to_ref          TEXT NOT NULL,          -- another local_pid, or an external PID
+    relation_type   TEXT NOT NULL           -- DataCite relationType, e.g. IsVersionOf
+);
+
+-- The review queue: an inferred subtree, why it was proposed, and what a
+-- person decided. Inference only ever writes here.
+CREATE TABLE IF NOT EXISTS collection_candidate (
+    id              INTEGER PRIMARY KEY,
+    dir_id          INTEGER UNIQUE NOT NULL REFERENCES dir(id),
+    score           REAL NOT NULL,
+    evidence_json   TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'proposed',  -- proposed|accepted|rejected
+    proposed_at     TEXT NOT NULL,
+    decided_at      TEXT,
+    collection_id   INTEGER REFERENCES collection(id)
+);
+
+-- Near-duplicates (PLAN §8.1): a report with a proposed preferred member.
+CREATE TABLE IF NOT EXISTS version_set (
+    id              INTEGER PRIMARY KEY,
+    label           TEXT,
+    method          TEXT NOT NULL,
+    confidence      REAL,
+    rationale       TEXT,
+    found_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS version_member (
+    version_set_id  INTEGER NOT NULL REFERENCES version_set(id),
+    content_id      INTEGER NOT NULL REFERENCES content(id),
+    is_preferred    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (version_set_id, content_id)
+);
+
 -- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
 -- change made around these; they stop the ordinary ones.
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
@@ -324,6 +393,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     7: (),
     # v8 adds the afr_table table, likewise.
     8: (),
+    # v9 adds the curation and version-set tables (ROADMAP M6.1), likewise.
+    9: (),
 }
 
 

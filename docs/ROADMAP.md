@@ -198,17 +198,32 @@ Starts when Track A is done. Proposed breakdown:
 | **M5.6** Per-drive parallel hashing · **Done 2026-10-30** | Deferred from M3. 1–2 readers on HDD, 4–8 on SSD, by discovered media type, with per-file cancel from A3 **Result:** `core/identity/readers.py`, used by both hash tiers. HDD: 2 readers for quick hashes, 1 for full hashes; SSD: 6 and 4; unknown media or unverified drive: 2. All drives are read at once, each by its own pool, in layout order; results return to the calling thread, the only one that writes the catalog. Cancel stays per file: no new read starts and running ones are waited for. The full pass now reads every collision group's files in one parallel run with checkpoint commits, instead of one group at a time. `verify` is still sequential |
 | **M5.7** V&V · **Done 2026-10-30** | New requirements **R-HL-01** (no SMART → `unknown`, never a number), **R-HL-02** (two copies on one `batch_key` score worse than two copies across batches), **R-HL-03** (expected loss equals the oracle's independent arithmetic for the planted drive metadata), **R-HL-04** (smartctl is never called with a state-changing argument). The bench plants purchase dates, models and mock SMART JSON per simulated drive **Result:** as planned, plus disaster zones and one planted purchase batch per dataset (`assign_health`, its own random stream; the `batch-copy` and `cross-batch-copy` scenarios are planned last, so earlier content for a seed is unchanged). The adapter records the metadata with `update_drive` and feeds `vv/smart_mock.py` output through the tool's SMART parser, capturing the argv the tool builds. The oracle redoes §8.2 independently, sharing only the shipped JSON tables. VV-HL-01…04 PASS on 3, 5 and 6 simulated drives; evaluator self-tests show each fails on a planted wrong answer |
 
-### M6, M7, M8 — outline
+### M6 — Curation and FAIR
+
+Breakdown written 2026-10-30, when M6 started. PLAN §8.3–§8.4, §11 screens 5–6, §15.
+Collections are *proposed* by inference and exist only once a person confirms them; unfiled
+content stays a first-class, reported state. Scorecards come last because they score
+collections, and a score over 12 % of the archive must say so.
+
+| Item | Scope and acceptance |
+|---|---|
+| **M6.1** Schema v9 · **Done 2026-10-30** | `collection`, `collection_rule`, `collection_relation` per PLAN §7.3, plus `collection_candidate` (the review queue: a subtree, its score, its evidence, and proposed / accepted / rejected), `version_set` and `version_member`. Store API to create and read them, every change audited. New tables only, so the migration adds nothing to `file` **Result:** `core/store/curation.py`. `propose` writes only to the queue and never re-opens a decided candidate, so a rejection sticks; `decide`, `create_collection` (with a random `dfc-` local PID, never derived from a path), `edit_collection` and `add_subtree_rule` are audited. A folder belongs to at most one collection's rule. `member_stats` counts live files under the rules by recursive CTE, so files added later are members. `replace_version_sets` swaps a run's sets as one audited entry |
+| **M6.2** Candidate inference | Walk `dir_rollup` and score subtrees on the PLAN §8.4 signals: size band, file-type homogeneity, modification-time clustering, sibling-name patterns, and the depth where a container stops and content starts. Every candidate carries its evidence: why, sample paths, file and byte counts, date span. Proposals only: nothing joins a collection. CLI `collections propose`, `collections queue`. V&V requirements added as planned, with planted project folders, *before* this lands (VV.md §9) |
+| **M6.3** Confirmation and rules | Accept, rename, merge, split, reject, and bulk-accept above a confidence threshold, each an explicit, audited act. A confirmed collection is a `collection_rule` (a subtree), so files that later appear inside it join it, while a genuinely new subtree returns to the queue. CLI `collections accept / reject / merge / split / show / edit` for the PLAN metadata (title, creators, license, data type, ...) |
+| **M6.4** Unfiled and coverage | Bytes in confirmed collections against all distinct bytes, shown wherever a collection figure is. The unfiled bucket reports its size, its expected loss (M5.5) and its under-protected share. Report and Dashboard |
+| **M6.5** Version sets | Near-duplicates grouped into version sets with a proposed preferred member and its rationale (VV-VER-01 goes from DEFERRED to live). Method and confidence recorded per set. A report, never an action |
+| **M6.6** Standards files | FAIR Principles and NDSA Levels v2.0 as versioned, citable rubric files under `standards/`, each with source URL, version and retrieval date, pinned from the primary sources (PLAN §8.3). **Open** (D14): the build environment may not reach them |
+| **M6.7** Scorecards | FAIR (F1–R1.3 as PLAN §8.3 lists them) and NDSA per collection; every failing criterion names the gap and its remedy; the report names the rubric version. Golden tests per criterion |
+| **M6.8** Search index | FTS5 over names and paths for `find`, built and kept current at scan time |
+| **M6.9** Screens | Collections (review queue with evidence and actions; confirmed collections with metadata, rules and a completeness meter; coverage at the top) and Duplicates & Versions (groups, reclaimable bytes, side-by-side, proposed preferred member) |
+| **M6.10** V&V | Requirements for inference, confirmation, rules, coverage and scorecards live; VV-VER-01 live |
+
+### M7, M8 — outline
 
 These are scoped in PLAN §8.3–§10 and §15. Each should get its own breakdown, like M5's above,
 when it starts, and its V&V requirements added to `vv/requirements.py` as `status="planned"`
 with data planted *before* implementation (VV.md §9).
 
-* **M6 Curation and FAIR.** Collection inference over `dir_rollup`, the confirmation queue,
-  rules-based membership, the unfiled bucket and coverage, version sets (VV-VER-01 moves from
-  DEFERRED to live), `standards/` rubric files pinned from primary sources, FAIR and NDSA
-  scorecards with golden tests, FTS5 indexes, and the Collections and Duplicates & Versions
-  screens.
 * **M7 Planner.** Placement units, the greedy solver plus CP-SAT, cluster-aware footprint,
   plan documents with simulation, the Plan screen, and property tests (never fewer copies,
   never over capacity). Needs allocated-size data (§3.2) for footprints.
@@ -249,3 +264,4 @@ attached to each one.
 | D11 | Keep SMART reads in the product for now? | **Decided 2026-10-30:** shelve them. Turned off, not removed. M5.4–M5.5 go ahead without SMART: the duty and SMART factors are neutral, so a failing drive with pending sectors scores like a healthy one of its age and model, and every risk is `estimated`. Base AFR, age, bus, batch and disaster-zone correlation are unaffected |
 | D12 | *Raised for M5.4.* Backblaze's site can't be reached from the build environment, so no fleet snapshot could be pinned (D6) | **Interim:** ship provisional class rates (HDD 1.5 %, SSD 1.0 %, unknown 1.5 %), labelled as such, so every rate is `estimated` at best. To pin a snapshot, download a Drive Stats quarter and run `python tools/import_backblaze.py --version <quarter> <zip>`; the fleet table then outranks the provisional one with no code change |
 | D13 | *Raised for M5.4.* Should importing Backblaze data be part of install, and runnable from a settings menu? | **Decided 2026-10-30:** yes, without breaking the network rule: the build downloads and pins a quarter so every install has it, and Settings imports a ZIP the user downloaded. The app itself never connects |
+| D14 | *Raised for M6.6.* The FAIR and NDSA rubric files are to be pinned from their primary sources (go-fair.org, ndsa.org), which the build environment may not reach, as with smartmontools and Backblaze | Not decided yet; needed by M6.6. Default: write the rubric files from the published texts, label each criterion with its source section, and record the retrieval as unconfirmed until someone checks it against the source, as with D12 |
