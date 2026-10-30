@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -259,6 +259,30 @@ CREATE TABLE IF NOT EXISTS audit (
     entry_hash  BLOB
 );
 
+-- One row per health observation of a drive (PLAN §7.3, ROADMAP M5). Kept,
+-- never overwritten, so a reallocated-sector count that is climbing shows as
+-- climbing. ``confidence`` says whether a failure probability rests on SMART
+-- (measured), on age and model alone (estimated), or on nothing (unknown).
+CREATE TABLE IF NOT EXISTS drive_health (
+    id                  INTEGER PRIMARY KEY,
+    drive_id            INTEGER NOT NULL REFERENCES drive(id),
+    observed_at         TEXT NOT NULL,
+    source              TEXT,               -- e.g. smartctl 7.4
+    power_on_hours      INTEGER,
+    temperature_c       INTEGER,
+    reallocated         INTEGER,
+    pending             INTEGER,
+    uncorrectable       INTEGER,
+    crc_errors          INTEGER,
+    wear_leveling       INTEGER,
+    tbw_written         INTEGER,
+    self_test_status    TEXT,
+    smart_json          TEXT,
+    annual_failure_prob REAL,
+    confidence          TEXT NOT NULL DEFAULT 'unknown'  -- measured|estimated|unknown
+);
+CREATE INDEX IF NOT EXISTS ix_drive_health_drive ON drive_health(drive_id, observed_at);
+
 -- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
 -- change made around these; they stop the ordinary ones.
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
@@ -286,6 +310,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     ),
     # v6 adds only the audit triggers, which the DDL creates IF NOT EXISTS.
     6: (),
+    # v7 adds the drive_health table, likewise.
+    7: (),
 }
 
 

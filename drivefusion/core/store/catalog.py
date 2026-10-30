@@ -269,6 +269,36 @@ class Catalog:
         ).fetchone()
         return holder is None or holder["id"] == drive_id
 
+    def drive(self, drive_id: int) -> sqlite3.Row | None:
+        return self.conn.execute("SELECT * FROM drive WHERE id = ?", (drive_id,)).fetchone()
+
+    def update_drive(self, drive_id: int, changes: dict[str, str | None]) -> dict:
+        """Edit what the user knows about a drive (ROADMAP M5.2).
+
+        ``changes`` maps the user-facing names in ``core.health.metadata.FIELDS``
+        to raw strings, or ``None`` to clear. Everything is validated before
+        anything is written, and the edit is audited with each field's old and
+        new value. Returns the changes that took effect.
+        """
+        from drivefusion.core.health import metadata
+
+        row = self.drive(drive_id)
+        if row is None:
+            raise ValueError(f"no drive {drive_id} in the catalog")
+        columns = metadata.parse_changes(changes)
+        effective = {c: v for c, v in columns.items() if row[c] != v}
+        if not effective:
+            return {}
+        assignments = ", ".join(f"{c} = ?" for c in effective)
+        self.conn.execute(
+            f"UPDATE drive SET {assignments} WHERE id = ?", (*effective.values(), drive_id)
+        )
+        self.record("drive.edit", {
+            "drive_id": drive_id,
+            "changes": {c: [row[c], v] for c, v in effective.items()},
+        })
+        return effective
+
     def record_discovered_volume(self, volume) -> int:
         """Record a volume found by discovery, and its drive if it has one.
 

@@ -585,3 +585,56 @@ def test_declining_at_startup_closes_without_reading(qt_app, populated: Path, mo
     monkeypatch.setattr(consent, "_ask", lambda parent: False)
     monkeypatch.setattr(qt_app, "exec", lambda: pytest.fail("the window was opened"))
     assert app.main([], catalog=populated) == 0
+
+
+# -- drive metadata (ROADMAP M5.2) ------------------------------------------------
+
+def _with_a_drive(window) -> int:
+    catalog = window.session.catalog()
+    drive = catalog.upsert_drive(serial="EDIT-1", manufacturer="Seagate", model="ST4000DM004")
+    catalog.assign_volume_drive(catalog.unverified_volumes()[0]["id"], drive)
+    window.drives.refresh()
+    window.drives.tree.setCurrentItem(window.drives.tree.topLevelItem(0))
+    return drive
+
+
+def test_the_edit_button_needs_a_drive(window) -> None:
+    window.drives.tree.setCurrentItem(window.drives.tree.topLevelItem(0))
+    assert not window.drives.edit_button.isEnabled(), "an unverified volume has no drive"
+    _with_a_drive(window)
+    assert window.drives.edit_button.isEnabled()
+
+
+def test_the_edit_dialog_round_trips_and_is_audited(window) -> None:
+    from drivefusion.core.store import audit
+    from drivefusion.gui.screens.drives import COLUMNS, DriveEditDialog
+
+    drive = _with_a_drive(window)
+    catalog = window.session.catalog()
+    dialog = DriveEditDialog(catalog.drive(drive))
+    assert dialog.changes() == {}, "an untouched form changes nothing"
+    dialog.set_value("purchase-date", "2021-03-14")
+    dialog.set_value("role", "archive")
+    changed = []
+    window.drives.catalogChanged.connect(lambda: changed.append(True))
+    assert window.drives.save_drive(drive, dialog.changes())
+
+    item = window.drives.tree.topLevelItem(0)
+    assert item.text(COLUMNS.index("Purchased")) == "2021-03-14"
+    assert item.text(COLUMNS.index("Role")) == "archive"
+    assert changed and audit.entries(catalog.conn, limit=1)[0]["action"] == "drive.edit"
+
+    again = DriveEditDialog(catalog.drive(drive))
+    again.set_value("role", "")
+    assert again.changes() == {"role": None}, "blanking a value clears it"
+
+
+def test_a_bad_value_in_the_dialog_is_refused_and_nothing_is_saved(window, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    drive = _with_a_drive(window)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    assert not window.drives.save_drive(drive, {"purchase-date": "14/03/2021", "role": "archive"})
+    assert "not a date" in warnings[0]
+    assert window.session.catalog().drive(drive)["role"] is None

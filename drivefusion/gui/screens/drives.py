@@ -13,8 +13,9 @@
   buttons here record. A drive identified by its serial or partition table
   can't be overruled from here.
 
-Editable purchase/warranty/location metadata and SMART sparklines are M5, where
-the durability model gives those fields something to feed.
+What the hardware can't say (purchase date, price, warranty, role, location,
+disaster zone, a batch override) is edited here through "Edit drive…", and each
+edit is audited (ROADMAP M5.2). SMART sparklines arrive with M5.3.
 """
 
 from __future__ import annotations
@@ -22,7 +23,12 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
+    QLineEdit,
     QInputDialog,
     QHeaderView,
     QLabel,
@@ -48,6 +54,8 @@ COLUMNS = (
     "Files",
     "Rescan",
     "Last scanned",
+    "Purchased",
+    "Role",
 )
 
 #: How each drive identity is shown.
@@ -105,7 +113,14 @@ class DrivesScreen(QWidget):
         buttons.addStretch(1)
         buttons.addWidget(self.own_drive_button)
         buttons.addWidget(self.on_drive_button)
+        self.edit_button = QPushButton("Edit drive…")
+        self.edit_button.setToolTip(
+            "Record what the hardware can't say: purchase date, price, warranty, "
+            "role, location, disaster zone. Each edit is kept in the audit log."
+        )
+        buttons.addWidget(self.edit_button)
         layout.addLayout(buttons)
+        self.edit_button.clicked.connect(self.edit_selected)
         self.refresh_button.clicked.connect(self.refresh)
         self.own_drive_button.clicked.connect(self.confirm_own_drive)
         self.on_drive_button.clicked.connect(self.choose_drive)
@@ -150,9 +165,12 @@ class DrivesScreen(QWidget):
                     f"{row['files']:,}",
                     row["rescan_cost"] or "?",
                     describe_age(row["last_scanned_at"]),
+                    row["purchase_date"] or "—",
+                    row["role"] or "—",
                 ]
             )
-            item.setData(0, Qt.UserRole, (row["volume_id"], row["drive_id"] is None))
+            item.setData(0, Qt.UserRole,
+                         (row["volume_id"], row["drive_id"] is None, row["drive_id"]))
             if row["drive_id"] is None:
                 for column in (0, 1):
                     item.setToolTip(
@@ -189,13 +207,46 @@ class DrivesScreen(QWidget):
         item = self.tree.currentItem()
         if item is None:
             return None
-        volume_id, unverified = item.data(0, Qt.UserRole)
+        volume_id, unverified, _drive = item.data(0, Qt.UserRole)
         return volume_id if unverified else None
+
+    def selected_drive(self) -> int | None:
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        return item.data(0, Qt.UserRole)[2]
 
     def _update_buttons(self) -> None:
         enabled = self.selected_unverified_volume() is not None
         self.own_drive_button.setEnabled(enabled)
         self.on_drive_button.setEnabled(enabled)
+        self.edit_button.setEnabled(self.selected_drive() is not None)
+
+    # -- editing what the hardware can't say (ROADMAP M5.2) -------------------
+
+    def edit_selected(self) -> None:
+        drive_id = self.selected_drive()
+        if drive_id is None:
+            return
+        row = self.session.catalog().drive(drive_id)
+        dialog = DriveEditDialog(row, self)
+        while dialog.exec() == QDialog.Accepted:
+            if self.save_drive(drive_id, dialog.changes()):
+                return
+
+    def save_drive(self, drive_id: int, changes: dict[str, str | None]) -> bool:
+        """Separated from the dialog so it can be tested. True when saved."""
+        from drivefusion.core.health.metadata import MetadataError
+
+        try:
+            applied = self.session.catalog().update_drive(drive_id, changes)
+        except (MetadataError, ValueError) as exc:
+            QMessageBox.warning(self, "Cannot record this", str(exc))
+            return False
+        if applied:
+            self.refresh()
+            self.catalogChanged.emit()
+        return True
 
     def confirm_own_drive(self) -> None:
         volume_id = self.selected_unverified_volume()
@@ -242,3 +293,56 @@ class DrivesScreen(QWidget):
             return
         self.refresh()
         self.catalogChanged.emit()
+
+
+class DriveEditDialog(QDialog):
+    """A form over ``core.health.metadata.FIELDS``: blank clears a value."""
+
+    def __init__(self, row, parent=None) -> None:
+        super().__init__(parent)
+        from drivefusion.core.health import metadata
+
+        self.setWindowTitle(f"Drive {row['id']}: {row['nickname'] or row['model'] or ''}".strip())
+        self._before: dict[str, str] = {}
+        self._inputs: dict[str, QLineEdit | QComboBox] = {}
+        form = QFormLayout(self)
+        for field in metadata.FIELDS:
+            current = row[field.column]
+            shown = "" if current is None else metadata.format_value(field.column, current)
+            if field.name == "role":
+                widget = QComboBox()
+                widget.addItems(["", *metadata.ROLES])
+                widget.setCurrentText(shown)
+            else:
+                widget = QLineEdit(shown)
+                if field.column in ("purchase_date", "warranty_end", "retired_at"):
+                    widget.setPlaceholderText("YYYY-MM-DD")
+                if field.column == "batch_key":
+                    key, source = metadata.batch_key(row)
+                    widget.setPlaceholderText(f"{key} (derived)" if source == "derived"
+                                              else "maker + model + purchase month")
+            form.addRow(field.label, widget)
+            self._before[field.name] = shown
+            self._inputs[field.name] = widget
+        box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        form.addRow(box)
+
+    def set_value(self, name: str, text: str) -> None:
+        widget = self._inputs[name]
+        if isinstance(widget, QComboBox):
+            widget.setCurrentText(text)
+        else:
+            widget.setText(text)
+
+    def changes(self) -> dict[str, str | None]:
+        """What the user altered: a new value, or None where a value was blanked."""
+        out: dict[str, str | None] = {}
+        for name, widget in self._inputs.items():
+            text = (widget.currentText() if isinstance(widget, QComboBox)
+                    else widget.text()).strip()
+            if text == self._before[name]:
+                continue
+            out[name] = text or None
+        return out
