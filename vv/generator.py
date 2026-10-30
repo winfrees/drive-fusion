@@ -64,6 +64,9 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "rescan-mkdir": ("R-CAT-02",),
     "silent-corruption": ("R-FIX-01", "R-FIX-02", "R-FIX-03"),
     "edit-before-verify": ("R-FIX-04",),
+    "drive-health": ("R-HL-01", "R-HL-03", "R-HL-04"),
+    "batch-copy": ("R-HL-02", "R-HL-03"),
+    "cross-batch-copy": ("R-HL-02", "R-HL-03"),
 }
 
 MANUFACTURERS = {
@@ -342,6 +345,37 @@ class Builder:
             s = self.scenario("unverified-copy", "on a known drive and an unidentified one")
             self.place(r.choice(known), key, s)
             self.place(drive, key, s)
+
+    def health_copies(self) -> None:
+        """R-HL-02: two copies on one purchase batch, and two across batches.
+
+        Uses the batch ``assign_health`` planted. The pair from one batch and a
+        pair from different batches each get content held on them and nowhere
+        else, so the tool's P(loss) for the two can be compared.
+        """
+        drives = {d["id"]: d for d in self.drives}
+        with_health = [i for i in self.ids if drives[i].get("health")]
+        if with_health:
+            kinds = ", ".join(f"{i} {drives[i]['health']['smart']}" for i in with_health)
+            self.scenario("drive-health", f"purchase date, zone and SMART per device: {kinds}")
+        batch, seen = [], set()
+        for i in self.ids:          # one drive per device: not two partitions of one
+            if drives[i].get("health", {}).get("batch") and self.device(i) not in seen:
+                batch.append(i)
+                seen.add(self.device(i))
+        if len(batch) < 2:
+            return
+        key = self.new_content()
+        s = self.scenario("batch-copy", "on two drives from one purchase batch")
+        for drive in batch[:2]:
+            self.place(drive, key, s)
+        others = [i for i in self.ids if self.identified(i) and i not in batch
+                  and self.device(i) not in {self.device(b) for b in batch}]
+        if others:
+            key = self.new_content()
+            s = self.scenario("cross-batch-copy", "on two drives from different batches")
+            for drive in (batch[0], others[0]):
+                self.place(drive, key, s)
 
     def same_drive_dupes(self) -> None:
         r = self.rng
@@ -840,6 +874,53 @@ def assign_devices(drives: list[dict], seed: int) -> None:
         rng.choice(candidates)["identity"] = "none"
 
 
+#: What a simulated drive's SMART says: healthy, failing (pending and
+#: reallocated sectors), or nothing at all, as behind many USB bridges.
+SMART_KINDS = ("healthy", "failing", "hidden")
+
+#: Disaster zones a simulated drive can be kept in; None is "not recorded".
+ZONES = ("home", "office", "offsite", None)
+
+
+def assign_health(drives: list[dict], seed: int) -> None:
+    """Give each simulated device what M5 scores it on (ROADMAP M5.7).
+
+    A purchase month, a disaster zone (or none recorded) and what its SMART
+    would say. With two or more identified devices, two of them are made one
+    purchase batch: same maker, model and purchase month. Partitions of one
+    device share all of it. Drives nothing identifies get nothing: the tool
+    has no drive row to record it on. A separate random stream keeps every
+    other choice the seed makes unchanged.
+    """
+    rng = random.Random(seed ^ 0x4EA1_7B47)
+    devices: dict[str, dict] = {}
+    for drive in drives:
+        if drive.get("identity", "serial") == "none":
+            continue
+        device = drive.get("device", drive["id"])
+        if device not in devices:
+            devices[device] = {
+                "purchase_date": f"{rng.randint(2014, 2025)}-{rng.randint(1, 12):02d}",
+                "disaster_zone": rng.choice(ZONES),
+                "smart": rng.choice(SMART_KINDS),
+                "power_on_hours": rng.randint(500, 60_000),
+            }
+    order = sorted(devices)
+    if len(order) >= 2:
+        first, second = rng.sample(order, 2)
+        devices[second]["purchase_date"] = devices[first]["purchase_date"]
+        devices[first]["batch"] = devices[second]["batch"] = True
+        heads = {d.get("device", d["id"]): d for d in drives if d.get("identity") != "none"}
+        for field in ("manufacturer", "model"):
+            for drive in drives:
+                if drive.get("device", drive["id"]) == second:
+                    drive[field] = heads[first][field]
+    for drive in drives:
+        info = devices.get(drive.get("device", drive["id"]))
+        if info is not None:
+            drive["health"] = dict(info)
+
+
 def default_cluster_bytes(fs: str, capacity: int) -> int:
     """Windows' default cluster size for a volume of this filesystem and size.
 
@@ -930,6 +1011,9 @@ def build(seed: int, drives: list[dict], *, files_per_drive: int, large_files: i
     b.unscoped_copies()
     b.mutations_plan()
     b.corruption_plan(b.manifest(mode, params))
+    # Last, so every earlier random draw, and so the rest of the dataset, is
+    # what it was before M5.7 for the same seed.
+    b.health_copies()
     return b.manifest(mode, params)
 
 

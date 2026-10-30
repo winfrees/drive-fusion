@@ -26,9 +26,12 @@ Drive registration has two modes:
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib
 import os
 import sys
+from collections import defaultdict
+from pathlib import Path
 
 ADAPTER_NAME = "drivefusion-python-api"
 
@@ -56,6 +59,8 @@ class DriveFusionAdapter:
         self.roots: dict[str, dict] = {}       # drive id -> {root, volume_id, root_id}
         self.by_volume: dict[int, str] = {}
         self.discovered: dict[str, dict] = {}
+        self.health_drives: set[int] = set()
+        self.smart_argvs: list[list[str]] = []
 
     def close(self) -> None:
         self.catalog.close()
@@ -134,7 +139,41 @@ class DriveFusionAdapter:
             root_id = cat.add_scope_root(volume_id, root)
             self.roots[drive["id"]] = {"root": root, "volume_id": volume_id, "root_id": root_id,
                                        "file_ids": file_ids, "device": device}
+            if manifest["mode"] == "simulated" and drive_id is not None and drive.get("health"):
+                self._plant_health(drive_id, drive)
             self.by_volume[volume_id] = drive["id"]
+
+    def _plant_health(self, drive_id: int, drive: dict) -> None:
+        """Record what the user would know about this simulated drive, and
+        give the tool the drive's SMART output (``vv/smart_mock.py``).
+
+        Versions before M5 have no drive metadata or SMART parser; their
+        health tests are N/A.
+        """
+        if not hasattr(self.catalog, "update_drive") or drive_id in self.health_drives:
+            return
+        self.health_drives.add(drive_id)
+        health = drive["health"]
+        changes = {"purchase-date": health["purchase_date"]}
+        if health["disaster_zone"]:
+            changes["zone"] = health["disaster_zone"]
+        self.catalog.update_drive(drive_id, changes)
+        try:
+            smart = importlib.import_module("drivefusion.core.health.smart")
+        except ImportError:
+            return
+        from vv import smart_mock
+
+        text = smart_mock.output(health["smart"], model=drive["model"], serial=drive["serial"],
+                                 power_on_hours=health["power_on_hours"])
+
+        def runner(exe, device, dev_type=None):
+            # The command the tool would run, built by the tool itself.
+            self.smart_argvs.append(smart.query_argv(exe, device, dev_type))
+            return text
+
+        smart.read_drive(self.catalog, drive_id, smartctl=Path("smartctl.exe"), runner=runner,
+                         locate=lambda _c, _d: (f"/dev/vv-{drive['id']}", ""))
 
     # -- the tool's verbs ---------------------------------------------------
 
@@ -248,4 +287,50 @@ class DriveFusionAdapter:
             "volumes": {d: {"volume_id": i["volume_id"], "device": i["device"],
                             "last_scanned_at": scanned.get(i["volume_id"]),
                             **self.discovered.get(d, {})} for d, i in self.roots.items()},
+            "health": self._health(),
+        }
+
+    def _health(self) -> dict | None:
+        """Each drive's recorded health and failure rate, and the durability
+        figures, keyed by manifest drive ids. None before M5.5."""
+        try:
+            afr = importlib.import_module("drivefusion.core.health.afr")
+            durability = importlib.import_module("drivefusion.core.health.durability")
+            smart = importlib.import_module("drivefusion.core.health.smart")
+        except ImportError:
+            return None
+        today = dt.date.today()
+        cat = self.catalog
+        drive_of = {d: cat.conn.execute("SELECT drive_id FROM volume WHERE id = ?",
+                                        (i["volume_id"],)).fetchone()["drive_id"]
+                    for d, i in self.roots.items()}
+        names = defaultdict(list)
+        for d, drive_id in drive_of.items():
+            if drive_id is not None:
+                names[drive_id].append(d)
+        drives = {}
+        for d, drive_id in drive_of.items():
+            if drive_id is None:
+                continue
+            row = smart.latest(cat, drive_id)
+            risk = afr.drive_risk(cat.drive(drive_id), today=today, health=row,
+                                  rate_tables=afr.tables(cat))
+            drives[d] = {
+                "health": None if row is None else {
+                    k: row[k] for k in ("confidence", "reallocated", "pending",
+                                        "uncorrectable", "crc_errors", "power_on_hours")},
+                "afr": risk.afr, "confidence": risk.confidence,
+            }
+        found = durability.exposure(cat, today=today)
+        return {
+            "today": today.isoformat(),
+            "model_version": found.model_version,
+            "drives": drives,
+            "expected_bytes_per_year": found.expected_bytes_per_year,
+            "confidence": found.confidence,
+            "sets": [{"drives": sorted(n for i in s.drive_ids for n in names[i]),
+                      "unverified": not s.drive_ids, "p_loss": s.p_loss,
+                      "correlation": s.correlation, "bytes": s.bytes, "items": s.items}
+                     for s in found.sets],
+            "smart_argvs": self.smart_argvs,
         }

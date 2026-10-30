@@ -54,7 +54,7 @@ two versions are measured against **the same** data (§6).
 | | Simulated (default) | Physical (`--drive-path`, once per drive) |
 |---|---|---|
 | Where the drives are | `<out>/drives/D01 … Dnn` on one disk | One empty folder per real device |
-| How Drive Fusion sees them | Each folder is registered as its own volume, with a mock maker, model and serial. With 3+ drives, two of them are registered as partitions of one device (one serial); with 4+, one other sits behind a bridge that reports no identity at all (R-RED-06). The choice comes from its own random stream, so the rest of a seed's dataset is unchanged | Drive Fusion's real discovery identifies each one, exactly as `drivefusion scope add` does |
+| How Drive Fusion sees them | Each folder is registered as its own volume, with a mock maker, model and serial. With 3+ drives, two of them are registered as partitions of one device (one serial); with 4+, one other sits behind a bridge that reports no identity at all (R-RED-06). The choice comes from its own random stream, so the rest of a seed's dataset is unchanged. Each identified device is also given a purchase month and disaster zone (recorded as the user would, with `drives edit`) and mock smartctl output, which the adapter hands to Drive Fusion's own SMART parser in place of running smartctl (R-HL-01…04; SMART reads are shelved in the product, D11, but the code still runs here) | Drive Fusion's real discovery identifies each one, exactly as `drivefusion scope add` does |
 | Filesystems | Labelled NTFS or exFAT, half each as §1 specifies (with an odd drive count the extra one is either, at random). Any set of two or more drives therefore has at least one of each, so the hardlink and symlink scenarios always have an NTFS drive. Which drive gets which follows from the seed. exFAT-labelled drives get no hardlinks or symlinks, as on real exFAT | Whatever the device really is: NTFS, exFAT, FAT32, ext4… |
 | Size | Unlimited by default, or set with `--drive-size` (§2.1). Registered as the drive's capacity | What Windows reports for the volume |
 | Guard | — | **Refused** at `run` if Drive Fusion can't identify a device (no serial, no partition table): the bench couldn't know its true copy counts. **Refused** at `generate` and again at `run` if two roots resolve to the same physical device. Two folders on one thumb drive are one copy, so Drive Fusion would be right to count one, and every cross-drive expectation would be wrong |
@@ -155,10 +155,14 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-FIX-02 | §8.1 | Verification has no false positives and covers both hash tiers |
 | R-FIX-03 | §8.1 | Each fixity incident states how many drives hold the content |
 | R-FIX-04 | §8.1, REVIEW F-06 | A file edited since the last scan (new modification time) is reported as modified, never as corruption |
+| R-HL-01 | §8.2, ROADMAP M5.3 | A drive that returns no SMART data is recorded as unknown, never as zeros, and its failure rate is never labelled measured; one that does is recorded with exactly the counts it reported |
+| R-HL-02 | §8.2 | Two copies on drives from one purchase batch have a higher P(loss) than the same drives from different batches; drives that can fail together (one batch, one disaster zone) are correlated as specified |
+| R-HL-03 | §8.2, ROADMAP M5.4–M5.5 | Each drive's failure rate, each drive set's P(loss) and the expected bytes lost a year equal independent arithmetic over the planted metadata and the shipped rate and factor tables |
+| R-HL-04 | §3.2, ROADMAP M5.3 | smartctl is never given a state-changing argument |
 | R-VER-01 | §8.1 | *Planned (M6):* near-duplicates grouped into version sets. Test data is planted now; the test reports DEFERRED |
 
-Requirements for milestones not yet built (durability scoring, scorecards, the planner,
-exports) are not listed. Each new milestone should add its requirements and tests here
+Requirements for milestones not yet built (scorecards, the planner, exports) are not
+listed. Each new milestone should add its requirements and tests here
 (§9).
 
 ## 4. Dataset design
@@ -214,6 +218,9 @@ support. `tests/test_vv.py` asserts that.
 | large-copy | 1.5–6 MB files copied across drives: the full-hash path | R-ID-01, R-ID-02 |
 | version-chain | v1; v2 = v1 + appended bytes; v3 = v2 with an edit | R-ID-02, R-VER-01 |
 | unreadable | A permission-denied file whose readable twin shares its size, so hashing *tries* to open it | R-CAT-06 |
+| drive-health | Per simulated device (not files): a purchase month, a disaster zone or none recorded, and what its SMART says: healthy, failing (48 reallocated, 8 pending, 2 uncorrectable) or hidden behind a bridge. Partitions of one device share it; an unidentified drive has none. Two identified devices are made one purchase batch (same maker, model and month). From its own random stream | R-HL-01, R-HL-03, R-HL-04 |
+| batch-copy | Content on the two batch drives and nowhere else | R-HL-02, R-HL-03 |
+| cross-batch-copy | Content on one batch drive and a drive from another batch | R-HL-02, R-HL-03 |
 
 ### 4.2 Between scans (the rescan phase)
 
@@ -294,6 +301,10 @@ tool's code would agree with the tool's bugs.
 | VV-FIX-03 | verify | R-FIX-03 | Each incident's drive count equals the drives truly holding the content |
 | VV-CAT-08 | baseline, rescan | R-CAT-08 | Every drive's "last scanned" is set, not before the run began, and not moved backwards by the rescan. N/A for versions that don't report it |
 | VV-FIX-04 | verify | R-FIX-04 | No edited file appears as an incident, and each is in the tool's `modified` list where the tool reports one |
+| VV-HL-01 | baseline (simulated) | R-HL-01 | Every hidden-SMART drive is recorded `unknown` with no numbers and a rate not labelled measured; every healthy or failing one is `measured` with exactly the planted counts and power-on hours |
+| VV-HL-02 | baseline | R-HL-02 | Each multi-drive set's correlation equals the oracle's (same batch ×5, same zone ×10 per extra drive, as shipped), and the batch pair's P(loss) is higher than the oracle's for the same two drives from different batches. N/A with fewer than two identified devices |
+| VV-HL-03 | baseline | R-HL-03 | Each drive's AFR and confidence, each drive set's P(loss) and bytes, and the total expected loss equal the oracle's independent arithmetic. The oracle shares only the data (the tool's shipped rate and factor JSON), not the code |
+| VV-HL-04 | baseline | R-HL-04 | Every smartctl command the tool built for the planted reads uses no state-changing option (the bench's own list) |
 | VV-VER-01 | — | R-VER-01 | DEFERRED until M6 |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three

@@ -114,6 +114,21 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("R-FIX-04", "§8.1, REVIEW F-06",
                 "A file edited since the last scan (its modification time changed) is "
                 "reported as modified, never as corruption."),
+    Requirement("R-HL-01", "§8.2, ROADMAP M5.3",
+                "A drive that returns no SMART data is recorded as unknown, never as a "
+                "reading of zeros, and its failure rate is never labelled measured; a drive "
+                "that does return it is recorded with exactly the counts it reported."),
+    Requirement("R-HL-02", "§8.2",
+                "Two copies on drives from one purchase batch have a higher P(loss) than "
+                "two copies on drives from different batches; drives that can fail "
+                "together (one batch, one disaster zone) are correlated as specified."),
+    Requirement("R-HL-03", "§8.2, ROADMAP M5.4–M5.5",
+                "Each drive's failure rate, each drive set's P(loss) and the expected bytes "
+                "lost a year equal independent arithmetic over the planted drive metadata "
+                "and the shipped rate and factor tables."),
+    Requirement("R-HL-04", "§3.2, ROADMAP M5.3",
+                "smartctl is never given a state-changing argument: every command the tool "
+                "builds uses read-only options only."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member.", status="planned", milestone="M6"),
