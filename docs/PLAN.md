@@ -657,6 +657,10 @@ CREATE TABLE collection_relation (from_collection INTEGER, to_ref TEXT, relation
 CREATE TABLE similarity (content_id INTEGER, kind TEXT, hash BLOB);
 CREATE TABLE version_set (id INTEGER PRIMARY KEY, label TEXT, method TEXT, confidence REAL);
 CREATE TABLE version_member (version_set_id INTEGER, content_id INTEGER, is_preferred INTEGER);
+-- As built (schema v9, ROADMAP M6.1): plus collection_candidate (the review queue: a
+-- subtree, score, evidence_json, proposed|accepted|rejected), rule kind 'subtree' by dir_id,
+-- created_at stamps, and version_set.rationale. Written only by core/store/curation.py:
+-- inference only proposes, a rejection sticks, and every decision and edit is audited.
 
 CREATE TABLE fixity_check (
   content_id INTEGER, file_id INTEGER, checked_at TEXT,
