@@ -88,6 +88,7 @@ drivefusion collections propose    # queue folders that look like datasets, for 
 drivefusion collections queue
 drivefusion collections accept 3 --title "Lake surveys"   # or reject / split; nothing joins without this
 drivefusion collections edit 1 --license CC-BY-4.0 --creators "A. Smith"
+drivefusion collections coverage   # share curated; size and risk of what is unfiled
 drivefusion standards import-afr data_Q3_2025.zip   # a Backblaze Drive Stats ZIP you downloaded
 drivefusion gui                    # the desktop window
 ```

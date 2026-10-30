@@ -605,6 +605,11 @@ def test_the_dashboard_shows_expected_loss_with_its_confidence(window) -> None:
     assert "No SMART readings" in window.dashboard.detail.text()
 
 
+def test_the_dashboard_shows_coverage(window) -> None:
+    window.dashboard.refresh()
+    assert window.dashboard.tiles["coverage"].value.text().startswith("0% · unfiled")
+
+
 def test_each_drive_shows_its_estimated_failure_rate(window) -> None:
     from drivefusion.gui.screens.drives import COLUMNS
 

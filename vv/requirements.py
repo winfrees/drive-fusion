@@ -144,6 +144,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("R-COL-05", "§8.4",
                 "A confirmed collection's members are exactly the live files under its "
                 "folders, including files that appear there after it was confirmed."),
+    Requirement("R-COL-06", "§8.4, §11",
+                "Coverage is reported against all distinct bytes: filed bytes are exactly "
+                "the distinct content with a copy in a confirmed collection, and filed plus "
+                "unfiled equals the whole."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member.", status="planned", milestone="M6"),

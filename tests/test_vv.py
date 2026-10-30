@@ -556,3 +556,14 @@ def test_membership_is_checked_after_the_rescan(completed_run) -> None:
 
     v = _rejudge(manifest, observed, lose_the_late_file)
     assert v[("VV-COL-05", "rescan")]["verdict"] == ev.FAIL
+
+
+def test_coverage_is_checked_after_the_rescan(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-COL-06", "rescan")]
+    assert r["verdict"] == ev.PASS and r["checked"] == 3
+
+    def inflate(obs):
+        obs["phases"]["rescan"]["coverage"]["filed_bytes"] += 1
+
+    assert _rejudge(manifest, observed, inflate)[("VV-COL-06", "rescan")]["verdict"] == ev.FAIL

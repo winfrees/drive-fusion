@@ -164,6 +164,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-COL-03 | §8.4 | Proposals never nest, and no scan root is proposed |
 | R-COL-04 | §8.4 | Each folder of a planted project series is proposed as itself, not as an enclosing or enclosed folder |
 | R-COL-05 | §8.4 | A confirmed collection's members are exactly the live files under its folders, including files that appear there after it was confirmed |
+| R-COL-06 | §8.4, §11 | Coverage is against all distinct bytes: filed bytes are exactly the distinct content with a copy in a confirmed collection, and filed plus unfiled is the whole |
 | R-VER-01 | §8.1 | *Planned (M6):* near-duplicates grouped into version sets. Test data is planted now; the test reports DEFERRED |
 
 Requirements for milestones not yet built (the rest of M6, the planner, exports) are not
@@ -225,7 +226,7 @@ support. `tests/test_vv.py` asserts that.
 | unreadable | A permission-denied file whose readable twin shares its size, so hashing *tries* to open it | R-CAT-06 |
 | drive-health | Per simulated device (not files): a purchase month, a disaster zone or none recorded, and what its SMART says: healthy, failing (48 reallocated, 8 pending, 2 uncorrectable) or hidden behind a bridge. Partitions of one device share it; an unidentified drive has none. Two identified devices are made one purchase batch (same maker, model and month). From its own random stream | R-HL-01, R-HL-03, R-HL-04 |
 | batch-copy | Content on the two batch drives and nowhere else | R-HL-02, R-HL-03 |
-| project-series | On one drive, `Projects/<topic> series/` holding 3–4 folders named `<year>-<month> <topic>`, each with 6–9 files of one type dated within 20 days of the folder's month, and one more file added to the first folder between scans (unless an earlier change removes it). Planned last, so the rest of a seed's dataset is unchanged. The adapter accepts every proposal after the baseline, as a person would | R-COL-01…05 |
+| project-series | On one drive, `Projects/<topic> series/` holding 3–4 folders named `<year>-<month> <topic>`, each with 6–9 files of one type dated within 20 days of the folder's month, and one more file added to the first folder between scans (unless an earlier change removes it). Planned last, so the rest of a seed's dataset is unchanged. The adapter accepts every proposal after the baseline, as a person would | R-COL-01…06 |
 | cross-batch-copy | Content on one batch drive and a drive from another batch | R-HL-02, R-HL-03 |
 
 ### 4.2 Between scans (the rescan phase)
@@ -316,6 +317,7 @@ tool's code would agree with the tool's bugs.
 | VV-COL-03 | baseline | R-COL-03 | No proposal is a drive root or inside another proposal |
 | VV-COL-04 | baseline | R-COL-04 | Every planted series folder is proposed exactly (an enclosing or enclosed proposal is named in the failure) |
 | VV-COL-05 | rescan | R-COL-05 | Each confirmed collection's member files and bytes equal the rescan truth under its folders, the late file included |
+| VV-COL-06 | rescan | R-COL-06 | Coverage's total equals all distinct bytes, its filed bytes equal the distinct content with a path under a confirmed folder, and filed + unfiled = total |
 | VV-VER-01 | — | R-VER-01 | DEFERRED until M6 |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three

@@ -96,6 +96,11 @@ class DashboardScreen(QWidget):
                 "Content held on fewer distinct physical drives than your copy "
                 "target. This is the queue that matters.",
             ),
+            "coverage": Tile(
+                "In collections",
+                "Share of distinct bytes in collections you have confirmed. The rest "
+                "is unfiled: reported with its own size and risk, never hidden.",
+            ),
             "expected_loss": Tile(
                 "Expected loss a year",
                 "Σ size × P(loss): the bytes you should expect to lose in a year, "
@@ -116,6 +121,7 @@ class DashboardScreen(QWidget):
             "under_protected_bytes",
             "reclaimable_bytes",
             "expected_loss",
+            "coverage",
         )
         for position, key in enumerate(order):
             grid.addWidget(self.tiles[key], position // 3, position % 3)
@@ -163,6 +169,11 @@ class DashboardScreen(QWidget):
         self.tiles["expected_loss"].set_value(
             f"{human_bytes(int(found.expected_bytes_per_year))} ({found.confidence})")
         worst = next((d for d in found.sets if d.bytes), None)
+        from drivefusion.core.curate import coverage
+
+        cov = coverage.coverage(catalog, found=found)
+        self.tiles["coverage"].set_value(
+            f"{cov.share:.0%} · unfiled {human_bytes(cov.unfiled.bytes)}")
 
         live = counts["files"]
         # A file of unique size needs no hash to be counted: it is one copy.
