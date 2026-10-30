@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from drivefusion.core.analysis import drive_inventory
+from drivefusion.core.health import smart
 from drivefusion.gui.format import describe_age, human_bytes, percent
 
 COLUMNS = (
@@ -56,6 +57,7 @@ COLUMNS = (
     "Last scanned",
     "Purchased",
     "Role",
+    "Health",
 )
 
 #: How each drive identity is shown.
@@ -72,6 +74,9 @@ class DrivesScreen(QWidget):
 
     #: A drive was confirmed, which changes every copy count that used it.
     catalogChanged = Signal()
+
+    #: A health-read task body for the window to run (it owns progress and Cancel).
+    healthRequested = Signal(object)
 
     def __init__(self, session, parent=None) -> None:
         super().__init__(parent)
@@ -119,6 +124,13 @@ class DrivesScreen(QWidget):
             "role, location, disaster zone. Each edit is kept in the audit log."
         )
         buttons.addWidget(self.edit_button)
+        self.health_button = QPushButton("Read health…")
+        self.health_button.setToolTip(
+            "Read SMART health with the bundled smartctl: read-only queries, and "
+            "only with administrator rights, which Drive Fusion asks about first."
+        )
+        buttons.addWidget(self.health_button)
+        self.health_button.clicked.connect(self.read_health)
         layout.addLayout(buttons)
         self.edit_button.clicked.connect(self.edit_selected)
         self.refresh_button.clicked.connect(self.refresh)
@@ -167,6 +179,8 @@ class DrivesScreen(QWidget):
                     describe_age(row["last_scanned_at"]),
                     row["purchase_date"] or "—",
                     row["role"] or "—",
+                    smart.verdict(smart.latest(self.session.catalog(), row["drive_id"]))
+                    if row["drive_id"] is not None else "—",
                 ]
             )
             item.setData(0, Qt.UserRole,
@@ -234,6 +248,55 @@ class DrivesScreen(QWidget):
             if self.save_drive(drive_id, dialog.changes()):
                 return
 
+    # -- drive health (ROADMAP M5.3) -------------------------------------------
+
+    def read_health(self) -> None:
+        """Warn and ask without administrator rights; confirm with them."""
+        from drivefusion.core.enum.helper import client
+        from drivefusion.gui import consent, elevation
+
+        catalog = self.session.catalog()
+        if not consent.ensure(self, catalog):
+            return
+        selected = self.selected_drive()
+        drive_ids = [selected] if selected is not None else [
+            int(r["id"]) for r in catalog.conn.execute(
+                "SELECT id FROM drive WHERE retired_at IS NULL ORDER BY id")]
+        if not drive_ids:
+            QMessageBox.information(self, "No drives", "No drive is catalogued yet.")
+            return
+        if not client.is_elevated():
+            if _ask_restart(self):
+                try:
+                    elevation.restart_elevated()
+                except elevation.ElevationError as exc:
+                    QMessageBox.warning(self, "Not restarted", str(exc))
+                    return
+                from PySide6.QtWidgets import QApplication
+
+                QApplication.quit()
+            return
+        smartctl = smart.bundled_smartctl()
+        if smartctl is None:
+            QMessageBox.warning(
+                self, "smartctl not bundled",
+                "This build has no bundled smartctl, so drive health can't be read.",
+            )
+            return
+        if not _confirm_read(self, len(drive_ids)):
+            return
+
+        def body(worker_catalog, progress, cancel):
+            from drivefusion.gui.workers import Progress
+
+            for index, drive_id in enumerate(drive_ids):
+                cancel.raised()
+                progress(Progress(f"Reading health of drive {drive_id}", index, len(drive_ids)))
+                smart.read_drive(worker_catalog, drive_id, smartctl=smartctl)
+            progress(Progress("Health read", len(drive_ids), len(drive_ids)))
+
+        self.healthRequested.emit(body)
+
     def save_drive(self, drive_id: int, changes: dict[str, str | None]) -> bool:
         """Separated from the dialog so it can be tested. True when saved."""
         from drivefusion.core.health.metadata import MetadataError
@@ -294,6 +357,38 @@ class DrivesScreen(QWidget):
         self.refresh()
         self.catalogChanged.emit()
 
+
+#: Shown when health is asked for without administrator rights.
+HEALTH_NEEDS_ADMIN = (
+    "Reading drive health (SMART) needs administrator rights, and Drive Fusion is "
+    "running without them.\n\n"
+    "Restart Drive Fusion as administrator to read it? Windows will ask you to "
+    "confirm. Drive Fusion runs smartctl with read-only queries only; it never "
+    "starts a self-test or changes a drive setting.\n\n"
+    "\"Not now\" reads nothing; health stays unknown."
+)
+
+
+def _ask_restart(parent) -> bool:
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Administrator rights needed")
+    box.setText(HEALTH_NEEDS_ADMIN)
+    restart = box.addButton("Restart as administrator", QMessageBox.AcceptRole)
+    box.addButton("Not now", QMessageBox.RejectRole)
+    box.exec()
+    return box.clickedButton() is restart
+
+
+def _confirm_read(parent, count: int) -> bool:
+    answer = QMessageBox.question(
+        parent, "Read drive health",
+        f"Drive Fusion will run the bundled smartctl with administrator rights on "
+        f"{count} drive(s), read-only:\n\n    smartctl {' '.join(smart.READ_ONLY_ARGS)} "
+        "<device>\n\nRead now?",
+        QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+    )
+    return answer == QMessageBox.Yes
 
 class DriveEditDialog(QDialog):
     """A form over ``core.health.metadata.FIELDS``: blank clears a value."""

@@ -1,0 +1,37 @@
+{
+ "json_format_version": [
+  1,
+  0
+ ],
+ "smartctl": {
+  "version": [
+   7,
+   5
+  ],
+  "pre_release": false,
+  "svn_revision": "5714",
+  "platform_info": "x86_64-w64-mingw32-w10-22H2",
+  "build_info": "(sf-7.5-1)",
+  "argv": [
+   "smartctl",
+   "--json=c",
+   "-i",
+   "-H",
+   "-A",
+   "-l",
+   "selftest",
+   "/dev/pd4"
+  ],
+  "exit_status": 1,
+  "messages": [
+   {
+    "string": "/dev/pd4: Unknown USB bridge [0x152d:0x0578 (0x0209)]",
+    "severity": "error"
+   },
+   {
+    "string": "Please specify device type with the -d option.",
+    "severity": "error"
+   }
+  ]
+ }
+}

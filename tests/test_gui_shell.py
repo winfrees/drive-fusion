@@ -638,3 +638,75 @@ def test_a_bad_value_in_the_dialog_is_refused_and_nothing_is_saved(window, monke
     assert not window.drives.save_drive(drive, {"purchase-date": "14/03/2021", "role": "archive"})
     assert "not a date" in warnings[0]
     assert window.session.catalog().drive(drive)["role"] is None
+
+
+# -- drive health (ROADMAP M5.3) ---------------------------------------------------
+
+@pytest.fixture
+def health_gui(window, monkeypatch):
+    """One catalogued drive; smartctl 'bundled'; dialogs answered by the test."""
+    from drivefusion.core.enum.helper import client
+    from drivefusion.core.health import smart
+    from drivefusion.gui.screens import drives as screen
+
+    drive = _with_a_drive(window)
+    fixture = (Path(__file__).parent / "fixtures" / "smart" / "ata_hdd_healthy.json").read_text()
+    state = {"admin": False, "restart": False, "confirm": False, "asked": [], "restarted": [],
+             "runs": [], "emitted": []}
+    monkeypatch.setattr(client, "is_elevated", lambda: state["admin"])
+    monkeypatch.setattr(screen, "_ask_restart",
+                        lambda parent: state["asked"].append("restart") or state["restart"])
+    monkeypatch.setattr(screen, "_confirm_read",
+                        lambda parent, n: state["asked"].append(("confirm", n)) or state["confirm"])
+    monkeypatch.setattr(smart, "bundled_smartctl", lambda: Path("smartctl.exe"))
+    monkeypatch.setattr(smart, "device_for_drive", lambda c, d: ("/dev/pd1", ""))
+    monkeypatch.setattr(smart, "run", lambda *a, **k: state["runs"].append(a) or fixture)
+    # The test runs the task body itself, so the window must not start it too.
+    window.drives.healthRequested.disconnect()
+    window.drives.healthRequested.connect(state["emitted"].append)
+    state["drive"] = drive
+    return state
+
+
+def test_without_admin_rights_it_warns_and_asks_to_restart(window, health_gui, monkeypatch) -> None:
+    from drivefusion.gui import elevation
+
+    monkeypatch.setattr(elevation, "restart_elevated",
+                        lambda *a: health_gui["restarted"].append(True))
+    monkeypatch.setattr("PySide6.QtWidgets.QApplication.quit", lambda: None)
+
+    window.drives.read_health()                     # "Not now"
+    assert health_gui["asked"] == ["restart"] and health_gui["restarted"] == []
+    assert health_gui["emitted"] == [] and health_gui["runs"] == []
+
+    health_gui["restart"] = True                    # "Restart as administrator"
+    window.drives.read_health()
+    assert health_gui["restarted"] == [True] and health_gui["runs"] == []
+
+
+def test_with_admin_rights_it_confirms_then_reads(window, health_gui) -> None:
+    from drivefusion.core.health import smart
+    from drivefusion.gui.screens.drives import COLUMNS
+    from drivefusion.gui.workers import Cancellation
+
+    health_gui["admin"] = True
+    window.drives.read_health()                     # declined
+    assert health_gui["asked"] == [("confirm", 1)] and health_gui["emitted"] == []
+
+    health_gui["confirm"] = True
+    window.drives.read_health()
+    [body] = health_gui["emitted"]
+    with Catalog(window.session.path) as catalog:
+        body(catalog, lambda _p: None, Cancellation())
+    assert len(health_gui["runs"]) == 1
+    assert smart.verdict(smart.latest(window.session.catalog(), health_gui["drive"])) == "OK"
+    window.drives.refresh()
+    assert window.drives.tree.topLevelItem(0).text(COLUMNS.index("Health")) == "OK"
+
+
+def test_restart_from_source_explains_instead(monkeypatch) -> None:
+    from drivefusion.gui import elevation
+
+    monkeypatch.delattr("sys.frozen", raising=False)
+    with pytest.raises(elevation.ElevationError, match="Run as administrator"):
+        elevation.restart_elevated()

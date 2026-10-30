@@ -1,0 +1,142 @@
+{
+ "json_format_version": [
+  1,
+  0
+ ],
+ "smartctl": {
+  "version": [
+   7,
+   5
+  ],
+  "pre_release": false,
+  "svn_revision": "5714",
+  "platform_info": "x86_64-w64-mingw32-w10-22H2",
+  "build_info": "(sf-7.5-1)",
+  "argv": [
+   "smartctl",
+   "--json=c",
+   "-i",
+   "-H",
+   "-A",
+   "-l",
+   "selftest",
+   "/dev/pd2"
+  ],
+  "exit_status": 136
+ },
+ "device": {
+  "name": "/dev/pd2",
+  "info_name": "/dev/pd2 [SAT]",
+  "type": "sat",
+  "protocol": "ATA"
+ },
+ "model_name": "WDC WD40EZAZ-00SF3B0",
+ "serial_number": "WD-WX12345678",
+ "rotation_rate": 7200,
+ "user_capacity": {
+  "blocks": 7814037168,
+  "bytes": 4000787030016
+ },
+ "smart_status": {
+  "passed": false
+ },
+ "ata_smart_attributes": {
+  "revision": 10,
+  "table": [
+   {
+    "id": 5,
+    "name": "Reallocated_Sector_Ct",
+    "value": 1,
+    "worst": 1,
+    "thresh": 140,
+    "when_failed": "",
+    "flags": {
+     "value": 51,
+     "string": "POSR-K ",
+     "prefailure": true
+    },
+    "raw": {
+     "value": 2048,
+     "string": "2048"
+    }
+   },
+   {
+    "id": 197,
+    "name": "Current_Pending_Sector",
+    "value": 200,
+    "worst": 200,
+    "thresh": 0,
+    "when_failed": "",
+    "flags": {
+     "value": 51,
+     "string": "POSR-K ",
+     "prefailure": true
+    },
+    "raw": {
+     "value": 16,
+     "string": "16"
+    }
+   },
+   {
+    "id": 198,
+    "name": "Offline_Uncorrectable",
+    "value": 200,
+    "worst": 200,
+    "thresh": 0,
+    "when_failed": "",
+    "flags": {
+     "value": 51,
+     "string": "POSR-K ",
+     "prefailure": true
+    },
+    "raw": {
+     "value": 8,
+     "string": "8"
+    }
+   },
+   {
+    "id": 199,
+    "name": "UDMA_CRC_Error_Count",
+    "value": 200,
+    "worst": 200,
+    "thresh": 0,
+    "when_failed": "",
+    "flags": {
+     "value": 51,
+     "string": "POSR-K ",
+     "prefailure": true
+    },
+    "raw": {
+     "value": 3,
+     "string": "3"
+    }
+   }
+  ]
+ },
+ "power_on_time": {
+  "hours": 41000
+ },
+ "temperature": {
+  "current": 41
+ },
+ "ata_smart_self_test_log": {
+  "standard": {
+   "revision": 1,
+   "count": 1,
+   "table": [
+    {
+     "type": {
+      "value": 1,
+      "string": "Short offline"
+     },
+     "status": {
+      "value": 121,
+      "string": "Completed: read failure",
+      "passed": false
+     },
+     "lifetime_hours": 40990
+    }
+   ]
+  }
+ }
+}

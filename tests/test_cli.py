@@ -462,3 +462,65 @@ def test_drives_edit_and_show(cli, sample_tree: Path, capsys) -> None:
 def test_an_invalid_role_is_refused_by_the_parser(cli, capsys) -> None:
     with pytest.raises(SystemExit):
         cli("drives", "edit", "1", "--role", "backup")
+
+
+# -- drive health (ROADMAP M5.3) ---------------------------------------------------
+
+@pytest.fixture
+def health_env(cli, sample_tree: Path, monkeypatch, capsys):
+    """A catalogued drive, smartctl 'bundled', and every device 'connected'."""
+    from drivefusion.core.enum.helper import client
+    from drivefusion.core.health import smart
+
+    assert cli("--accept-disclaimer", "scope", "add", str(sample_tree)) == 0
+    capsys.readouterr()
+    fixture = (Path(__file__).parent / "fixtures" / "smart" / "ata_hdd_healthy.json").read_text()
+    runs = []
+    monkeypatch.setattr(client, "is_elevated", lambda: True)
+    monkeypatch.setattr(smart, "bundled_smartctl", lambda: Path("smartctl.exe"))
+    monkeypatch.setattr(smart, "device_for_drive", lambda c, d: ("/dev/pd1", ""))
+    monkeypatch.setattr(smart, "run", lambda *a, **k: runs.append(a) or fixture)
+    return runs
+
+
+def test_health_needs_admin_and_says_so(cli, health_env, monkeypatch, capsys) -> None:
+    from drivefusion.core.enum.helper import client
+
+    monkeypatch.setattr(client, "is_elevated", lambda: False)
+    assert cli("health", "read") == 1
+    err = capsys.readouterr().err
+    assert "warning" in err and "administrator" in err and "nothing was read" in err
+    assert health_env == [], "smartctl ran without admin rights"
+
+
+def test_health_read_asks_first(cli, health_env, monkeypatch, capsys) -> None:
+    assert cli("health", "read") == 2, "no terminal and no --yes: refused"
+    assert "pass --yes" in capsys.readouterr().err
+    assert health_env == []
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    assert cli("health", "read") == 0
+    out = capsys.readouterr().out
+    assert "read-only" in out and "--json=c -i -H -A -l selftest" in out and "not read" in out
+    assert health_env == []
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    assert cli("health", "read") == 0
+    assert "drive 1: OK" in capsys.readouterr().out and len(health_env) == 1
+
+
+def test_health_read_yes_then_show(cli, health_env, capsys) -> None:
+    assert cli("health", "read", "--yes") == 0
+    capsys.readouterr()
+    assert cli("health", "show") == 0
+    out = capsys.readouterr().out
+    assert "drive 1: OK (measured" in out and "power-on hours:  12000" in out
+
+
+def test_health_read_without_a_bundled_smartctl(cli, health_env, monkeypatch, capsys) -> None:
+    from drivefusion.core.health import smart
+
+    monkeypatch.setattr(smart, "bundled_smartctl", lambda: None)
+    assert cli("health", "read", "--yes") == 1
+    assert "no bundled smartctl" in capsys.readouterr().err

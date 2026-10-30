@@ -81,6 +81,8 @@ drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
 drivefusion drives list            # which physical drive each volume is on
 drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "Shelf B"
+drivefusion health read            # SMART, read-only; needs an Administrator terminal, asks first
+drivefusion health show
 drivefusion gui                    # the desktop window
 ```
 
@@ -156,6 +158,13 @@ These are tracked in [docs/REVIEW.md](docs/REVIEW.md):
 Measured at 3 million files: **222 bytes per file** (≈10.4 GB projected at 50M), 192k rows/s
 merge, 555 MB peak RSS. All of these are inside the [§13 budgets](docs/PLAN.md#13-performance-budgets).
 Reproduce with `python tools/benchmark.py`. A 50M-file run is still to do.
+
+## Third-party software
+
+The Windows build bundles `smartctl` from [smartmontools](https://www.smartmontools.org/)
+7.5 (GPL-2.0-or-later) for reading drive health. Its licence ships beside it, and where it
+comes from and how it is checked are in
+[packaging/README-smartmontools.md](packaging/README-smartmontools.md).
 
 ## Development
 

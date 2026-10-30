@@ -1,0 +1,58 @@
+# Bundled smartctl (smartmontools)
+
+Drive Fusion reads SMART health with `smartctl` from
+[smartmontools](https://www.smartmontools.org/), licensed GPL-2.0-or-later. The Windows
+build bundles one pinned release (ROADMAP M5.3):
+
+| | |
+|---|---|
+| Release | 7.5 (30 April 2025) |
+| Installer | `smartmontools-7.5.win32-setup.exe`, SHA-256 `896337fc…6104c70` |
+| Bundled file | `bin/smartctl.exe` (64-bit), SHA-256 `b5db94e5…995ea27d` |
+| Signature | `smartmontools-7.5.win32-setup.exe.asc`, key fingerprint `0C95 77FD 2C4C FCB4 B9A5  9964 0A30 812E FF3A EFF5` |
+| Licence shipped | `_internal/licenses/smartmontools-COPYING.txt` |
+| Source | https://sourceforge.net/projects/smartmontools/files/smartmontools/7.5/ |
+
+All values are in [`smartmontools.json`](smartmontools.json).
+
+## How it is checked
+
+1. `tools/fetch_smartctl.py` downloads the installer and refuses it unless its SHA-256 is
+   the pinned one. It then extracts `smartctl.exe` with 7-Zip and refuses that unless its
+   SHA-256 is pinned too. CI runs this before every Windows build.
+2. `packaging/drivefusion.spec` bundles it and records its SHA-256 inside the main
+   executables' archive. `tools/verify_pins.py` checks, after the build, that the pinned
+   hash is the shipped file's.
+3. Before every run, Drive Fusion hashes the bundled `smartctl.exe` through a handle that
+   denies writes, refuses any difference from the pin, and runs it while still holding
+   that handle (`drivefusion/core/pinned.py`). It is only ever given
+   `--json=c -i -H -A -l selftest`. A runtime guard and lint rule DF014 refuse every
+   option that would change a drive.
+
+## Provenance: one check a person must make
+
+The pinned hashes guarantee the same bytes every time, but not that the first download was
+genuine. That rests on the release signature, and the signing key's fingerprint has to come
+from smartmontools itself, not from the same download site:
+
+1. On smartmontools.org, find the release signing key's fingerprint, and check it matches the
+   one above.
+2. Verify the signature:
+
+   ```bash
+   gpg --recv-keys 0C9577FD2C4CFCB4B9A599640A30812EFF3AEFF5
+   gpg --verify smartmontools-7.5.win32-setup.exe.asc smartmontools-7.5.win32-setup.exe
+   ```
+
+   It should report a good signature from that key, made on 2025-04-30.
+
+The project's own build environment could not reach smartmontools.org or a keyserver, so
+this check was not made when the release was pinned. Until someone makes it, the pin rests
+on the installer's MD5 matching the one SourceForge publishes, which shows the download
+wasn't corrupted but proves nothing about its origin.
+
+## Moving to a new release
+
+Download the new installer and its `.asc`, make the provenance check above, then update every
+field in `smartmontools.json`. Run `python tools/fetch_smartctl.py`, which fails until both
+hashes are right, then the test suite, and a build with `python tools/verify_pins.py`.

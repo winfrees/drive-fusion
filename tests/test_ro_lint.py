@@ -180,3 +180,36 @@ def test_cli_exits_non_zero_on_findings(tmp_path: Path, capsys) -> None:
 def test_cli_exits_zero_on_the_real_package(capsys) -> None:
     assert ro_lint.main([str(REPO_ROOT / "drivefusion")]) == 0
     assert "clean" in capsys.readouterr().out
+
+
+# -- DF014: smartctl only reads (ROADMAP M5.3, R-HL-04) --------------------------
+
+SMART = "drivefusion/core/health/smart.py"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "argv = ['smartctl', '-t', 'short', dev]\n",
+        "argv = ['smartctl', '--test=long', dev]\n",
+        "argv = [exe, '-s', 'off', dev]\n",
+        "OPTIONS = ('--set=standby,now',)\n",
+        "argv += ['-X']\n",
+    ],
+)
+def test_state_changing_smartctl_options_are_refused(source: str) -> None:
+    assert "DF014" in codes(source, path=SMART)
+
+
+def test_the_list_that_forbids_them_may_name_them() -> None:
+    assert "DF014" not in codes("SMARTCTL_FORBIDDEN = ('-t', '--test', '-s')\n", path=SMART)
+
+
+def test_read_only_smartctl_arguments_are_fine() -> None:
+    source = "argv = [exe, '--json=c', '-i', '-H', '-A', '-l', 'selftest', '-d', 'sat', dev]\n"
+    assert codes(source, path=SMART) == set()
+
+
+def test_df014_applies_only_where_processes_may_start() -> None:
+    """Elsewhere '-t' is just a string; there it can't reach smartctl."""
+    assert "DF014" not in codes("flags = ['-t']\n")
