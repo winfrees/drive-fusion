@@ -182,6 +182,22 @@ def build_parser() -> argparse.ArgumentParser:
         health_show = health_sub.add_parser("show", help="the latest reading of each drive")
         health_show.add_argument("drive_id", type=int, nargs="?", metavar="DRIVE")
 
+    standards = subparsers.add_parser(
+        "standards", help="the versioned data Drive Fusion scores against (failure rates)"
+    )
+    standards_sub = standards.add_subparsers(dest="standards_command", metavar="ACTION")
+    standards_sub.add_parser("list", help="the failure-rate tables in force, best first")
+    standards_import = standards_sub.add_parser(
+        "import-afr",
+        help="import failure rates from a Backblaze Drive Stats ZIP you downloaded "
+             "(read only; nothing is downloaded)",
+    )
+    standards_import.add_argument("files", type=Path, nargs="+", metavar="FILE",
+                                  help="Drive Stats ZIPs or CSVs")
+    standards_import.add_argument("--version", help="e.g. 2025Q2 (default: from the file name)")
+    standards_forget = standards_sub.add_parser("forget", help="stop using a table you imported")
+    standards_forget.add_argument("name", help="e.g. backblaze-2025Q3")
+
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
     )
@@ -824,6 +840,15 @@ def cmd_drives_show(args) -> int:
             print(f"  {field.label.lower() + ':':17}{value}")
         key, source = metadata.batch_key(row)
         print(f"  {'batch:':17}{key or '—'} ({source})")
+        from drivefusion.core.health import afr, smart
+
+        risk = afr.drive_risk(row, health=smart.latest(catalog, row["id"]),
+                              rate_tables=afr.tables(catalog))
+        print(f"  {'failure rate:':17}{risk.afr:.1%} a year ({risk.confidence}; "
+              f"base {risk.base:.1%} from the {risk.base_from})")
+        print(f"  {'':17}× " + " × ".join(f"{k} {v:g}" for k, v in risk.factors.items()))
+        for note in risk.assumptions:
+            print(f"  {'':17}{note}")
         volumes = catalog.conn.execute(
             "SELECT id, label, volume_guid FROM volume WHERE drive_id = ? ORDER BY id",
             (row["id"],),
@@ -831,6 +856,53 @@ def cmd_drives_show(args) -> int:
         for volume in volumes:
             print(f"  volume {volume['id']}: {volume['label'] or volume['volume_guid']}")
         return 0
+
+
+def cmd_standards_list(args) -> int:
+    from drivefusion.core.health import afr
+
+    with Catalog(args.catalog) as catalog:
+        imported = {row["name"]: row["imported_at"] for row in catalog.afr_tables()}
+        for table in afr.tables(catalog):
+            where = (f"imported {imported[table.name][:10]}" if table.name in imported
+                     else "shipped")
+            classes = ", ".join(f"{k} {v:.2%}" for k, v in table.classes.items())
+            print(f"{table.name}: {table.basis}, {where}; {len(table.models)} models; {classes}")
+    return 0
+
+
+def cmd_standards_import_afr(args) -> int:
+    import datetime as dt
+
+    from drivefusion.core.health import backblaze
+
+    version = args.version or backblaze.version_from_name(args.files[0].name)
+    if not version:
+        print("drivefusion: can't tell the quarter from the file name; pass --version",
+              file=sys.stderr)
+        return 2
+    try:
+        table = backblaze.import_files(
+            args.files, version=version, retrieved=dt.date.today().isoformat(),
+            on_file=lambda name: print(f"  reading {name}", file=sys.stderr))
+    except (OSError, backblaze.DriveStatsError) as exc:
+        print(f"drivefusion: {exc}", file=sys.stderr)
+        return 1
+    with Catalog(args.catalog) as catalog:
+        name = catalog.import_afr_table(table)
+    print(f"imported {name}: {len(table['models'])} models, "
+          f"fleet AFR {table['classes']['hdd']:.2%}")
+    return 0
+
+
+def cmd_standards_forget(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        if not catalog.forget_afr_table(args.name):
+            print(f"drivefusion: no imported table {args.name} (shipped ones can't be "
+                  "removed)", file=sys.stderr)
+            return 1
+    print(f"forgot {args.name}")
+    return 0
 
 
 def cmd_drives_edit(args) -> int:
@@ -1033,6 +1105,9 @@ DISPATCH = {
     ("drives", "assign"): cmd_drives_assign,
     ("drives", "show"): cmd_drives_show,
     ("drives", "edit"): cmd_drives_edit,
+    ("standards", "list"): cmd_standards_list,
+    ("standards", "import-afr"): cmd_standards_import_afr,
+    ("standards", "forget"): cmd_standards_forget,
     ("health", "read"): cmd_health_read,
     ("health", "show"): cmd_health_show,
     ("audit", "list"): cmd_audit_list,
@@ -1075,8 +1150,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     action = (getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
-              or getattr(args, "audit_command", None) or getattr(args, "health_command", None))
-    if args.command in ("scope", "drives", "audit", "health") and not action:
+              or getattr(args, "audit_command", None) or getattr(args, "health_command", None)
+              or getattr(args, "standards_command", None))
+    if args.command in ("scope", "drives", "audit", "health", "standards") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 

@@ -23,6 +23,9 @@ drivefusion = "drivefusion.cli.main:main"
 [tool.setuptools.packages.find]
 include = ["drivefusion*"]
 
+[tool.setuptools.package-data]
+"drivefusion.standards.afr" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

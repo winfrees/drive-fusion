@@ -299,6 +299,37 @@ class Catalog:
         })
         return effective
 
+    def import_afr_table(self, table: dict) -> str:
+        """Keep an imported AFR table (``core.health.backblaze``), replacing one
+        of the same source and version. Audited. Returns its name."""
+        import json
+
+        from drivefusion.core.store.schema import utcnow
+
+        name = f"{table['source']}-{table['version']}"
+        replaced = self.conn.execute(
+            "SELECT 1 FROM afr_table WHERE name = ?", (name,)).fetchone() is not None
+        self.conn.execute(
+            "INSERT INTO afr_table (name, imported_at, table_json) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET imported_at = excluded.imported_at, "
+            "table_json = excluded.table_json",
+            (name, utcnow(), json.dumps(table, separators=(",", ":"))),
+        )
+        self.record("afr.import", {"name": name, "replaced": replaced,
+                                   "models": len(table.get("models", [])),
+                                   "inputs": table.get("inputs", {})})
+        return name
+
+    def afr_tables(self) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT name, imported_at, table_json FROM afr_table ORDER BY name").fetchall()
+
+    def forget_afr_table(self, name: str) -> bool:
+        forgotten = self.conn.execute("DELETE FROM afr_table WHERE name = ?", (name,)).rowcount
+        if forgotten:
+            self.record("afr.forget", {"name": name})
+        return bool(forgotten)
+
     def record_discovered_volume(self, volume) -> int:
         """Record a volume found by discovery, and its drive if it has one.
 

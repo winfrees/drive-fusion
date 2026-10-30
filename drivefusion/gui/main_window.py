@@ -37,6 +37,7 @@ from drivefusion.gui.screens.browser import BrowserScreen
 from drivefusion.gui.screens.dashboard import DashboardScreen
 from drivefusion.gui.screens.drives import DrivesScreen
 from drivefusion.gui.screens.scope import ScopeScreen
+from drivefusion.gui.screens.settings import SettingsScreen
 from drivefusion.gui.session import Session
 from drivefusion.gui.workers import TaskRunner
 
@@ -90,12 +91,14 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardScreen(self.session, self.runner)
         self.drives = DrivesScreen(self.session)
         self.browser = BrowserScreen(self.session, self.runner)
+        self.settings = SettingsScreen(self.session)
 
         for name, screen in (
             ("Scope", self.scope),
             ("Dashboard", self.dashboard),
             ("Drives", self.drives),
             ("Catalog", self.browser),
+            ("Settings", self.settings),
         ):
             self.nav.addItem(QListWidgetItem(name))
             self.stack.addWidget(screen)
@@ -120,6 +123,11 @@ class MainWindow(QMainWindow):
         self.drives.healthRequested.connect(
             lambda body: self.run_task(body, "Reading drive health"))
         self.dashboard.hashRequested.connect(lambda body: self.run_task(body, "Hashing"))
+        self.settings.importRequested.connect(
+            lambda body: self.run_task(body, "Importing failure rates"))
+        settings_action = self.menuBar().addMenu("&Tools").addAction("&Settings…")
+        settings_action.triggered.connect(
+            lambda: self.nav.setCurrentRow(self.stack.indexOf(self.settings)))
         self.cancel_button.clicked.connect(self._cancel_current)
         self._current_task = None
 
@@ -134,6 +142,7 @@ class MainWindow(QMainWindow):
         self.dashboard.refresh()
         self.drives.refresh()
         self.browser.refresh()
+        self.settings.refresh()
 
     # -- background work ----------------------------------------------------
 

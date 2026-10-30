@@ -784,6 +784,16 @@ expected_bytes_lost_per_year = Σ_over_content ( size × P(loss) )
 Reports translate it back: *"1.4 TB — 12,300 files — sits only on a 2019 drive with 4 pending
 sectors. Expected loss: 380 GB/yr. Copying it to ARCHIVE-2 costs 1.4 TB and drops that to 3 GB/yr."*
 
+**As built (ROADMAP M5.4):** `core/health/afr.py`. Base rates and every factor's
+parameters are versioned files under `drivefusion/standards/afr/`; each factor is 1.0 when its
+input is unknown. With SMART shelved (D11), duty and SMART factors are 1.0 and confidence is
+`estimated` (or `unknown` when neither model, media nor purchase date is known). Until a
+Backblaze snapshot is imported with `tools/import_backblaze.py`, base rates are provisional
+media-class values (D12). Per D13 the build pins a Backblaze quarter
+(`packaging/backblaze.json`), and Settings or `drivefusion standards import-afr` imports a
+newer ZIP the user downloaded, kept in the catalog (`afr_table`, schema v8). The network rule
+holds: only the build downloads; the app reads a file it is given.
+
 ### 8.3 Standards alignment
 
 Every rubric ships as a **versioned, citable file under `standards/`** with its source URL,

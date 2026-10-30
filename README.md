@@ -81,6 +81,9 @@ drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
 drivefusion drives list            # which physical drive each volume is on
 drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "Shelf B"
+drivefusion drives show 1            # what is known, and its estimated failure rate a year
+drivefusion standards list         # the failure-rate tables in force
+drivefusion standards import-afr data_Q3_2025.zip   # a Backblaze Drive Stats ZIP you downloaded
 drivefusion gui                    # the desktop window
 ```
 
@@ -163,6 +166,10 @@ Reading drive health with `smartctl` from [smartmontools](https://www.smartmonto
 (GPL-2.0-or-later) is built but **shelved**: the build doesn't bundle it, and neither the CLI
 nor the GUI offers a health read. How it would be pinned and checked is in
 [packaging/README-smartmontools.md](packaging/README-smartmontools.md).
+
+Failure rates come from [Backblaze Drive Stats](https://www.backblaze.com/cloud-storage/resources/hard-drive-test-data),
+credited as their source. The build pins one quarter by SHA-256 (`packaging/backblaze.json`);
+Settings imports a newer one you downloaded. Drive Fusion never downloads it itself.
 
 ## Development
 

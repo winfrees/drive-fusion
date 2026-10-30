@@ -62,6 +62,7 @@ helper_exe = EXE(
 # swapping dfscan-helper.exe can't swap the pin with it. Before elevating, the
 # GUI hashes the helper through a handle that denies writes and refuses any
 # difference (drivefusion/gui/elevation.py).
+import glob
 import hashlib
 
 with open(helper_exe.name, "rb") as built_helper:
@@ -75,6 +76,16 @@ VENDOR = os.path.join(ROOT, "packaging", "vendor")
 SMARTCTL = os.path.join(VENDOR, "smartctl.exe")
 SMARTCTL_SHA256 = None
 bundled_binaries, bundled_datas = [], []
+# Versioned AFR tables and factors (ROADMAP M5.4), read with importlib.resources.
+bundled_datas.append((os.path.join(ROOT, "drivefusion", "standards", "afr", "*.json"),
+                      os.path.join("drivefusion", "standards", "afr")))
+# The pinned Backblaze quarter as a fleet table, when tools/fetch_backblaze.py
+# has verified and converted it (CI always runs it; D13).
+FLEET_AFR = os.path.join(ROOT, "packaging", "vendor", "afr")
+if glob.glob(os.path.join(FLEET_AFR, "*.json")):
+    bundled_datas.append((os.path.join(FLEET_AFR, "*.json"),
+                          os.path.join("drivefusion", "standards", "afr")))
+print(f"fleet AFR tables: {sorted(os.listdir(FLEET_AFR)) if os.path.isdir(FLEET_AFR) else 'none'}")
 if os.path.isfile(SMARTCTL):
     with open(SMARTCTL, "rb") as vendored:
         SMARTCTL_SHA256 = hashlib.sha256(vendored.read()).hexdigest()
@@ -104,6 +115,7 @@ analysis = Analysis(
     hiddenimports=[
         "drivefusion_helper_pin",
         "drivefusion.cli.main",
+        "drivefusion.standards.afr",       # found by name, through importlib.resources
         # Reached only through `drivefusion gui`, so PyInstaller cannot see them.
         "drivefusion.gui.app",
         "drivefusion.gui.main_window",
