@@ -598,6 +598,13 @@ def _with_a_drive(window) -> int:
     return drive
 
 
+def test_the_dashboard_shows_expected_loss_with_its_confidence(window) -> None:
+    window.dashboard.refresh()
+    value = window.dashboard.tiles["expected_loss"].value.text()
+    assert value.endswith("(unknown)") or value.endswith("(estimated)")
+    assert "No SMART readings" in window.dashboard.detail.text()
+
+
 def test_each_drive_shows_its_estimated_failure_rate(window) -> None:
     from drivefusion.gui.screens.drives import COLUMNS
 

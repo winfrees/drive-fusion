@@ -235,7 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument(
         "kind", nargs="?", default="summary",
-        choices=("summary", "duplicates", "redundancy", "integrity"),
+        choices=("summary", "duplicates", "redundancy", "durability", "integrity"),
     )
     report.add_argument("--top", type=int, default=20, help="rows to show")
     report.add_argument(
@@ -550,11 +550,49 @@ def cmd_hash(args) -> int:
         return 1 if refused else 0
 
 
-def _print_group(catalog, group, *, show_paths: int = 4) -> None:
+def _drive_names(catalog, drive_ids) -> str:
+    if not drive_ids:
+        return "a volume whose drive is unverified"
+    names = []
+    for drive_id in drive_ids:
+        row = catalog.drive(drive_id)
+        names.append(f"drive {drive_id}" + (f" ({row['nickname'] or row['model']})"
+                                            if row and (row["nickname"] or row["model"]) else ""))
+    return ", ".join(names)
+
+
+def _print_exposure(catalog, found, *, top: int) -> None:
+    print(
+        f"\nexpected loss:       {_human_bytes(int(found.expected_bytes_per_year))} a year "
+        f"({found.confidence}; rates {', '.join(found.rate_tables[:1])}, "
+        f"model {found.model_version})"
+    )
+    if found.confidence != "measured":
+        print("  no SMART readings, so every drive's rate rests on its model, type, age "
+              "and bus alone")
+    for drive_set in found.sets[:top]:
+        if not drive_set.bytes:
+            continue
+        print(
+            f"  {_human_bytes(drive_set.bytes):>10} in {drive_set.items:,} item(s) only on "
+            f"{_drive_names(catalog, drive_set.drive_ids)}: P(loss) "
+            f"{drive_set.p_loss:.2%} a year → "
+            f"{_human_bytes(int(drive_set.expected_bytes_per_year))} a year "
+            f"({drive_set.confidence})"
+        )
+        for note in drive_set.assumptions:
+            print(f"              {note}")
+    if found.unhashed_files:
+        print(f"  left out: {found.unhashed_files:,} files not yet identified")
+
+
+def _print_group(catalog, group, *, show_paths: int = 4, risk=None) -> None:
     line = (
         f"{_human_bytes(group.size_bytes):>12}  "
         f"{group.paths} path(s) on {group.drives} drive(s)"
     )
+    if risk is not None:
+        line += f", P(loss) {risk.p_loss:.2%} a year ({risk.confidence})"
     if group.physical_copies != group.paths:
         # Hardlinks: fewer real copies than paths, and the difference matters.
         line += f", {group.physical_copies} physical copies"
@@ -619,17 +657,23 @@ def cmd_report(args) -> int:
                 f"{_human_bytes(summary['reclaimable_bytes'])}"
             )
 
+        if args.kind in ("summary", "redundancy", "durability"):
+            from drivefusion.core.health import durability
+
+            found = durability.exposure(catalog)
+            _print_exposure(catalog, found, top=args.top if args.kind == "durability" else 3)
+
         if args.kind in ("summary", "redundancy"):
-            exposed = under_protected(
-                catalog, min_copies=args.min_copies, limit=args.top
-            )
+            exposed = durability.ranked_under_protected(
+                catalog, under_protected(catalog, min_copies=args.min_copies), found
+            )[: args.top]
             if exposed:
                 print(
-                    f"\nheld on fewer than {args.min_copies} drives "
-                    f"(largest {len(exposed)}):"
+                    f"\nheld on fewer than {args.min_copies} drives, most bytes at risk "
+                    f"first ({len(exposed)}):"
                 )
-                for group in exposed:
-                    _print_group(catalog, group)
+                for group, risk in exposed:
+                    _print_group(catalog, group, risk=risk)
 
         if args.kind == "duplicates":
             groups = duplicate_groups(catalog, limit=args.top)

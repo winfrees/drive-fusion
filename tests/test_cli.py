@@ -491,6 +491,18 @@ def test_an_import_that_is_not_drive_stats_says_so(cli, tmp_path: Path, capsys) 
     assert cli("standards", "import-afr", str(bare)) == 2
 
 
+def test_the_durability_report_gives_expected_loss(cli, sample_tree: Path, capsys) -> None:
+    assert cli("--accept-disclaimer", "scope", "add", str(sample_tree)) == 0
+    assert cli("scan") == 0 and cli("hash") == 0
+    capsys.readouterr()
+    assert cli("report", "durability") == 0
+    out = capsys.readouterr().out
+    assert "expected loss:" in out and "a year (" in out and "P(loss)" in out
+    assert "no SMART readings" in out
+    assert cli("report", "redundancy") == 0
+    assert "most bytes at risk first" in capsys.readouterr().out
+
+
 def test_an_invalid_role_is_refused_by_the_parser(cli, capsys) -> None:
     with pytest.raises(SystemExit):
         cli("drives", "edit", "1", "--role", "backup")

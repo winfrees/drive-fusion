@@ -96,6 +96,12 @@ class DashboardScreen(QWidget):
                 "Content held on fewer distinct physical drives than your copy "
                 "target. This is the queue that matters.",
             ),
+            "expected_loss": Tile(
+                "Expected loss a year",
+                "Σ size × P(loss): the bytes you should expect to lose in a year, "
+                "given each drive's estimated failure rate and which copies could "
+                "fail together (same purchase batch or disaster zone).",
+            ),
             "reclaimable_bytes": Tile(
                 "Duplicated within one drive",
                 "Space with no durability benefit. A report, never an action — "
@@ -109,6 +115,7 @@ class DashboardScreen(QWidget):
             "duplicate_overhead_bytes",
             "under_protected_bytes",
             "reclaimable_bytes",
+            "expected_loss",
         )
         for position, key in enumerate(order):
             grid.addWidget(self.tiles[key], position // 3, position % 3)
@@ -150,6 +157,13 @@ class DashboardScreen(QWidget):
         ):
             self.tiles[key].set_value(human_bytes(summary[key]))
 
+        from drivefusion.core.health import durability
+
+        found = durability.exposure(catalog)
+        self.tiles["expected_loss"].set_value(
+            f"{human_bytes(int(found.expected_bytes_per_year))} ({found.confidence})")
+        worst = next((d for d in found.sets if d.bytes), None)
+
         live = counts["files"]
         # A file of unique size needs no hash to be counted: it is one copy.
         known = counts["identified"] + summary["single_copy_files"]
@@ -180,7 +194,12 @@ class DashboardScreen(QWidget):
             f"{summary['distinct_content']:,} distinct content items across "
             f"{summary['catalogued_paths']:,} paths · "
             f"{summary['under_protected_items']:,} items on fewer than 2 drives"
-            "<br><i>Reclamation figures are observations. Drive Fusion never "
+            + (f"<br>Most expected loss: {human_bytes(worst.bytes)} in {worst.items:,} "
+               f"item(s) on {len(worst.drive_ids) or 'an unverified'} drive(s), P(loss) "
+               f"{worst.p_loss:.2%} a year ({worst.confidence})" if worst else "")
+            + ("<br><i>No SMART readings: failure rates rest on each drive's model, "
+               "type, age and bus.</i>" if found.confidence != "measured" else "")
+            + "<br><i>Reclamation figures are observations. Drive Fusion never "
             "deletes and never emits a command that would.</i>"
         )
 

@@ -59,6 +59,7 @@ class Model:
     duty: dict[str, list]
     smart: dict[str, float]
     bus: dict[str, float]
+    correlation: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -129,7 +130,7 @@ def tables(catalog=None) -> tuple[RateTable, ...]:
 def model() -> Model:
     [data] = [d for d in _files() if d.get("kind") == "afr-model"]
     return Model(str(data["version"]), float(data["max_afr"]), data["age_years"],
-                 data["duty"], data["smart"], data["bus"])
+                 data["duty"], data["smart"], data["bus"], data.get("correlation", {}))
 
 
 # -- the factors, each pure --------------------------------------------------------

@@ -1,0 +1,143 @@
+{
+  "kind": "afr-model",
+  "source": "drivefusion",
+  "version": "2",
+  "title": "Drive Fusion failure-rate factors",
+  "note": "Multipliers on a drive's base AFR (PLAN \u00a78.2). Each is 1.0 when its input is unknown, so a missing fact never lowers a rate. Ranges are [from, to) with to = null meaning no upper bound. The values are Drive Fusion's own judgement, informed by the shape of published fleet statistics (infant mortality, a flat middle, wear-out from year 4); they are not measured and should be revised as data allows. Version 2 adds the correlation multipliers for copies that can fail together (PLAN \u00a78.2, ROADMAP M5.5).",
+  "max_afr": 0.95,
+  "age_years": {
+    "hdd": [
+      [
+        0,
+        1,
+        1.3
+      ],
+      [
+        1,
+        3,
+        0.9
+      ],
+      [
+        3,
+        4,
+        1.0
+      ],
+      [
+        4,
+        5,
+        1.3
+      ],
+      [
+        5,
+        6,
+        1.7
+      ],
+      [
+        6,
+        null,
+        2.2
+      ]
+    ],
+    "ssd": [
+      [
+        0,
+        1,
+        1.2
+      ],
+      [
+        1,
+        5,
+        1.0
+      ],
+      [
+        5,
+        null,
+        1.3
+      ]
+    ],
+    "unknown": [
+      [
+        0,
+        1,
+        1.3
+      ],
+      [
+        1,
+        3,
+        0.9
+      ],
+      [
+        3,
+        4,
+        1.0
+      ],
+      [
+        4,
+        5,
+        1.3
+      ],
+      [
+        5,
+        6,
+        1.7
+      ],
+      [
+        6,
+        null,
+        2.2
+      ]
+    ]
+  },
+  "duty": {
+    "hdd_power_on_hours": [
+      [
+        0,
+        20000,
+        1.0
+      ],
+      [
+        20000,
+        35000,
+        1.2
+      ],
+      [
+        35000,
+        null,
+        1.5
+      ]
+    ],
+    "ssd_life_remaining_percent": [
+      [
+        0,
+        10,
+        3.0
+      ],
+      [
+        10,
+        50,
+        1.5
+      ],
+      [
+        50,
+        null,
+        1.0
+      ]
+    ]
+  },
+  "smart": {
+    "pending": 10.0,
+    "uncorrectable": 5.0,
+    "reallocated": 2.0,
+    "reallocated_many": 4.0,
+    "reallocated_many_from": 100,
+    "crc": 1.2
+  },
+  "bus": {
+    "usb": 1.2
+  },
+  "correlation": {
+    "note": "P(loss) of content on drive set D is the product of the drives' AFRs, times same_batch^(k-1) for each group of k drives sharing a batch and same_zone^(k-1) for each group sharing a disaster zone, capped at the lowest single AFR (all copies can't be likelier to go than the safest one). Drives whose zone is unknown are assumed to share one: most collections sit in one place, and assuming otherwise would make them look safer. A batch needs the same maker, model and purchase month, so an unknown batch is not assumed shared.",
+    "same_batch": 5.0,
+    "same_zone": 10.0
+  }
+}
