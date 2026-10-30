@@ -495,3 +495,49 @@ def test_a_version_without_health_is_not_applicable(completed_run) -> None:
     v = _rejudge(manifest, observed, older)
     assert all(v[(t, "baseline")]["verdict"] == ev.NA
                for t in ("VV-HL-01", "VV-HL-02", "VV-HL-03", "VV-HL-04"))
+
+
+# -- collection inference (ROADMAP M6.2) ---------------------------------------------
+
+def test_the_collection_tests_run_and_pass(completed_run) -> None:
+    _manifest, _observed, results = completed_run
+    verdicts = _verdicts(results, phase="baseline")
+    for test_id in ("VV-COL-01", "VV-COL-02", "VV-COL-03", "VV-COL-04"):
+        r = verdicts[(test_id, "baseline")]
+        assert r["verdict"] == ev.PASS and r["checked"] > 0, (test_id, r)
+
+
+def _curation(obs):
+    return obs["phases"]["baseline"]["curation"]
+
+
+def test_evaluator_catches_an_assigned_collection(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    v = _rejudge(manifest, observed, lambda o: _curation(o).update(collections=1, rules=1))
+    assert v[("VV-COL-01", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_false_evidence(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def miscount(obs):
+        _curation(obs)["proposals"][0]["files"] += 1
+
+    assert _rejudge(manifest, observed, miscount)[("VV-COL-02", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_nested_proposals_and_a_whole_drive(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def nest(obs):
+        first = _curation(obs)["proposals"][0]
+        parent = first["path"].rsplit("/", 1)[0]
+        _curation(obs)["proposals"] += [{**first, "path": parent}, {**first, "path": ""}]
+
+    assert _rejudge(manifest, observed, nest)[("VV-COL-03", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_a_missed_project(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    v = _rejudge(manifest, observed, lambda o: _curation(o)["proposals"].pop())
+    assert v[("VV-COL-04", "baseline")]["verdict"] == ev.FAIL

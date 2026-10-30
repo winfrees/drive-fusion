@@ -863,6 +863,12 @@ confirmed**. Inference is a proposal engine, never an assignment:
   its under-protected share, and it is a legitimate permanent state for content you never
   intend to curate.
 
+**As built (ROADMAP M6.2):** `core/curate/infer.py`, one bottom-up pass over the tree. Score =
+size factor × (0.4 homogeneity + 0.35 time clustering + 0.25 series); a folder is proposed when it
+clears 0.6 and nothing inside it scores better, so proposals never nest and a scan root is never
+one. Evidence: reasons, signals, file and byte counts, date span, top types, sample names.
+`drivefusion collections propose` and `collections queue`.
+
 Crucially, **the planner does not wait for any of this** (§9): placement units fall back to
 directory subtrees drawn from `dir_rollup`, so consolidation planning works on day one, and
 confirmed collections simply make the units better.

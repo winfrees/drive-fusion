@@ -159,9 +159,13 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-HL-02 | §8.2 | Two copies on drives from one purchase batch have a higher P(loss) than the same drives from different batches; drives that can fail together (one batch, one disaster zone) are correlated as specified |
 | R-HL-03 | §8.2, ROADMAP M5.4–M5.5 | Each drive's failure rate, each drive set's P(loss) and the expected bytes lost a year equal independent arithmetic over the planted metadata and the shipped rate and factor tables |
 | R-HL-04 | §3.2, ROADMAP M5.3 | smartctl is never given a state-changing argument |
+| R-COL-01 | §8.4 | Inference only proposes: after it runs, no collection or membership rule exists that a person did not create |
+| R-COL-02 | §8.4 | Every proposal carries its evidence, and the evidence is true: file count, byte count and date span of the proposed subtree |
+| R-COL-03 | §8.4 | Proposals never nest, and no scan root is proposed |
+| R-COL-04 | §8.4 | Each folder of a planted project series is proposed as itself, not as an enclosing or enclosed folder |
 | R-VER-01 | §8.1 | *Planned (M6):* near-duplicates grouped into version sets. Test data is planted now; the test reports DEFERRED |
 
-Requirements for milestones not yet built (scorecards, the planner, exports) are not
+Requirements for milestones not yet built (the rest of M6, the planner, exports) are not
 listed. Each new milestone should add its requirements and tests here
 (§9).
 
@@ -220,6 +224,7 @@ support. `tests/test_vv.py` asserts that.
 | unreadable | A permission-denied file whose readable twin shares its size, so hashing *tries* to open it | R-CAT-06 |
 | drive-health | Per simulated device (not files): a purchase month, a disaster zone or none recorded, and what its SMART says: healthy, failing (48 reallocated, 8 pending, 2 uncorrectable) or hidden behind a bridge. Partitions of one device share it; an unidentified drive has none. Two identified devices are made one purchase batch (same maker, model and month). From its own random stream | R-HL-01, R-HL-03, R-HL-04 |
 | batch-copy | Content on the two batch drives and nowhere else | R-HL-02, R-HL-03 |
+| project-series | On one drive, `Projects/<topic> series/` holding 3–4 folders named `<year>-<month> <topic>`, each with 6–9 files of one type dated within 20 days of the folder's month. Planned last, so the rest of a seed's dataset is unchanged | R-COL-01…04 |
 | cross-batch-copy | Content on one batch drive and a drive from another batch | R-HL-02, R-HL-03 |
 
 ### 4.2 Between scans (the rescan phase)
@@ -305,6 +310,10 @@ tool's code would agree with the tool's bugs.
 | VV-HL-02 | baseline | R-HL-02 | Each multi-drive set's correlation equals the oracle's (same batch ×5, same zone ×10 per extra drive, as shipped), and the batch pair's P(loss) is higher than the oracle's for the same two drives from different batches. N/A with fewer than two identified devices |
 | VV-HL-03 | baseline | R-HL-03 | Each drive's AFR and confidence, each drive set's P(loss) and bytes, and the total expected loss equal the oracle's independent arithmetic. The oracle shares only the data (the tool's shipped rate and factor JSON), not the code |
 | VV-HL-04 | baseline | R-HL-04 | Every smartctl command the tool built for the planted reads uses no state-changing option (the bench's own list) |
+| VV-COL-01 | baseline | R-COL-01 | No collection and no rule exists after inference |
+| VV-COL-02 | baseline | R-COL-02 | Each proposal's file count, bytes and date span equal the manifest's for that subtree, and it has reasons and sample paths |
+| VV-COL-03 | baseline | R-COL-03 | No proposal is a drive root or inside another proposal |
+| VV-COL-04 | baseline | R-COL-04 | Every planted series folder is proposed exactly (an enclosing or enclosed proposal is named in the failure) |
 | VV-VER-01 | — | R-VER-01 | DEFERRED until M6 |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three

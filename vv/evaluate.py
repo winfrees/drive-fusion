@@ -140,6 +140,7 @@ class Evaluator:
             self.redundancy_tests(obs, exp, phases[name], name)
         if "baseline" in phases and "baseline" not in errors:
             self.health_tests(phases["baseline"])
+            self.curation_tests(phases["baseline"])
         if "verify" in errors or "verify" not in phases:
             self.phase_error("verify", errors.get("verify", "phase did not run"))
         else:
@@ -729,6 +730,83 @@ class Evaluator:
             if bad:
                 r.fail(f"smartctl would be run with {bad}: {' '.join(argv)}")
         r.finish("no SMART read was made (needs simulated drives with SMART planted)")
+
+    # -- R-COL ---------------------------------------------------------------------
+
+    def curation_tests(self, raw: dict) -> None:
+        import datetime as dt
+
+        phase = "baseline"
+        cur = raw.get("curation")
+        titles = {
+            "VV-COL-01": ("Inference only proposes", ["R-COL-01"]),
+            "VV-COL-02": ("Every proposal's evidence is true", ["R-COL-02"]),
+            "VV-COL-03": ("Proposals never nest; no scan root is proposed", ["R-COL-03"]),
+            "VV-COL-04": ("A planted project series is proposed folder by folder", ["R-COL-04"]),
+        }
+        if cur is None:
+            for test_id, (title, reqs) in titles.items():
+                self.new(test_id, title, reqs, phase).finish(
+                    "this version has no collection inference (before M6.2)")
+            return
+        proposals = cur["proposals"]
+
+        r = self.new("VV-COL-01", *titles["VV-COL-01"], phase)
+        r.checked = 1
+        if cur["collections"] or cur["rules"]:
+            r.fail(f"after inference: {cur['collections']} collection(s) and {cur['rules']} "
+                   "rule(s), none created by a person")
+        r.finish()
+
+        def month(ns: int) -> str:
+            return dt.datetime.fromtimestamp(ns / 1e9, dt.timezone.utc).strftime("%Y-%m")
+
+        r = self.new("VV-COL-02", *titles["VV-COL-02"], phase)
+        sizes = self.manifest["contents"]
+        for p in proposals:
+            r.checked += 1
+            prefix = f"{p['path']}/" if p["path"] else ""
+            under = [f for f in self.manifest["files"]
+                     if f["drive"] == p["drive"] and f["path"].startswith(prefix)]
+            files = len(under)
+            size = sum(sizes[f["content"]]["size"] for f in under)
+            months = sorted(month(f["mtime_ns"]) for f in under if f.get("mtime_ns") is not None)
+            span = [months[0], months[-1]] if months else None
+            label = f"{p['drive']}:{p['path']}"
+            if (p["files"], p["bytes"]) != (files, size):
+                r.fail(f"{label}: evidence says {p['files']} file(s), {p['bytes']:,} bytes; "
+                       f"truly {files}, {size:,}")
+            if p["date_span"] != span:
+                r.fail(f"{label}: evidence dates {p['date_span']}, truly {span}")
+            if not p["has_evidence"]:
+                r.fail(f"{label}: proposed without reasons or sample paths")
+        r.finish("nothing was proposed")
+
+        r = self.new("VV-COL-03", *titles["VV-COL-03"], phase)
+        keys = {(p["drive"], p["path"]) for p in proposals}
+        for drive, path in sorted(keys):
+            r.checked += 1
+            if path == "":
+                r.fail(f"{drive}: the whole drive was proposed as a collection")
+            parts = path.split("/")
+            for i in range(1, len(parts)):
+                if (drive, "/".join(parts[:i])) in keys:
+                    r.fail(f"{drive}:{path} proposed inside {drive}:{'/'.join(parts[:i])}")
+        r.finish("nothing was proposed")
+
+        r = self.new("VV-COL-04", *titles["VV-COL-04"], phase)
+        for scenario in self.manifest["scenarios"]:
+            if scenario["kind"] != "project-series":
+                continue
+            for drive, folder in scenario["folders"]:
+                r.checked += 1
+                if (drive, folder) in keys:
+                    continue
+                nearby = sorted(p for d, p in keys if d == drive and
+                                (folder.startswith(p + "/") or p.startswith(folder + "/")))
+                r.fail(f"{drive}:{folder} not proposed"
+                       + (f" (proposed instead: {nearby})" if nearby else ""))
+        r.finish("no project series planted (dataset from before M6.2)")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

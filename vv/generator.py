@@ -66,6 +66,7 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "edit-before-verify": ("R-FIX-04",),
     "drive-health": ("R-HL-01", "R-HL-03", "R-HL-04"),
     "batch-copy": ("R-HL-02", "R-HL-03"),
+    "project-series": ("R-COL-01", "R-COL-02", "R-COL-03", "R-COL-04"),
     "cross-batch-copy": ("R-HL-02", "R-HL-03"),
 }
 
@@ -345,6 +346,32 @@ class Builder:
             s = self.scenario("unverified-copy", "on a known drive and an unidentified one")
             self.place(r.choice(known), key, s)
             self.place(drive, key, s)
+
+    def project_series(self) -> None:
+        """R-COL-04: a run of project folders a person would call collections.
+
+        Three to four folders named alike with a date (``2021-03 Lake Survey``),
+        each holding one file type whose dates fall within a few weeks, under a
+        parent of their own. Planned last, like ``health_copies``.
+        """
+        r = self.rng
+        drive = r.choice(self.ids)
+        topic, ext = r.choice((("Lake Survey", "csv"), ("Field Plots", "csv"),
+                               ("Sky Survey", "fits"), ("Interviews", "txt")))
+        parent = f"Projects/{topic} series"
+        year = r.randint(2014, 2024)
+        s = self.scenario("project-series", f"{parent} on {drive}")
+        s["folders"] = []
+        for month in r.sample(range(1, 13), r.randint(3, 4)):
+            folder = self.mkdir(drive, f"{parent}/{year}-{month:02d} {topic}", s["id"])
+            s["folders"].append([drive, folder])
+            start = dt.datetime(year, month, 2, tzinfo=dt.timezone.utc).timestamp()
+            for n in range(r.randint(6, 9)):
+                key = self.new_content(ext)
+                when = int(start + r.uniform(0, 20 * 86400)) // 2 * 2
+                self.place(drive, key, s, directory=folder,
+                           name=f"{topic.split()[0].lower()}_{n:02d}.{ext}",
+                           mtime_ns=when * 1_000_000_000)
 
     def health_copies(self) -> None:
         """R-HL-02: two copies on one purchase batch, and two across batches.
@@ -1014,6 +1041,7 @@ def build(seed: int, drives: list[dict], *, files_per_drive: int, large_files: i
     # Last, so every earlier random draw, and so the rest of the dataset, is
     # what it was before M5.7 for the same seed.
     b.health_copies()
+    b.project_series()
     return b.manifest(mode, params)
 
 
