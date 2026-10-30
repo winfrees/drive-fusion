@@ -125,7 +125,12 @@ def cmd_generate(args) -> Path:
 
 
 def _plan(args, seed, rng, mode, roots, sizes, out) -> dict:
-    fs_mix = ["NTFS", "exFAT"] * len(roots)
+    # Half each, the odd drive out drawn at random, then shuffled: any two or
+    # more simulated drives include both filesystems, so the link scenarios
+    # always have an NTFS drive to land on.
+    fs_mix = ["NTFS", "exFAT"] * (len(roots) // 2)
+    if len(roots) % 2:
+        fs_mix.append(rng.choice(["NTFS", "exFAT"]))
     rng.shuffle(fs_mix)
     drives = []
     for index, (drive_id, root) in enumerate(roots.items(), start=1):

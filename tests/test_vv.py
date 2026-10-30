@@ -83,6 +83,20 @@ def test_a_seed_reproduces_its_dataset_exactly(tmp_path: Path) -> None:
     assert _tree_digest(a) == _tree_digest(b)
 
 
+@pytest.mark.parametrize("drives", [2, 4])
+def test_every_simulated_dataset_mixes_ntfs_and_exfat(tmp_path: Path, drives: int) -> None:
+    """An all-exFAT set would leave the hardlink and symlink tests N/A for the run."""
+    # 130684304893382 drew four exFAT drives under the old 2N-slice mix.
+    for seed in [130684304893382, *range(40)]:
+        out = tmp_path / f"s{seed}"
+        assert vv_main(["generate", "--out", str(out), "--files-per-drive", "1",
+                        "--large-files", "0", "--drives", str(drives),
+                        "--seed", str(seed)]) == 0
+        fs = [d["fs"] for d in runner.load_manifest(out)["drives"]]
+        assert sorted(fs).count("NTFS") == drives // 2, f"seed {seed}: {fs}"
+        assert {"NTFS", "exFAT"} <= set(fs), f"seed {seed}: {fs}"
+
+
 def test_every_requirement_is_planted(tmp_path: Path) -> None:
     """A dataset that omits a scenario silently stops testing a requirement."""
     manifest = _generate(tmp_path / "ds", "--drives", "3")
