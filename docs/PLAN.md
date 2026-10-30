@@ -789,7 +789,10 @@ parameters are versioned files under `drivefusion/standards/afr/`; each factor i
 input is unknown. With SMART shelved (D11), duty and SMART factors are 1.0 and confidence is
 `estimated` (or `unknown` when neither model, media nor purchase date is known). Until a
 Backblaze snapshot is imported with `tools/import_backblaze.py`, base rates are provisional
-media-class values (D12).
+media-class values (D12). Per D13 the build pins a Backblaze quarter
+(`packaging/backblaze.json`), and Settings or `drivefusion standards import-afr` imports a
+newer ZIP the user downloaded, kept in the catalog (`afr_table`, schema v8). The network rule
+holds: only the build downloads; the app reads a file it is given.
 
 ### 8.3 Standards alignment
 

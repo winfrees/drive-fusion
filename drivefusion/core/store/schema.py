@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -283,6 +283,16 @@ CREATE TABLE IF NOT EXISTS drive_health (
 );
 CREATE INDEX IF NOT EXISTS ix_drive_health_drive ON drive_health(drive_id, observed_at);
 
+-- AFR tables the user imported from a Drive Stats download (ROADMAP M5.4).
+-- The shipped tables are package data; these sit beside them, kept in the
+-- catalog because it is the one place Drive Fusion writes.
+CREATE TABLE IF NOT EXISTS afr_table (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT UNIQUE NOT NULL,     -- <source>-<version>
+    imported_at TEXT NOT NULL,
+    table_json  TEXT NOT NULL
+);
+
 -- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
 -- change made around these; they stop the ordinary ones.
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
@@ -312,6 +322,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     6: (),
     # v7 adds the drive_health table, likewise.
     7: (),
+    # v8 adds the afr_table table, likewise.
+    8: (),
 }
 
 

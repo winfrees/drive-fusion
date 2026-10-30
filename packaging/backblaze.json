@@ -1,0 +1,8 @@
+{
+  "comment": "The Backblaze Drive Stats quarter every build ships as its fleet AFR table (ROADMAP M5.4, D13). tools/fetch_backblaze.py downloads it at build time, refuses it unless its SHA-256 is the pinned one, and turns it into rates-backblaze-<version>.json. With sha256 null the build ships no fleet table and prints the download's hash for pinning. Drive Fusion itself never downloads anything.",
+  "version": "2025Q2",
+  "url": "https://f001.backblazeb2.com/file/Backblaze-Hard-Drive-Data/data_Q2_2025.zip",
+  "sha256": null,
+  "retrieved": "2026-10-30",
+  "min_drive_days": 36500
+}

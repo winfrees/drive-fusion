@@ -125,11 +125,11 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
 
     from drivefusion.gui.main_window import PLANNED
 
-    assert window.stack.count() == 4
-    assert window.nav.count() == 4 + len(PLANNED)
+    assert window.stack.count() == 5
+    assert window.nav.count() == 5 + len(PLANNED)
 
     for offset, (name, milestone) in enumerate(PLANNED):
-        item = window.nav.item(4 + offset)
+        item = window.nav.item(5 + offset)
         assert name in item.text()
         assert milestone in item.text()
         assert item.flags() == Qt.NoItemFlags, "a pending screen must not be clickable"
@@ -648,6 +648,43 @@ def test_a_bad_value_in_the_dialog_is_refused_and_nothing_is_saved(window, monke
     assert not window.drives.save_drive(drive, {"purchase-date": "14/03/2021", "role": "archive"})
     assert "not a date" in warnings[0]
     assert window.session.catalog().drive(drive)["role"] is None
+
+
+# -- settings: failure-rate data (ROADMAP M5.4) ---------------------------------------
+
+def test_settings_imports_a_drive_stats_file_as_a_task(window, tmp_path: Path) -> None:
+    from drivefusion.gui.workers import Cancellation
+
+    stats = tmp_path / "data_Q3_2025.csv"
+    rows = ["date,serial_number,model,capacity_bytes,failure"]
+    rows += [f"2025-07-01,S{i},ST4000DM000,4000787030016,{int(i < 2)}" for i in range(40_000)]
+    stats.write_text("\n".join(rows) + "\n")
+    screen = window.settings
+    names = [screen.tree.topLevelItem(i).text(0) for i in range(screen.tree.topLevelItemCount())]
+    assert "provisional-1" in names and not screen.forget_button.isEnabled()
+
+    emitted = []
+    screen.importRequested.disconnect()
+    screen.importRequested.connect(emitted.append)
+    screen.start_import([stats])
+    [body] = emitted
+    reports = []
+    with Catalog(window.session.path) as catalog:
+        assert body(catalog, reports.append, Cancellation()) == "backblaze-2025Q3"
+    assert reports[0].message == "Reading data_Q3_2025.csv"
+
+    screen.refresh()
+    top = screen.tree.topLevelItem(0)
+    assert top.text(0) == "backblaze-2025Q3" and top.text(2).startswith("imported")
+    screen.tree.setCurrentItem(top)
+    assert screen.forget_button.isEnabled()
+
+
+def test_the_tools_menu_opens_settings(window) -> None:
+    [menu] = [a for a in window.menuBar().actions() if "Tools" in a.text()]
+    [action] = menu.menu().actions()
+    action.trigger()
+    assert window.stack.currentWidget() is window.settings
 
 
 # -- drive health (ROADMAP M5.3) ---------------------------------------------------

@@ -461,6 +461,36 @@ def test_drives_edit_and_show(cli, sample_tree: Path, capsys) -> None:
     assert cli("drives", "show", "99") == 1
 
 
+def test_failure_rates_are_imported_from_a_file_listed_and_forgotten(
+        cli, tmp_path: Path, capsys) -> None:
+    stats = tmp_path / "data_Q3_2025.csv"
+    rows = ["date,serial_number,model,capacity_bytes,failure"]
+    rows += [f"2025-07-01,S{i},ST4000DM000,4000787030016,{int(i < 2)}" for i in range(40_000)]
+    stats.write_text("\n".join(rows) + "\n")
+
+    assert cli("standards", "import-afr", str(stats)) == 0
+    assert "imported backblaze-2025Q3: 1 models" in capsys.readouterr().out
+    assert cli("standards", "list") == 0
+    out = capsys.readouterr().out
+    assert out.index("backblaze-2025Q3: fleet, imported") < out.index("provisional-1: provisional, shipped")
+
+    assert cli("standards", "forget", "provisional-1") == 1
+    assert cli("standards", "forget", "backblaze-2025Q3") == 0
+    capsys.readouterr()
+    assert cli("standards", "list") == 0
+    assert "backblaze-2025Q3" not in capsys.readouterr().out
+
+
+def test_an_import_that_is_not_drive_stats_says_so(cli, tmp_path: Path, capsys) -> None:
+    other = tmp_path / "data_Q3_2025.csv"
+    other.write_text("name,size\nx,1\n")
+    assert cli("standards", "import-afr", str(other)) == 1
+    assert "no model and failure columns" in capsys.readouterr().err
+    bare = tmp_path / "stats.csv"
+    bare.write_text("x")
+    assert cli("standards", "import-afr", str(bare)) == 2
+
+
 def test_an_invalid_role_is_refused_by_the_parser(cli, capsys) -> None:
     with pytest.raises(SystemExit):
         cli("drives", "edit", "1", "--role", "backup")

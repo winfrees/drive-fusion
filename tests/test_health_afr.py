@@ -57,14 +57,14 @@ def test_fleet_statistics_outrank_placeholders(monkeypatch) -> None:
          "classes": {"hdd": 0.012}},
     ]
     monkeypatch.setattr(afr, "_files", lambda: files)
-    afr.tables.cache_clear()
+    afr.shipped_tables.cache_clear()
     try:
         ordered = afr.tables()
         assert [t.name for t in ordered] == ["backblaze-2025Q2", "provisional-1"]
         assert afr.base_afr(None, "hdd", ordered)[0] == 0.012
         assert afr.base_afr(None, None, ordered)[0] == 0.015, "fallback from the next table"
     finally:
-        afr.tables.cache_clear()
+        afr.shipped_tables.cache_clear()
 
 
 # -- base rate ------------------------------------------------------------------------
@@ -202,3 +202,69 @@ def test_the_importer_computes_afr_per_model(tmp_path: Path) -> None:
     assert data["classes"]["hdd"] == pytest.approx(3 / (733 / 365), abs=1e-6)
     assert data["basis"] == "fleet" and len(data["inputs"]["2025-04.csv"]) == 64
     assert afr.rate_table(data).models[0] == ("ST4000DM000", entry["afr"])
+
+
+def test_a_quarter_is_read_from_the_file_name() -> None:
+    from drivefusion.core.health import backblaze
+
+    assert backblaze.version_from_name("data_Q2_2025.zip") == "2025Q2"
+    assert backblaze.version_from_name("data_2024.zip") == "2024"
+    assert backblaze.version_from_name("stats.zip") is None
+
+
+def test_a_zip_is_read_member_by_member(tmp_path: Path) -> None:
+    import zipfile
+
+    from drivefusion.core.health import backblaze
+
+    for day in (1, 2):
+        _write_stats(tmp_path / f"2025-04-0{day}.csv",
+                     [("ST4000DM000", f"S{i}", int(day == 2 and i == 0)) for i in range(10)])
+    archive = tmp_path / "data_Q2_2025.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for day in (1, 2):
+            z.write(tmp_path / f"2025-04-0{day}.csv", f"data_Q2_2025/2025-04-0{day}.csv")
+        z.writestr("__MACOSX/._junk.csv", "junk")
+    seen = []
+    table = backblaze.import_files([archive], version="2025Q2", retrieved="2026-10-30",
+                                   min_drive_days=1, on_file=seen.append)
+    assert seen == ["data_Q2_2025/2025-04-01.csv", "data_Q2_2025/2025-04-02.csv"]
+    assert table["models"][0]["drive_days"] == 20 and table["models"][0]["failures"] == 1
+
+
+def test_something_else_is_refused(tmp_path: Path) -> None:
+    from drivefusion.core.health import backblaze
+
+    other = tmp_path / "other.csv"
+    other.write_text("name,size\nx,1\n")
+    with pytest.raises(backblaze.DriveStatsError, match="no model and failure columns"):
+        backblaze.import_files([other], version="1", retrieved="2026-10-30")
+
+
+# -- imported tables, kept in the catalog -----------------------------------------------
+
+def _fleet(version: str, afr_value: float) -> dict:
+    return {"kind": "afr-rates", "source": "backblaze", "version": version, "basis": "fleet",
+            "classes": {"hdd": afr_value}, "models": [{"model": "ST4000DM000", "afr": afr_value}],
+            "inputs": {"data.zip": "0" * 64}}
+
+
+def test_an_imported_table_is_kept_audited_and_outranks_the_rest(tmp_path: Path) -> None:
+    from drivefusion.core.store import audit
+    from drivefusion.core.store.catalog import Catalog
+
+    with Catalog(tmp_path / "catalog.db") as catalog:
+        assert catalog.import_afr_table(_fleet("2025Q2", 0.02)) == "backblaze-2025Q2"
+        assert catalog.import_afr_table(_fleet("2025Q3", 0.03)) == "backblaze-2025Q3"
+        catalog.import_afr_table(_fleet("2025Q3", 0.04))           # replaces, not duplicates
+        names = [t.name for t in afr.tables(catalog)]
+        assert names[:2] == ["backblaze-2025Q3", "backblaze-2025Q2"], "newest fleet first"
+        assert names[-1] == "provisional-1"
+        assert afr.base_afr("ST4000DM000", "hdd", afr.tables(catalog))[0] == 0.04
+        entry = audit.entries(catalog.conn, limit=1)[0]
+        assert entry["action"] == "afr.import"
+        assert json.loads(entry["detail_json"])["replaced"] is True
+
+        assert catalog.forget_afr_table("backblaze-2025Q3")
+        assert not catalog.forget_afr_table("provisional-1"), "shipped tables stay"
+        assert afr.tables(catalog)[0].name == "backblaze-2025Q2"

@@ -100,11 +100,29 @@ def rate_table(data: dict) -> RateTable:
 
 
 @lru_cache(maxsize=1)
-def tables() -> tuple[RateTable, ...]:
-    """Every shipped rate table, best basis first."""
-    found = [rate_table(d) for d in _files() if d.get("kind") == "afr-rates"]
-    rank = {basis: i for i, basis in enumerate(BASIS_ORDER)}
-    return tuple(sorted(found, key=lambda t: (rank.get(t.basis, len(rank)), t.name)))
+def shipped_tables() -> tuple[RateTable, ...]:
+    """The rate tables this build ships: provisional ones, plus the Backblaze
+    snapshot the build pinned (``tools/fetch_backblaze.py``), if any."""
+    return tuple(rate_table(d) for d in _files() if d.get("kind") == "afr-rates")
+
+
+def rank(found) -> tuple[RateTable, ...]:
+    """Best basis first; within a basis, the newest version first."""
+    order = {basis: i for i, basis in enumerate(BASIS_ORDER)}
+    newest_first = sorted(found, key=lambda t: t.version, reverse=True)
+    return tuple(sorted(newest_first, key=lambda t: order.get(t.basis, len(order))))
+
+
+def tables(catalog=None) -> tuple[RateTable, ...]:
+    """Every rate table in force, best first: the shipped ones and, given a
+    catalog, the ones the user imported (an import of the same source and
+    version replaces the shipped table)."""
+    found = {t.name: t for t in shipped_tables()}
+    if catalog is not None:
+        for row in catalog.afr_tables():
+            table = rate_table(json.loads(row["table_json"]))
+            found[table.name] = table
+    return rank(found.values())
 
 
 @lru_cache(maxsize=1)

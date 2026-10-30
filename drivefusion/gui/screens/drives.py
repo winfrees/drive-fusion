@@ -149,6 +149,7 @@ class DrivesScreen(QWidget):
         self.tree.clear()
 
         unmapped = 0
+        rate_tables = afr.tables(self.session.catalog())
         for row in rows:
             if row["drive_id"] is None:
                 unmapped += 1
@@ -190,7 +191,8 @@ class DrivesScreen(QWidget):
             )
             if row["drive_id"] is not None:
                 risk = afr.drive_risk(
-                    row, health=smart.latest(self.session.catalog(), row["drive_id"]))
+                    row, health=smart.latest(self.session.catalog(), row["drive_id"]),
+                    rate_tables=rate_tables)
                 column = COLUMNS.index("Failure rate")
                 item.setText(column, f"{risk.afr:.1%}/yr ({risk.confidence})")
                 item.setToolTip(column, "\n".join(
