@@ -467,6 +467,12 @@ Concurrency for **body reads** is set per device from the discovered media type:
 for HDD** (more only adds seek thrash), **4–8 for SSD/NVMe** — distinct from the metadata
 enumeration pool in §6.4. Scans checkpoint continuously, so an unplugged cable costs seconds,
 not a pass.
+**As built (ROADMAP M5.6):** `core/identity/readers.py`. Each physical drive gets its own
+pool: HDD 2 readers for quick hashes and 1 for full hashes (long sequential reads), SSD 6 and
+4, unknown media or an unverified drive 2. A volume whose drive is unverified is its own
+device. Files are handed out in layout order, so a single reader reads in that order. Only the
+reads run on the pools; the calling thread writes the catalog. On cancel or error no new read
+starts, and running reads are waited for.
 
 ### 6.7 Windows realities the design must handle
 
