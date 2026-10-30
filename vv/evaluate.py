@@ -138,6 +138,8 @@ class Evaluator:
             self.dirs_test(obs, exp, name)
             self.identity_tests(obs, exp, name)
             self.redundancy_tests(obs, exp, phases[name], name)
+        if "baseline" in phases and "baseline" not in errors:
+            self.health_tests(phases["baseline"])
         if "verify" in errors or "verify" not in phases:
             self.phase_error("verify", errors.get("verify", "phase did not run"))
         else:
@@ -600,6 +602,133 @@ class Evaluator:
                 r.fail(f"{_fmt(key)}: incident says {inc['other_copies']} drive(s) hold it, "
                        f"truly {drives}")
         r.finish("no corruption was reported to check")
+
+    # -- R-HL --------------------------------------------------------------------
+
+    #: smartctl options that change a drive, as the bench understands them.
+    SMARTCTL_STATE_CHANGING = ("-t", "--test", "-s", "--smart", "-o", "--offlineauto",
+                               "-S", "--saveauto", "--set", "-X", "--abort", "-C", "--captive")
+
+    def health_tests(self, raw: dict) -> None:
+        import datetime as dt
+
+        phase = "baseline"
+        health = raw.get("health")
+        titles = {
+            "VV-HL-01": ("No SMART is unknown, never a number", ["R-HL-01"]),
+            "VV-HL-02": ("Copies that can fail together are worth less", ["R-HL-02"]),
+            "VV-HL-03": ("Failure rates and expected loss equal independent arithmetic",
+                         ["R-HL-03"]),
+            "VV-HL-04": ("smartctl is only ever given read-only options", ["R-HL-04"]),
+        }
+        if health is None or self.manifest["mode"] != "simulated":
+            for test_id, (title, reqs) in titles.items():
+                r = self.new(test_id, title, reqs, phase)
+                r.finish("this version has no drive health or durability (before M5.5)"
+                         if health is None else
+                         "simulated mode only: real drives carry no planted metadata, and "
+                         "their bus and model aren't known to the oracle")
+            return
+        planted = {d["id"]: d for d in self.manifest["drives"] if d.get("health")}
+        today = dt.date.fromisoformat(health["today"])
+        standards = oracle.load_standards(self.observed["tool"]["source"])
+
+        r = self.new("VV-HL-01", *titles["VV-HL-01"], phase)
+        from vv.smart_mock import FAILING
+        for drive_id, drive in sorted(planted.items()):
+            got = health["drives"].get(drive_id)
+            if got is None:
+                continue
+            r.checked += 1
+            kind, row = drive["health"]["smart"], got["health"]
+            if row is None:
+                r.fail(f"{drive_id}: no health reading recorded")
+            elif kind == "hidden":
+                numbers = {k: v for k, v in row.items()
+                           if k != "confidence" and v is not None}
+                if row["confidence"] != "unknown" or numbers:
+                    r.fail(f"{drive_id}: no SMART data, recorded as {row['confidence']} "
+                           f"with {numbers}")
+                if got["confidence"] == "measured":
+                    r.fail(f"{drive_id}: failure rate labelled measured without SMART")
+            else:
+                want = FAILING if kind == "failing" else dict.fromkeys(FAILING, 0)
+                want = {**want, "power_on_hours": drive["health"]["power_on_hours"]}
+                wrong = {k: (row[k], v) for k, v in want.items() if row[k] != v}
+                if row["confidence"] != "measured" or wrong:
+                    r.fail(f"{drive_id}: {kind} SMART recorded as {row['confidence']}, "
+                           f"(recorded, reported) differ for {wrong}")
+        r.finish("no simulated drive with SMART planted (needs simulated mode)")
+
+        exp = oracle.durability(self.manifest, self.exp["baseline"], standards, today)
+        device, _unknown = oracle._drive_identity(self.manifest)
+        observed_sets = {frozenset(device[n] for n in s["drives"]): s for s in health["sets"]}
+
+        r = self.new("VV-HL-02", *titles["VV-HL-02"], phase)
+        pairs = {}
+        for scenario in self.manifest["scenarios"]:
+            if scenario["kind"] in ("batch-copy", "cross-batch-copy"):
+                pairs[scenario["kind"]] = frozenset(device[m[0]] for m in scenario["members"])
+        for devs, want in sorted(exp["sets"].items(), key=lambda x: sorted(x[0])):
+            if len(devs) < 2 or devs not in observed_sets:
+                continue
+            r.checked += 1
+            got = observed_sets[devs]["correlation"]
+            if abs(got - want["correlation"]) > 1e-9 * want["correlation"]:
+                r.fail(f"drives {sorted(devs)}: correlation {got:g}, expected "
+                       f"{want['correlation']:g}")
+        batch = pairs.get("batch-copy")
+        if batch is not None and batch in observed_sets:
+            # The same two drives, as if bought from different batches: only
+            # the batch differs, so only the batch can explain the difference.
+            r.checked += 1
+            heads = {}
+            for d in self.manifest["drives"]:
+                heads.setdefault(device[d["id"]], d)
+            apart = [dict(heads[x]) for x in sorted(batch)]
+            apart[1]["manufacturer"] = f"{apart[1]['manufacturer']} (another batch)"
+            unbatched = oracle.set_loss(apart, standards, today)["p_loss"]
+            got = observed_sets[batch]["p_loss"]
+            rates = [oracle.drive_rate(d, standards, today)["afr"] for d in apart]
+            capped = got >= min(rates) - 1e-15
+            if not (got > unbatched or (capped and got >= unbatched)):
+                r.fail(f"two copies on one purchase batch (drives {sorted(batch)}): P(loss) "
+                       f"{got:.3e}, no worse than {unbatched:.3e} for the same drives "
+                       "from different batches")
+        r.finish("needs two identified simulated devices")
+
+        r = self.new("VV-HL-03", *titles["VV-HL-03"], phase)
+        for drive_id, got in sorted(health["drives"].items()):
+            drive = next(d for d in self.manifest["drives"] if d["id"] == drive_id)
+            want = oracle.drive_rate(drive, standards, today)
+            r.checked += 1
+            if abs(got["afr"] - want["afr"]) > 1e-9 or got["confidence"] != want["confidence"]:
+                r.fail(f"{drive_id}: AFR {got['afr']:.6f} ({got['confidence']}), expected "
+                       f"{want['afr']:.6f} ({want['confidence']})")
+        for devs, want in sorted(exp["sets"].items(), key=lambda x: sorted(x[0])):
+            r.checked += 1
+            got = observed_sets.get(devs)
+            if got is None:
+                r.fail(f"drives {sorted(devs) or ['unverified']}: no P(loss) reported "
+                       f"for {want['bytes']:,} bytes")
+            elif abs(got["p_loss"] - want["p_loss"]) > 1e-12 or got["bytes"] != want["bytes"]:
+                r.fail(f"drives {sorted(devs) or ['unverified']}: P(loss) {got['p_loss']:.3e} "
+                       f"over {got['bytes']:,} bytes, expected {want['p_loss']:.3e} over "
+                       f"{want['bytes']:,}")
+        total = exp["expected_bytes_per_year"]
+        r.checked += 1
+        if abs(health["expected_bytes_per_year"] - total) > 1e-9 * max(1.0, total):
+            r.fail(f"expected loss {health['expected_bytes_per_year']:,.3f} bytes a year, "
+                   f"independently {total:,.3f}")
+        r.finish()
+
+        r = self.new("VV-HL-04", *titles["VV-HL-04"], phase)
+        for argv in health["smart_argvs"]:
+            r.checked += 1
+            bad = [a for a in argv[1:] if a.split("=", 1)[0] in self.SMARTCTL_STATE_CHANGING]
+            if bad:
+                r.fail(f"smartctl would be run with {bad}: {' '.join(argv)}")
+        r.finish("no SMART read was made (needs simulated drives with SMART planted)")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

@@ -151,6 +151,7 @@ def _plan(args, seed, rng, mode, roots, sizes, out) -> dict:
         drives.append(drive)
     if mode == "simulated":
         generator.assign_devices(drives, seed)
+        generator.assign_health(drives, seed)
 
     params = {"files_per_drive": args.files_per_drive, "large_files": args.large_files,
               "drive_sizes": {d: s for d, s in sizes.items() if s}}

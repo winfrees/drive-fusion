@@ -433,3 +433,65 @@ def test_the_product_never_imports_the_bench() -> None:
                  if "import vv" in p.read_text(encoding="utf-8")
                  or "from vv" in p.read_text(encoding="utf-8")]
     assert not offenders
+
+
+# -- drive health and durability (ROADMAP M5.7) ------------------------------------
+
+def test_the_health_tests_run_and_pass(completed_run) -> None:
+    _manifest, _observed, results = completed_run
+    verdicts = _verdicts(results, phase="baseline")
+    for test_id in ("VV-HL-01", "VV-HL-02", "VV-HL-03", "VV-HL-04"):
+        r = verdicts[(test_id, "baseline")]
+        assert r["verdict"] == ev.PASS and r["checked"] > 0, (test_id, r)
+
+
+def test_evaluator_catches_a_wrong_expected_loss(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def inflate(obs):
+        obs["phases"]["baseline"]["health"]["expected_bytes_per_year"] *= 1.01
+
+    assert _rejudge(manifest, observed, inflate)[("VV-HL-03", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_a_batch_that_was_not_counted(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def uncorrelate(obs):
+        for s in obs["phases"]["baseline"]["health"]["sets"]:
+            if len(s["drives"]) > 1:
+                s["correlation"] = 1.0
+
+    assert _rejudge(manifest, observed, uncorrelate)[("VV-HL-02", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_zeros_recorded_for_missing_smart(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def zeros(obs):
+        for drive in obs["phases"]["baseline"]["health"]["drives"].values():
+            if drive["health"] is not None:
+                drive["health"].update(confidence="unknown", reallocated=0, pending=0)
+
+    assert _rejudge(manifest, observed, zeros)[("VV-HL-01", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_a_state_changing_smartctl_option(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def self_test(obs):
+        obs["phases"]["baseline"]["health"]["smart_argvs"].append(
+            ["smartctl.exe", "--test=long", "/dev/pd1"])
+
+    assert _rejudge(manifest, observed, self_test)[("VV-HL-04", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_a_version_without_health_is_not_applicable(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def older(obs):
+        obs["phases"]["baseline"]["health"] = None
+
+    v = _rejudge(manifest, observed, older)
+    assert all(v[(t, "baseline")]["verdict"] == ev.NA
+               for t in ("VV-HL-01", "VV-HL-02", "VV-HL-03", "VV-HL-04"))

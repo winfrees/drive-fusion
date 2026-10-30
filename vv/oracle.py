@@ -268,3 +268,129 @@ def summary_json(exp: dict) -> dict:
             "min_checked": exp["verify"]["min_checked"],
         },
     }
+
+
+# -- health and durability (ROADMAP M5.7) -------------------------------------------
+#
+# Independent of the tool's code: the formulas of PLAN §8.2 worked out again
+# here, over the planted drive metadata. Only the *data* is shared: the rate
+# and factor tables the tool ships, read straight from their JSON files.
+
+def load_standards(source: str) -> dict:
+    """The tool's shipped AFR rate tables (best first) and factor model."""
+    import json
+    from pathlib import Path
+
+    folder = Path(source) / "standards" / "afr"
+    rates, model = [], None
+    for path in sorted(folder.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("kind") == "afr-rates":
+            rates.append(data)
+        elif data.get("kind") == "afr-model":
+            model = data
+    order = ("fleet", "rated", "provisional")
+    rates.sort(key=lambda t: str(t["version"]), reverse=True)
+    rates.sort(key=lambda t: order.index(t["basis"]) if t["basis"] in order else len(order))
+    return {"rates": rates, "model": model}
+
+
+def _band(value: float, ranges: list) -> float:
+    for low, high, factor in ranges:
+        if value >= low and (high is None or value < high):
+            return float(factor)
+    return 1.0
+
+
+def _base_rate(model_name: str | None, media: str, standards: dict) -> tuple[float, bool]:
+    """Base AFR, and whether the media class was known."""
+    import re
+
+    wanted = re.sub(r"[^A-Z0-9]", "", (model_name or "").upper())
+    if len(wanted) >= 6:
+        for table in standards["rates"]:
+            matches = [m for m in table.get("models", [])
+                       if len(re.sub(r"[^A-Z0-9]", "", m["model"].upper())) >= 6
+                       and wanted.startswith(re.sub(r"[^A-Z0-9]", "", m["model"].upper()))]
+            if matches:
+                best = max(matches, key=lambda m: len(m["model"]))
+                return float(best["afr"]), True
+    for table in standards["rates"]:
+        if media in table.get("classes", {}):
+            return float(table["classes"][media]), media != "unknown"
+    raise ValueError("no base rate for a drive")
+
+
+def drive_rate(drive: dict | None, standards: dict, today) -> dict:
+    """One simulated drive's AFR and confidence; ``None`` is an unverified drive."""
+    import datetime as dt
+
+    m = standards["model"]
+    if drive is None:
+        base, _ = _base_rate(None, "unknown", standards)
+        return {"afr": min(base, m["max_afr"]), "confidence": "unknown"}
+    media = drive["media"] if drive["media"] in ("hdd", "ssd") else "unknown"
+    health = drive.get("health") or {}
+    base, known_class = _base_rate(drive["model"], media, standards)
+    rate = base
+    if health.get("purchase_date"):
+        year, month = (int(x) for x in health["purchase_date"].split("-"))
+        years = max(0.0, (today - dt.date(year, month, 15)).days / 365.25)
+        rate *= _band(years, m["age_years"][media])
+    measured = bool(health) and health["smart"] != "hidden"
+    if measured:
+        if media == "hdd":
+            rate *= _band(health["power_on_hours"], m["duty"]["hdd_power_on_hours"])
+        if health["smart"] == "failing":
+            s = m["smart"]
+            # FAILING in vv/smart_mock.py: reallocated 48, pending 8, uncorrectable 2.
+            rate *= max(s["pending"], s["uncorrectable"], s["reallocated"])
+    rate *= float(m["bus"].get("usb", 1.0))          # the adapter registers every drive on USB
+    confidence = ("measured" if measured else
+                  "estimated" if known_class or health.get("purchase_date") else "unknown")
+    return {"afr": min(rate, m["max_afr"]), "confidence": confidence}
+
+
+def set_loss(devices: list[dict], standards: dict, today) -> dict:
+    """P(loss) of content on exactly these devices (one dict per device)."""
+    if not devices:
+        r = drive_rate(None, standards, today)
+        return {"p_loss": r["afr"], "correlation": 1.0}
+    corr = standards["model"]["correlation"]
+    rates = [drive_rate(d, standards, today)["afr"] for d in devices]
+    factor = 1.0
+    batches = Counter((d["manufacturer"], d["model"], d["health"]["purchase_date"][:7])
+                      for d in devices if (d.get("health") or {}).get("purchase_date"))
+    for size in batches.values():
+        factor *= corr["same_batch"] ** (size - 1)
+    zones = Counter((d.get("health") or {}).get("disaster_zone") for d in devices)
+    for size in zones.values():
+        factor *= corr["same_zone"] ** (size - 1)
+    product = 1.0
+    for rate in rates:
+        product *= rate
+    return {"p_loss": min(product * factor, min(rates)), "correlation": factor}
+
+
+def durability(manifest: dict, phase: dict, standards: dict, today) -> dict:
+    """Expected P(loss) per device set and expected bytes lost a year."""
+    device, unknown = _drive_identity(manifest)
+    heads: dict[str, dict] = {}
+    for d in manifest["drives"]:
+        if d["id"] not in unknown:
+            heads.setdefault(device[d["id"]], d)
+
+    def devices_of(holders) -> frozenset:
+        return frozenset(device[h] for h in holders if h not in unknown)
+
+    held: dict[frozenset, int] = defaultdict(int)
+    for g in phase["groups"].values():
+        held[devices_of(k[0] for k in g["paths"])] += g["size"]
+    for key, size in phase["singles"].items():
+        held[devices_of([key[0]])] += size
+    sets = {}
+    for devs, size in held.items():
+        loss = set_loss([heads[x] for x in sorted(devs)], standards, today)
+        sets[devs] = {**loss, "bytes": size}
+    return {"sets": sets,
+            "expected_bytes_per_year": sum(s["bytes"] * s["p_loss"] for s in sets.values())}
