@@ -1,0 +1,14 @@
+{
+  "comment": "smartctl bundled for SMART reads (ROADMAP M5.3). tools/fetch_smartctl.py downloads the installer, checks both hashes, and extracts smartctl.exe and the GPL text. To move to a new release, update every field and confirm the signature as described in packaging/README-smartmontools.md.",
+  "version": "7.5",
+  "installer_url": "https://downloads.sourceforge.net/project/smartmontools/smartmontools/7.5/smartmontools-7.5.win32-setup.exe",
+  "installer_sha256": "896337fcc253220614cf8cdbd5cf2321c5aa326a37a04160a672a281e6104c70",
+  "installer_md5_published": "bb1e199ad6a3db3e1c27ae54b835cbd5",
+  "signature_url": "https://downloads.sourceforge.net/project/smartmontools/smartmontools/7.5/smartmontools-7.5.win32-setup.exe.asc",
+  "signing_key_fingerprint": "0C9577FD2C4CFCB4B9A599640A30812EFF3AEFF5",
+  "smartctl_member": "bin/smartctl.exe",
+  "smartctl_sha256": "b5db94e5082c042be44994b7a4fa8f7b5c8e713b2ab1c9a560d8f7a7995ea27d",
+  "license_member": "doc/COPYING.txt",
+  "license": "GPL-2.0-or-later",
+  "source": "https://www.smartmontools.org/ (source tarballs at https://sourceforge.net/projects/smartmontools/files/smartmontools/7.5/)"
+}

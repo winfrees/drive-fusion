@@ -993,6 +993,16 @@ Two further rules M4 settled in code:
   fixed).
 - Bundle `smartctl` (smartmontools) — on Windows it is far more reliable than WMI, especially
   over USB bridges. Degrade to "health unknown" rather than failing.
+  **As built (ROADMAP M5.3):** smartmontools 7.5, pinned by installer and `smartctl.exe`
+  SHA-256 (`packaging/smartmontools.json`, `packaging/README-smartmontools.md`), fetched and
+  verified by `tools/fetch_smartctl.py`, bundled with its GPL text, and pinned in the main
+  executables like the helper. Drive Fusion runs it only after checking that pin through a
+  locked handle, and only with `--json=c -i -H -A -l selftest`: a runtime guard and lint
+  rule DF014 refuse every option that changes a drive. SMART needs administrator rights.
+  Without them the CLI warns and says how to run elevated, and the GUI warns and offers
+  "Restart as administrator". With them, both confirm before reading (`--yes` for
+  scripts). A drive that returns no SMART data is recorded as `unknown` with smartctl's
+  reason, never as zeros.
 - **Authenticode signing** is the difference between "it runs" and "users can run it," and it
   matters more than usual here: an unsigned executable that reads raw volume handles is exactly
   what antivirus heuristics flag. Budget for a certificate before any external release.

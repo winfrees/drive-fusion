@@ -1,0 +1,59 @@
+{
+ "json_format_version": [
+  1,
+  0
+ ],
+ "smartctl": {
+  "version": [
+   7,
+   5
+  ],
+  "pre_release": false,
+  "svn_revision": "5714",
+  "platform_info": "x86_64-w64-mingw32-w10-22H2",
+  "build_info": "(sf-7.5-1)",
+  "argv": [
+   "smartctl",
+   "--json=c",
+   "-i",
+   "-H",
+   "-A",
+   "-l",
+   "selftest",
+   "/dev/pd3"
+  ],
+  "exit_status": 0
+ },
+ "device": {
+  "name": "/dev/pd3",
+  "info_name": "/dev/pd3",
+  "type": "nvme",
+  "protocol": "NVMe"
+ },
+ "model_name": "Samsung SSD 980 PRO 2TB",
+ "serial_number": "S6B0NJ0R654321",
+ "smart_status": {
+  "passed": true,
+  "nvme": {
+   "value": 0
+  }
+ },
+ "nvme_smart_health_information_log": {
+  "critical_warning": 0,
+  "temperature": 38,
+  "available_spare": 100,
+  "available_spare_threshold": 10,
+  "percentage_used": 4,
+  "data_units_read": 21000000,
+  "data_units_written": 19531250,
+  "power_on_hours": 3100,
+  "media_errors": 0,
+  "num_err_log_entries": 0
+ },
+ "temperature": {
+  "current": 38
+ },
+ "power_on_time": {
+  "hours": 3100
+ }
+}

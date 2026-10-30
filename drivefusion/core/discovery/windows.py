@@ -221,6 +221,12 @@ def _describe_physical_drive(disk_number: int) -> DriveInfo:
         kernel32.CloseHandle(handle)
 
 
+def disk_number_for_volume(volume_guid: str) -> int | None:
+    """The physical disk a volume is on (``\\\\.\\PhysicalDriveN``), or None
+    when the volume is not attached or the disk can't be named."""
+    return _disk_number_for_volume(volume_guid)
+
+
 def _disk_number_for_volume(volume_guid: str) -> int | None:
     # The device path form has no trailing separator.
     device_path = volume_guid.rstrip("\\")

@@ -165,6 +165,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[f.name for f in FIELDS], help="remove a value; repeatable",
     )
 
+    health = subparsers.add_parser(
+        "health", help="drive health from SMART, read with the bundled smartctl"
+    )
+    health_sub = health.add_subparsers(dest="health_command", metavar="ACTION")
+    health_read = health_sub.add_parser(
+        "read", help="read SMART health (needs administrator rights; asks first)"
+    )
+    health_read.add_argument("drive_ids", type=int, nargs="*", metavar="DRIVE",
+                             help="drives to read (default: every connected drive)")
+    health_read.add_argument("--yes", action="store_true",
+                             help="don't ask before running smartctl (for scripts)")
+    health_show = health_sub.add_parser("show", help="the latest reading of each drive")
+    health_show.add_argument("drive_id", type=int, nargs="?", metavar="DRIVE")
+
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
     )
@@ -233,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
 #: disclaimer has been accepted (REVIEW SR-25).
 READS_DRIVES = {
     ("scope", "add"), ("scope", "preview"), ("scan", None), ("hash", None),
-    ("verify", None),
+    ("verify", None), ("health", "read"),
 }
 
 
@@ -848,6 +862,104 @@ def cmd_drives_edit(args) -> int:
     return 0
 
 
+#: Shown whenever SMART can't be read for want of administrator rights.
+HEALTH_NEEDS_ADMIN = (
+    "Reading drive health (SMART) needs administrator rights on Windows, and this "
+    "command is not running with them, so nothing was read.\n"
+    "To read it: open a terminal with \"Run as administrator\" and run\n"
+    "    drivefusion health read\n"
+    "Drive Fusion runs smartctl with read-only queries only; it never starts a "
+    "self-test or changes a drive setting."
+)
+
+
+def cmd_health_read(args) -> int:
+    from drivefusion.core.enum.helper.client import is_elevated
+    from drivefusion.core.health import smart
+
+    if not is_elevated():
+        print(f"drivefusion: warning: {HEALTH_NEEDS_ADMIN}", file=sys.stderr)
+        return 1
+    smartctl = smart.bundled_smartctl()
+    if smartctl is None:
+        print("drivefusion: this build has no bundled smartctl (a source checkout, or a "
+              "build made without tools/fetch_smartctl.py), so health can't be read",
+              file=sys.stderr)
+        return 1
+
+    with Catalog(args.catalog) as catalog:
+        explicit = bool(args.drive_ids)
+        ids = args.drive_ids or [int(r["id"]) for r in catalog.conn.execute(
+            "SELECT id FROM drive WHERE retired_at IS NULL ORDER BY id")]
+        plan = []
+        for drive_id in ids:
+            if catalog.drive(drive_id) is None:
+                print(f"drivefusion: no drive {drive_id}", file=sys.stderr)
+                return 1
+            device, why = smart.device_for_drive(catalog, drive_id)
+            if device is None and not explicit:
+                print(f"  drive {drive_id}: skipped ({why})")
+                continue
+            plan.append((drive_id, device, why))
+        if not plan:
+            print("no connected drive to read")
+            return 0
+
+        print("Drive Fusion will run the bundled smartctl with administrator rights, "
+              "read-only:")
+        print(f"    smartctl {' '.join(smart.READ_ONLY_ARGS)} <device>")
+        for drive_id, device, why in plan:
+            print(f"  drive {drive_id}: {device or why}")
+        if not args.yes:
+            if not sys.stdin.isatty():
+                print("drivefusion: not confirmed; pass --yes to read without asking",
+                      file=sys.stderr)
+                return 2
+            try:
+                answer = input("Read these drives now? [y/N] ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() not in ("y", "yes"):
+                print("not read")
+                return 0
+
+        exit_code = 0
+        for drive_id, _device, _why in plan:
+            reading = smart.read_drive(catalog, drive_id, smartctl=smartctl)
+            row = smart.latest(catalog, drive_id)
+            if reading.available:
+                print(f"  drive {drive_id}: {smart.verdict(row)}")
+            else:
+                print(f"  drive {drive_id}: unknown ({reading.reason})")
+            if smart.verdict(row) == "FAILING":
+                exit_code = 1
+        return exit_code
+
+
+def cmd_health_show(args) -> int:
+    from drivefusion.core.health import smart
+
+    with Catalog(args.catalog) as catalog:
+        ids = [args.drive_id] if args.drive_id else [
+            int(r["id"]) for r in catalog.conn.execute("SELECT id FROM drive ORDER BY id")]
+        for drive_id in ids:
+            row = smart.latest(catalog, drive_id)
+            if row is None:
+                print(f"drive {drive_id}: not read")
+                continue
+            print(f"drive {drive_id}: {smart.verdict(row)} ({row['confidence']}, "
+                  f"{row['observed_at']}, {row['source'] or 'smartctl'})")
+            for label, column in (("power-on hours", "power_on_hours"),
+                                  ("temperature °C", "temperature_c"),
+                                  ("reallocated", "reallocated"), ("pending", "pending"),
+                                  ("uncorrectable", "uncorrectable"), ("CRC errors", "crc_errors"),
+                                  ("life left %", "wear_leveling"),
+                                  ("last self-test", "self_test_status")):
+                if row[column] is not None:
+                    print(f"  {label + ':':17}{row[column]}")
+        return 0
+
+
 def cmd_audit_list(args) -> int:
     from drivefusion.core.store import audit
 
@@ -918,6 +1030,8 @@ DISPATCH = {
     ("drives", "assign"): cmd_drives_assign,
     ("drives", "show"): cmd_drives_show,
     ("drives", "edit"): cmd_drives_edit,
+    ("health", "read"): cmd_health_read,
+    ("health", "show"): cmd_health_show,
     ("audit", "list"): cmd_audit_list,
     ("audit", "verify"): cmd_audit_verify,
     ("scan", None): cmd_scan,
@@ -958,8 +1072,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     action = (getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
-              or getattr(args, "audit_command", None))
-    if args.command in ("scope", "drives", "audit") and not action:
+              or getattr(args, "audit_command", None) or getattr(args, "health_command", None))
+    if args.command in ("scope", "drives", "audit", "health") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 

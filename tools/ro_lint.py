@@ -41,6 +41,8 @@ DF010  ``os.open`` flags that cannot be proven read-only
 DF011  ``sqlite3.connect`` outside the catalog store
 DF012  Win32 API that changes files, attributes, volumes or placeholders
 DF013  name indirection (``getattr``/``__import__``) that defeats the rules above
+DF014  a state-changing smartctl option named in a module that may start a
+       process, outside a list assigned to a name ending ``FORBIDDEN``
 """
 
 from __future__ import annotations
@@ -66,9 +68,9 @@ RAW_HANDLE_MODULES = (
     "drivefusion/core/fsio.py",
     "drivefusion/core/discovery/windows.py",
     "drivefusion/core/enum/winio.py",
-    # Opens dfscan-helper.exe read-only and share-read-only, so it can't be
-    # swapped between being hashed and being elevated (REVIEW F-07).
-    "drivefusion/gui/elevation.py",
+    # Opens bundled executables read-only and share-read-only, so they can't be
+    # swapped between being hashed and being run (REVIEW F-07, ROADMAP M5.3).
+    "drivefusion/core/pinned.py",
 )
 
 #: Win32 access rights that would make a handle capable of writing. Their mere
@@ -94,6 +96,10 @@ PROCESS_LAUNCH_MODULES = {
         "spawns dfscan-helper.exe with a fixed argv to enumerate a volume "
         "read-only (PLAN §6.5)"
     ),
+    "drivefusion/core/health/smart.py": (
+        "runs the bundled, hash-pinned smartctl with fixed read-only arguments "
+        "(ROADMAP M5.3); DF014 forbids its state-changing options"
+    ),
     "drivefusion/gui/elevation.py": (
         "ShellExecuteW('runas') of dfscan-helper.exe only, after a name check "
         "(PLAN §6.5; hardening tracked as REVIEW F-07)"
@@ -115,6 +121,13 @@ PROCESS_LAUNCH_WIN32 = frozenset(
         "CreateProcessW", "CreateProcessA", "CreateProcessAsUserW",
         "CreateProcessWithLogonW", "CreateProcessWithTokenW", "WinExec",
     }
+)
+
+#: smartctl options that change a drive: self-tests, SMART on/off, offline and
+#: autosave settings, --set, aborts, captive tests (ROADMAP M5.3, R-HL-04).
+SMARTCTL_STATE_CHANGING = frozenset(
+    {"-t", "--test", "-s", "--smart", "-o", "--offlineauto", "-S", "--saveauto",
+     "--set", "-X", "--abort", "-C", "--captive"}
 )
 
 #: Writes through a descriptor bypass every mode check.
@@ -231,6 +244,7 @@ class _Visitor(ast.NodeVisitor):
         # Innermost enclosing function first; the module is the fallback scope
         # when resolving a variable passed as ``os.open`` flags.
         self.scopes: list[ast.AST] = []
+        self.in_forbidden_list = False
         self.findings: list[Finding] = []
         # alias -> canonical module name
         self.module_aliases: dict[str, str] = {}
@@ -285,7 +299,23 @@ class _Visitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     # -- string literals ----------------------------------------------------
+    def visit_Assign(self, node: ast.Assign) -> None:
+        forbids = any(isinstance(t, ast.Name) and t.id.endswith("FORBIDDEN")
+                      for t in node.targets)
+        previous, self.in_forbidden_list = self.in_forbidden_list, forbids or self.in_forbidden_list
+        self.generic_visit(node)
+        self.in_forbidden_list = previous
+
     def visit_Constant(self, node: ast.Constant) -> None:
+        if (isinstance(node.value, str) and self.permit_process_launch
+                and not self.in_forbidden_list
+                and node.value.split("=", 1)[0] in SMARTCTL_STATE_CHANGING):
+            self._add(
+                node,
+                "DF014",
+                f"names smartctl option {node.value!r}, which changes a drive; "
+                "smartctl is only ever given read-only arguments",
+            )
         if isinstance(node.value, str):
             if node.value in WIN32_MUTATORS:
                 self._win32_mutator(node, node.value)

@@ -29,16 +29,17 @@ of its work needs:
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import sys
-from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from drivefusion.core import pinned
 from drivefusion.core.enum.helper.client import HELPER_EXECUTABLE, is_elevated
+from drivefusion.core.pinned import PinError
+from drivefusion.core.pinned import check as _pinned_check
 
 WINDOWS = sys.platform == "win32"
 
@@ -138,59 +139,12 @@ class ElevationError(RuntimeError):
 
 def pinned_helper_sha256() -> str | None:
     """The helper's SHA-256 as the build recorded it, or None for an unpinned
-    build (a source checkout). The pin is a module packed inside the main
-    executable by ``packaging/drivefusion.spec``, not a file beside the helper,
-    so replacing the helper can't replace the pin with it."""
-    try:
-        from drivefusion_helper_pin import HELPER_SHA256  # type: ignore[import-not-found]
-    except ImportError:
-        return None
-    return HELPER_SHA256.lower()
+    build (a source checkout). See ``core/pinned.py``."""
+    return pinned.pinned_sha256("HELPER_SHA256")
 
 
-def _user_can_write(directory: Path) -> bool:
-    """Whether this (unelevated) process can write to ``directory``: if it can,
-    so can anything else running as this user."""
-    return os.access(directory, os.W_OK)
-
-
-@contextmanager
-def _locked(path: Path):
-    """Open ``path`` for reading, denying everyone else write and delete access
-    for as long as the handle is held.
-
-    Windows only grants a later open that the share mode allows, so while this
-    is held the file can't be changed, replaced or renamed over. Elsewhere it is
-    a plain read (the launcher exists only on Windows; tests run its checks).
-    """
-    if not WINDOWS:
-        with open(path, "rb") as handle:
-            yield handle
-        return
-
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes
-
-    GENERIC_READ = 0x80000000
-    FILE_SHARE_READ = 0x00000001        # read only: no FILE_SHARE_WRITE or _DELETE
-    OPEN_EXISTING = 3
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-    ]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    handle = kernel32.CreateFileW(str(path), GENERIC_READ, FILE_SHARE_READ, None,
-                                  OPEN_EXISTING, 0, None)
-    if handle is None or handle == ctypes.c_void_p(-1).value:
-        raise ElevationError(
-            f"cannot open {path} exclusively (WinError {ctypes.get_last_error()}); "
-            "something else has it open for writing"
-        )
-    fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
-    with open(fd, "rb", closefd=True) as reader:
-        yield reader
+#: Opens the helper denying others write and delete access (``core/pinned.py``).
+_locked = pinned.locked
 
 
 def check_helper(path: Path, digest: str, *, pinned: str | None, writable: bool) -> None:
@@ -198,21 +152,10 @@ def check_helper(path: Path, digest: str, *, pinned: str | None, writable: bool)
 
     ``digest`` is the SHA-256 of the file as read through the locked handle.
     """
-    if pinned is not None:
-        if digest.lower() != pinned:
-            raise ElevationError(
-                f"refusing to elevate {path}: it is not the helper this build "
-                "shipped (its SHA-256 differs). Reinstall Drive Fusion."
-            )
-        return
-    if writable:
-        raise ElevationError(
-            f"refusing to elevate {path}: this build records no fingerprint of "
-            "its helper, and the folder it is in can be written to without "
-            "administrator rights, so the file can't be trusted. Install Drive "
-            "Fusion in a protected folder such as Program Files, or use a "
-            "release build."
-        )
+    try:
+        _pinned_check(path, digest, pinned=pinned, writable=writable, what="helper")
+    except PinError as exc:
+        raise ElevationError(str(exc)) from None
 
 
 def helper_parameters(arguments: list[str] | None) -> str | None:
@@ -241,11 +184,8 @@ def request(state: ElevationState, arguments: list[str] | None = None) -> int:
     with _locked(path) as handle:
         # Hashed through the locked handle, and launched while it is still
         # held: the bytes checked are the bytes Windows starts.
-        digest = hashlib.sha256()
-        while chunk := handle.read(1 << 20):
-            digest.update(chunk)
-        check_helper(path, digest.hexdigest(), pinned=pinned_helper_sha256(),
-                     writable=_user_can_write(path.parent))
+        check_helper(path, pinned.digest(handle), pinned=pinned_helper_sha256(),
+                     writable=pinned.user_can_write(path.parent))
 
         import ctypes
 
@@ -269,6 +209,31 @@ def request(state: ElevationState, arguments: list[str] | None = None) -> int:
     if result <= 32:
         raise ElevationError(f"Windows refused to start the helper (code {result}).")
     return result
+
+
+def restart_elevated(arguments: list[str] | None = None) -> None:
+    """Start this Drive Fusion again with administrator rights, after the user
+    asked to (ROADMAP M5.3: reading SMART needs them). Windows shows its own
+    consent prompt; the main application never elevates without one.
+
+    Only an installed (frozen) build can do this: from a source checkout there
+    is no executable of ours to restart, so :class:`ElevationError` says how
+    to start it as administrator instead.
+    """
+    if not WINDOWS or not getattr(sys, "frozen", False):
+        raise ElevationError(
+            "Start Drive Fusion as administrator yourself: right-click it and choose "
+            "\"Run as administrator\" (from a source checkout, run it from an "
+            "Administrator terminal)."
+        )
+    import ctypes
+
+    result = int(ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", sys.executable, helper_parameters(arguments), None, 1))
+    if result == 5:
+        raise ElevationError("Administrator rights were declined; nothing changed.")
+    if result <= 32:
+        raise ElevationError(f"Windows could not restart Drive Fusion (code {result}).")
 
 
 def status_line(state: ElevationState) -> str:
