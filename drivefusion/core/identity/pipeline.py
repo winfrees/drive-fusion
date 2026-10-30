@@ -21,7 +21,7 @@ from typing import Callable
 
 from drivefusion.core import fsio
 from drivefusion.core.errors import DehydratedFileError, UnreadableError
-from drivefusion.core.identity import hasher
+from drivefusion.core.identity import hasher, readers
 from drivefusion.core.store.catalog import Catalog, root_clause
 
 #: Commit after this many assignments so an interrupted pass keeps its work.
@@ -101,30 +101,48 @@ def hash_pass(
     return counters
 
 
+def _record_unreadable(counters: HashCounters, path: str, error: BaseException) -> bool:
+    """Count a file that couldn't be read; False for an error that isn't that."""
+    if isinstance(error, DehydratedFileError):
+        counters.dehydrated += 1
+        return True
+    if isinstance(error, (UnreadableError, OSError)):
+        counters.unreadable += 1
+        if len(counters.unreadable_paths) < 50:
+            counters.unreadable_paths.append(f"{path}: {error}")
+        return True
+    return False
+
+
+def _volume_of(item) -> int:
+    return item[0]["volume_id"]
+
+
 def _quick_pass(
     catalog: Catalog, candidates, counters: HashCounters, progress, cancel=None
 ) -> None:
+    """Quick-hash every candidate, each drive read by its own readers
+    (``readers.py``); the catalog is written here, on the calling thread."""
     conn = catalog.conn
     pending: list[tuple[int, int]] = []
+    items = [(row, _path_of(catalog, row)) for row in candidates]
+    groups = readers.by_device(catalog, items, _volume_of)
 
+    def work(item):
+        row, path = item
+        return hasher.quick_hash(path, int(row["size_bytes"]))
+
+    results = readers.read_all(groups, work, "quick")
     conn.execute("BEGIN")
     try:
-        for row in candidates:
+        for (row, path), digest, error in results:
             if cancel:
                 cancel()        # per file (REVIEW F-13); committed work is kept
-            path = _path_of(catalog, row)
+            if error is not None:
+                if _record_unreadable(counters, path, error):
+                    continue
+                raise error
             size = int(row["size_bytes"])
-            try:
-                digest = hasher.quick_hash(path, size)
-            except DehydratedFileError:
-                counters.dehydrated += 1
-                continue
-            except (UnreadableError, OSError) as exc:
-                counters.unreadable += 1
-                if len(counters.unreadable_paths) < 50:
-                    counters.unreadable_paths.append(f"{path}: {exc}")
-                continue
-
             counters.quick_hashed += 1
             counters.quick_bytes += min(size, hasher.SAMPLE_BYTES * 3)
 
@@ -147,9 +165,11 @@ def _quick_pass(
         if pending:
             catalog.assign_content(pending)
         conn.execute("COMMIT")
-    except Exception:
+    except BaseException:
         conn.execute("ROLLBACK")
         raise
+    finally:
+        results.close()         # stops the readers before anything else happens
 
 
 def _full_pass(
@@ -159,56 +179,64 @@ def _full_pass(
 
     Groups whose quick hash already covered every byte are exact and are left
     alone — re-reading them would be pure cost for a result already known.
+    Every file still to be read is read in parallel across drives, as in the
+    quick pass.
     """
     conn = catalog.conn
-
+    items = []
     for group in catalog.quick_hash_collisions():
         size = int(group["size_bytes"])
         if hasher.is_quick_hash_exact(size):
             continue
+        quick = _quick_of(catalog, int(group["id"]))
+        for row in catalog.files_for_content(int(group["id"]), root_ids):
+            items.append((row, _path_of(catalog, row), size, quick))
+    if not items:
+        return
 
-        members = catalog.files_for_content(int(group["id"]), root_ids)
-        conn.execute("BEGIN")
-        try:
-            for row in members:
-                if cancel:
-                    cancel()
-                path = _path_of(catalog, row)
-                try:
-                    digest, read = hasher.full_hash(path)
-                except DehydratedFileError:
-                    counters.dehydrated += 1
+    def work(item):
+        return hasher.full_hash(item[1])
+
+    results = readers.read_all(readers.by_device(catalog, items, _volume_of), work, "full")
+    done = 0
+    conn.execute("BEGIN")
+    try:
+        for (row, path, size, quick), result, error in results:
+            if cancel:
+                cancel()
+            if error is not None:
+                # Left attached to the quick-hash group rather than asserting
+                # an identity that was never established.
+                if _record_unreadable(counters, path, error):
                     continue
-                except (UnreadableError, OSError) as exc:
-                    counters.unreadable += 1
-                    if len(counters.unreadable_paths) < 50:
-                        counters.unreadable_paths.append(f"{path}: {exc}")
-                    # Leave it attached to the quick-hash group rather than
-                    # asserting an identity that was never established.
-                    continue
+                raise error
+            digest, read = result
+            counters.full_hashed += 1
+            counters.full_bytes += read
+            if read != size:
+                # The file changed under us. Record what was actually read;
+                # the next scan will pick up the new size.
+                counters.resized += 1
 
-                counters.full_hashed += 1
-                counters.full_bytes += read
-
-                if read != size:
-                    # The file changed under us. Record what was actually read;
-                    # the next scan will pick up the new size.
-                    counters.resized += 1
-
-                content_id = catalog.upsert_content(
-                    size_bytes=read,
-                    quick_hash=_quick_of(catalog, int(group["id"])),
-                    full_hash=digest,
-                    hash_algo=hasher.HASH_ALGO,
-                )
-                catalog.assign_content([(content_id, int(row["id"]))])
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-
-        if progress:
-            progress(counters)
+            content_id = catalog.upsert_content(
+                size_bytes=read, quick_hash=quick, full_hash=digest,
+                hash_algo=hasher.HASH_ALGO,
+            )
+            catalog.assign_content([(content_id, int(row["id"]))])
+            done += 1
+            if done % CHECKPOINT_ROWS == 0:
+                conn.execute("COMMIT")
+                conn.execute("BEGIN")
+                if progress:
+                    progress(counters)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        results.close()
+    if progress:
+        progress(counters)
 
 
 def _quick_of(catalog: Catalog, content_id: int) -> bytes:
