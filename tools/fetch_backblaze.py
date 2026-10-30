@@ -68,11 +68,14 @@ def main() -> int:
         target.unlink()
         return 1
     print(f"Backblaze {lock['version']}: {actual} (verified)")
+    out = OUT / f"rates-backblaze-{lock['version']}.json"
+    if out.exists() and json.loads(out.read_text()).get("inputs") == {target.name: actual}:
+        print(f"{out.relative_to(ROOT)}: already built from this download")
+        return 0
     table = backblaze.import_files([target], version=lock["version"],
                                    retrieved=lock["retrieved"],
                                    min_drive_days=lock["min_drive_days"])
     OUT.mkdir(parents=True, exist_ok=True)
-    out = OUT / f"rates-backblaze-{lock['version']}.json"
     out.write_text(json.dumps(table, indent=2) + "\n", encoding="utf-8")
     print(f"{out.relative_to(ROOT)}: {len(table['models'])} models, "
           f"fleet AFR {table['classes']['hdd']:.2%}")
