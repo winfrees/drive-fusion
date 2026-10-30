@@ -116,7 +116,7 @@ def signals(node: _Node, sibling_shapes: Counter) -> dict:
             "series": series, "size": size}
 
 
-def _score(s: dict) -> float:
+def score(s: dict) -> float:
     return round(s["size"] * sum(WEIGHTS[k] * s[k] for k in WEIGHTS), 4)
 
 
@@ -136,7 +136,7 @@ def _why(s: dict, node: _Node) -> list[str]:
     return why
 
 
-def _load(catalog) -> dict[int, _Node]:
+def load(catalog) -> dict[int, _Node]:
     nodes = {
         row["id"]: _Node(row["id"], row["parent_id"], row["name"], row["depth"])
         for row in catalog.conn.execute(
@@ -214,14 +214,14 @@ class Proposal:
 
 def infer(catalog, *, threshold: float = THRESHOLD) -> list[Proposal]:
     """Score the tree and queue the best subtrees. One audit entry for the run."""
-    nodes = _load(catalog)
+    nodes = load(catalog)
     shapes: dict[int | None, Counter] = defaultdict(Counter)
     for node in nodes.values():
         shapes[node.parent][_shape(node.name)] += 1
     for node in nodes.values():
         if node.parent is not None and node.files >= MIN_FILES:
             node.signals = signals(node, shapes[node.parent])
-            node.score = _score(node.signals)
+            node.score = score(node.signals)
     for node in sorted(nodes.values(), key=lambda n: n.depth, reverse=True):
         parent = nodes.get(node.parent)
         if parent is not None:

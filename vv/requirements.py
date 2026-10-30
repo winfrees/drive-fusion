@@ -141,6 +141,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Each folder of a planted project series (alike-named, dated, one file type, "
                 "files from one period) is proposed as itself, not as an enclosing or "
                 "enclosed folder."),
+    Requirement("R-COL-05", "§8.4",
+                "A confirmed collection's members are exactly the live files under its "
+                "folders, including files that appear there after it was confirmed."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member.", status="planned", milestone="M6"),

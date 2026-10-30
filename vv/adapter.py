@@ -215,9 +215,33 @@ class DriveFusionAdapter:
                               "has_evidence": bool(e["why"]) and bool(e["samples"]),
                               "queued": p.queued})
         conn = self.catalog.conn
-        return {"proposals": proposals,
-                "collections": conn.execute("SELECT COUNT(*) FROM collection").fetchone()[0],
-                "rules": conn.execute("SELECT COUNT(*) FROM collection_rule").fetchone()[0]}
+        found = {"proposals": proposals,
+                 "collections": conn.execute("SELECT COUNT(*) FROM collection").fetchone()[0],
+                 "rules": conn.execute("SELECT COUNT(*) FROM collection_rule").fetchone()[0]}
+        # Then act as a person would (M6.3): accept every proposal, so the
+        # rescan can show whether files added later join by rule.
+        try:
+            confirm = importlib.import_module("drivefusion.core.curate.confirm")
+        except ImportError:
+            return found
+        curation = importlib.import_module("drivefusion.core.store.curation")
+        for row in curation.candidates(self.catalog):
+            confirm.accept(self.catalog, row["id"])
+        return found
+
+    def collections(self) -> list[dict] | None:
+        """Each confirmed collection's folders and members, by the tool's rules."""
+        try:
+            curation = importlib.import_module("drivefusion.core.store.curation")
+        except ImportError:
+            return None
+        out = []
+        for row in curation.collections(self.catalog):
+            folders = [list(self._locate(self.catalog.dir_path(r["dir_id"], os.sep)))
+                       for r in curation.rules(self.catalog, row["id"])]
+            out.append({"title": row["title"], "folders": folders,
+                        **curation.member_stats(self.catalog, row["id"])})
+        return out
 
     def verify(self) -> dict:
         result = self.identity.verify_pass(self.catalog)
@@ -308,6 +332,7 @@ class DriveFusionAdapter:
                             "last_scanned_at": scanned.get(i["volume_id"]),
                             **self.discovered.get(d, {})} for d, i in self.roots.items()},
             "health": self._health(),
+            "collections": self.collections(),
         }
 
     def _health(self) -> dict | None:

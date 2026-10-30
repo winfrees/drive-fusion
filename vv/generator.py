@@ -66,7 +66,7 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "edit-before-verify": ("R-FIX-04",),
     "drive-health": ("R-HL-01", "R-HL-03", "R-HL-04"),
     "batch-copy": ("R-HL-02", "R-HL-03"),
-    "project-series": ("R-COL-01", "R-COL-02", "R-COL-03", "R-COL-04"),
+    "project-series": ("R-COL-01", "R-COL-02", "R-COL-03", "R-COL-04", "R-COL-05"),
     "cross-batch-copy": ("R-HL-02", "R-HL-03"),
 }
 
@@ -372,6 +372,18 @@ class Builder:
                 self.place(drive, key, s, directory=folder,
                            name=f"{topic.split()[0].lower()}_{n:02d}.{ext}",
                            mtime_ns=when * 1_000_000_000)
+        # R-COL-05: a file that appears in a confirmed folder between scans
+        # joins its collection. Skipped if an earlier change removes the folder.
+        folder = s["folders"][0][1]
+        doomed = [op["path"] for op in self.mutations
+                  if op["op"] in ("rmtree", "move") and op["drive"] == drive]
+        if not any(folder == d or folder.startswith(d + "/") for d in doomed):
+            key = self.new_content(ext)
+            path = f"{folder}/{topic.split()[0].lower()}_late.{ext}"
+            self.mutations.append({"op": "add", "scenario": s["id"], "drive": drive,
+                                   "path": path, "content": key,
+                                   "mtime_ns": (int(start) // 2 * 2) * 1_000_000_000})
+            s["members"].append([drive, path])
 
     def health_copies(self) -> None:
         """R-HL-02: two copies on one purchase batch, and two across batches.

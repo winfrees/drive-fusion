@@ -134,6 +134,7 @@ class Evaluator:
             else:
                 self.scope_tests(obs, exp, phases[name], name, scope_only=True)
                 self.rescan_tests(obs, exp)
+                self.membership_test(phases[name], exp)
             self.last_scanned_test(phases, name)
             self.dirs_test(obs, exp, name)
             self.identity_tests(obs, exp, name)
@@ -807,6 +808,24 @@ class Evaluator:
                 r.fail(f"{drive}:{folder} not proposed"
                        + (f" (proposed instead: {nearby})" if nearby else ""))
         r.finish("no project series planted (dataset from before M6.2)")
+
+    def membership_test(self, raw: dict, exp: dict) -> None:
+        r = self.new("VV-COL-05", "A confirmed collection's members follow its folders",
+                     ["R-COL-05"], "rescan")
+        found = raw.get("collections")
+        if found is None:
+            r.finish("this version has no collection membership (before M6.3)")
+            return
+        for coll in found:
+            prefixes = [(d, f"{p}/" if p else "") for d, p in coll["folders"]]
+            under = [k for k in exp["files"]
+                     if any(k[0] == d and k[1].startswith(p) for d, p in prefixes)]
+            files, size = len(under), sum(exp["files"][k]["size"] for k in under)
+            r.checked += 1
+            if (coll["files"], coll["bytes"]) != (files, size):
+                r.fail(f"{coll['title']}: {coll['files']} member file(s), {coll['bytes']:,} "
+                       f"bytes; truly {files}, {size:,} under {coll['folders']}")
+        r.finish("no collection was confirmed (nothing was proposed)")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

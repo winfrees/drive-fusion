@@ -207,6 +207,31 @@ def build_parser() -> argparse.ArgumentParser:
                         "(proposes only; nothing joins a collection)")
     queue = collections_sub.add_parser("queue", help="the proposals waiting for your decision")
     queue.add_argument("--all", action="store_true", help="include decided proposals")
+    accept = collections_sub.add_parser(
+        "accept", help="make a proposal a collection (or part of one, with --into)")
+    accept.add_argument("candidate_id", type=int, metavar="PROPOSAL")
+    accept.add_argument("--title", help="default: the folder's name")
+    accept.add_argument("--into", metavar="COLLECTION",
+                        help="add the folder to this collection instead (merging proposals)")
+    reject = collections_sub.add_parser("reject", help="decline a proposal; it stays declined")
+    reject.add_argument("candidate_id", type=int, metavar="PROPOSAL")
+    split = collections_sub.add_parser(
+        "split", help="set a proposal aside and propose each of its subfolders instead")
+    split.add_argument("candidate_id", type=int, metavar="PROPOSAL")
+    accept_all = collections_sub.add_parser(
+        "accept-all", help="accept every waiting proposal scoring at least --min-score")
+    accept_all.add_argument("--min-score", type=float, required=True)
+    collections_sub.add_parser("list", help="the confirmed collections")
+    show = collections_sub.add_parser("show", help="one collection: metadata, folders, size")
+    show.add_argument("collection", metavar="COLLECTION", help="id or local PID")
+    edit = collections_sub.add_parser("edit", help="rename a collection or describe it")
+    edit.add_argument("collection", metavar="COLLECTION", help="id or local PID")
+    for flag in ("title", "description", "creators", "contact", "license", "data-type",
+                 "project", "external-pid"):
+        edit.add_argument(f"--{flag}", dest=f"set_{flag.replace('-', '_')}", metavar="VALUE",
+                          help="comma-separated names" if flag == "creators" else None)
+    edit.add_argument("--ndsa-target", dest="set_ndsa_target", type=int, choices=(1, 2, 3, 4))
+    edit.add_argument("--min-copies", dest="set_min_copies", type=int)
 
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
@@ -1003,6 +1028,149 @@ def cmd_collections_queue(args) -> int:
     return 0
 
 
+def _collection(catalog, key: str):
+    from drivefusion.core.store import curation
+
+    row = curation.collection(catalog, int(key) if key.isdigit() else key)
+    if row is None:
+        raise SystemExit(f"drivefusion: no collection {key}")
+    return row
+
+
+def _curation_call(work) -> int:
+    from drivefusion.core.store.curation import CurationError
+
+    try:
+        work()
+    except CurationError as exc:
+        print(f"drivefusion: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_collections_accept(args) -> int:
+    from drivefusion.core.curate import confirm
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        def work():
+            into = _collection(catalog, args.into)["id"] if args.into else None
+            made = confirm.accept(catalog, args.candidate_id, title=args.title, into=into)
+            row = curation.collection(catalog, made)
+            print(f"proposal {args.candidate_id} accepted: collection {made} "
+                  f"({row['title']}, {row['local_pid']})")
+        return _curation_call(work)
+
+
+def cmd_collections_reject(args) -> int:
+    from drivefusion.core.curate import confirm
+
+    with Catalog(args.catalog) as catalog:
+        def work():
+            confirm.reject(catalog, args.candidate_id)
+            print(f"proposal {args.candidate_id} rejected; it won't be proposed again")
+        return _curation_call(work)
+
+
+def cmd_collections_split(args) -> int:
+    from drivefusion.core.curate import confirm
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        def work():
+            made = confirm.split(catalog, args.candidate_id)
+            print(f"proposal {args.candidate_id} set aside; {len(made)} subfolder(s) proposed")
+            for row in curation.candidates(catalog):
+                if row["id"] in made:
+                    _print_candidate(row)
+        return _curation_call(work)
+
+
+def cmd_collections_accept_all(args) -> int:
+    from drivefusion.core.curate import confirm
+
+    with Catalog(args.catalog) as catalog:
+        def work():
+            made = confirm.accept_all(catalog, min_score=args.min_score)
+            print(f"{len(made)} proposal(s) scoring {args.min_score:g} or more accepted, "
+                  "each as its own collection")
+        return _curation_call(work)
+
+
+def cmd_collections_list(args) -> int:
+    from drivefusion.core.curate import confirm
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        rows = curation.collections(catalog)
+        if not rows:
+            print("no collections yet; see `drivefusion collections queue`")
+        for row in rows:
+            stats = curation.member_stats(catalog, row["id"])
+            filled, total, _ = confirm.completeness(row)
+            print(f"  [{row['id']}] {row['title']}  {stats['files']:,} files, "
+                  f"{_human_bytes(stats['bytes'])}, described {filled}/{total}")
+    return 0
+
+
+def cmd_collections_show(args) -> int:
+    import json
+
+    from drivefusion.core.curate import confirm
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        row = _collection(catalog, args.collection)
+        stats = curation.member_stats(catalog, row["id"])
+        filled, total, missing = confirm.completeness(row)
+        print(f"collection {row['id']}: {row['title']}")
+        print(f"  {'local PID:':15}{row['local_pid']}")
+        creators = ", ".join(json.loads(row["creators_json"])) if row["creators_json"] else None
+        for label, value in (("description", row["description"]), ("creators", creators),
+                             ("contact", row["contact"]), ("license", row["license"]),
+                             ("data type", row["data_type"]), ("project", row["project"]),
+                             ("external PID", row["external_pid"]),
+                             ("NDSA target", row["ndsa_target"]),
+                             ("min copies", row["min_copies"])):
+            print(f"  {label + ':':15}{value if value is not None else '—'}")
+        print(f"  {'described:':15}{filled}/{total}"
+              + (f" (missing: {', '.join(missing)})" if missing else ""))
+        print(f"  {'members:':15}{stats['files']:,} files, {_human_bytes(stats['bytes'])}")
+        for rule in curation.rules(catalog, row["id"]):
+            print(f"  folder:        {catalog.dir_path(rule['dir_id'])}")
+    return 0
+
+
+def cmd_collections_edit(args) -> int:
+    import json
+
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        row = _collection(catalog, args.collection)
+        changes = {}
+        for column, flag in (("title", "title"), ("description", "description"),
+                             ("contact", "contact"), ("license", "license"),
+                             ("data_type", "data_type"), ("project", "project"),
+                             ("external_pid", "external_pid"), ("ndsa_target", "ndsa_target"),
+                             ("min_copies", "min_copies")):
+            value = getattr(args, f"set_{flag}")
+            if value is not None:
+                changes[column] = value
+        if args.set_creators is not None:
+            names = [n.strip() for n in args.set_creators.split(",") if n.strip()]
+            changes["creators_json"] = json.dumps(names) if names else None
+        if not changes:
+            print("drivefusion: nothing to change", file=sys.stderr)
+            return 2
+
+        def work():
+            done = curation.edit_collection(catalog, row["id"], changes)
+            print(f"collection {row['id']}: "
+                  + (f"recorded {', '.join(done)}" if done else "already as given"))
+        return _curation_call(work)
+
+
 def cmd_drives_edit(args) -> int:
     from drivefusion.core.health.metadata import FIELDS, MetadataError
 
@@ -1205,6 +1373,13 @@ DISPATCH = {
     ("drives", "edit"): cmd_drives_edit,
     ("collections", "propose"): cmd_collections_propose,
     ("collections", "queue"): cmd_collections_queue,
+    ("collections", "accept"): cmd_collections_accept,
+    ("collections", "reject"): cmd_collections_reject,
+    ("collections", "split"): cmd_collections_split,
+    ("collections", "accept-all"): cmd_collections_accept_all,
+    ("collections", "list"): cmd_collections_list,
+    ("collections", "show"): cmd_collections_show,
+    ("collections", "edit"): cmd_collections_edit,
     ("standards", "list"): cmd_standards_list,
     ("standards", "import-afr"): cmd_standards_import_afr,
     ("standards", "forget"): cmd_standards_forget,

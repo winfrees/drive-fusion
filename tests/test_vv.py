@@ -541,3 +541,18 @@ def test_evaluator_catches_a_missed_project(completed_run) -> None:
     manifest, observed, _ = completed_run
     v = _rejudge(manifest, observed, lambda o: _curation(o)["proposals"].pop())
     assert v[("VV-COL-04", "baseline")]["verdict"] == ev.FAIL
+
+
+def test_membership_is_checked_after_the_rescan(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-COL-05", "rescan")]
+    assert r["verdict"] == ev.PASS and r["checked"] > 0
+    late = [m for m in manifest["mutations"] if m["path"].endswith(
+        tuple(f"_late.{e}" for e in ("csv", "fits", "txt")))]
+    assert late, "a file is planted in a confirmed folder between scans"
+
+    def lose_the_late_file(obs):
+        obs["phases"]["rescan"]["collections"][0]["files"] -= 1
+
+    v = _rejudge(manifest, observed, lose_the_late_file)
+    assert v[("VV-COL-05", "rescan")]["verdict"] == ev.FAIL
