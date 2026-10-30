@@ -82,6 +82,7 @@ drivefusion status
 drivefusion drives list            # which physical drive each volume is on
 drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "Shelf B"
 drivefusion drives show 1            # what is known, and its estimated failure rate a year
+drivefusion report durability      # expected bytes lost a year, and where
 drivefusion standards list         # the failure-rate tables in force
 drivefusion standards import-afr data_Q3_2025.zip   # a Backblaze Drive Stats ZIP you downloaded
 drivefusion gui                    # the desktop window

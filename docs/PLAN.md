@@ -794,6 +794,12 @@ media-class values (D12). Per D13 the build pins a Backblaze quarter
 newer ZIP the user downloaded, kept in the catalog (`afr_table`, schema v8). The network rule
 holds: only the build downloads; the app reads a file it is given.
 
+**As built (ROADMAP M5.5):** `core/health/durability.py`, per drive set. `corr(D)` is
+`same_batch^(k−1)` × `same_zone^(k−1)` for each group of `k` drives sharing a batch or zone, and
+P(loss) is capped at the lowest single AFR. Drives with no disaster zone recorded are assumed
+to share one. `drivefusion report durability` and the Dashboard show the expected loss with its
+confidence.
+
 ### 8.3 Standards alignment
 
 Every rubric ships as a **versioned, citable file under `standards/`** with its source URL,
