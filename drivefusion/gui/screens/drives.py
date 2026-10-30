@@ -131,6 +131,9 @@ class DrivesScreen(QWidget):
         )
         buttons.addWidget(self.health_button)
         self.health_button.clicked.connect(self.read_health)
+        # SMART reads are shelved (ROADMAP M5.3): no button, no Health column.
+        self.health_button.setVisible(smart.ENABLED)
+        self.tree.setColumnHidden(COLUMNS.index("Health"), not smart.ENABLED)
         layout.addLayout(buttons)
         self.edit_button.clicked.connect(self.edit_selected)
         self.refresh_button.clicked.connect(self.refresh)

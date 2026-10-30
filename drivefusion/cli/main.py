@@ -165,19 +165,22 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[f.name for f in FIELDS], help="remove a value; repeatable",
     )
 
-    health = subparsers.add_parser(
-        "health", help="drive health from SMART, read with the bundled smartctl"
-    )
-    health_sub = health.add_subparsers(dest="health_command", metavar="ACTION")
-    health_read = health_sub.add_parser(
-        "read", help="read SMART health (needs administrator rights; asks first)"
-    )
-    health_read.add_argument("drive_ids", type=int, nargs="*", metavar="DRIVE",
-                             help="drives to read (default: every connected drive)")
-    health_read.add_argument("--yes", action="store_true",
-                             help="don't ask before running smartctl (for scripts)")
-    health_show = health_sub.add_parser("show", help="the latest reading of each drive")
-    health_show.add_argument("drive_id", type=int, nargs="?", metavar="DRIVE")
+    from drivefusion.core.health import smart
+
+    if smart.ENABLED:                   # shelved, ROADMAP M5.3
+        health = subparsers.add_parser(
+            "health", help="drive health from SMART, read with the bundled smartctl"
+        )
+        health_sub = health.add_subparsers(dest="health_command", metavar="ACTION")
+        health_read = health_sub.add_parser(
+            "read", help="read SMART health (needs administrator rights; asks first)"
+        )
+        health_read.add_argument("drive_ids", type=int, nargs="*", metavar="DRIVE",
+                                 help="drives to read (default: every connected drive)")
+        health_read.add_argument("--yes", action="store_true",
+                                 help="don't ask before running smartctl (for scripts)")
+        health_show = health_sub.add_parser("show", help="the latest reading of each drive")
+        health_show.add_argument("drive_id", type=int, nargs="?", metavar="DRIVE")
 
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
