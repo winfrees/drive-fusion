@@ -1003,6 +1003,9 @@ Two further rules M4 settled in code:
   "Restart as administrator". With them, both confirm before reading (`--yes` for
   scripts). A drive that returns no SMART data is recorded as `unknown` with smartctl's
   reason, never as zeros.
+  **Shelved 2026-10-30:** the code and tests stay, but `smart.ENABLED` is off, the build
+  fetches and bundles no smartctl, and no front end offers a read. §8.2's duty and SMART
+  factors are therefore neutral and every drive's risk is `estimated`.
 - **Authenticode signing** is the difference between "it runs" and "users can run it," and it
   matters more than usual here: an unsigned executable that reads raw volume handles is exactly
   what antivirus heuristics flag. Budget for a certificate before any external release.

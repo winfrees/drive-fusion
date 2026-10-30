@@ -642,6 +642,13 @@ def test_a_bad_value_in_the_dialog_is_refused_and_nothing_is_saved(window, monke
 
 # -- drive health (ROADMAP M5.3) ---------------------------------------------------
 
+def test_health_is_shelved_in_the_gui(window) -> None:
+    from drivefusion.gui.screens.drives import COLUMNS
+
+    assert window.drives.health_button.isHidden()
+    assert window.drives.tree.isColumnHidden(COLUMNS.index("Health"))
+
+
 @pytest.fixture
 def health_gui(window, monkeypatch):
     """One catalogued drive; smartctl 'bundled'; dialogs answered by the test."""

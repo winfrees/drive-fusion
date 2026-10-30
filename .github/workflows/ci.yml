@@ -76,10 +76,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,gui]"
 
-      # smartctl for SMART reads (ROADMAP M5.3): the pinned smartmontools
-      # release, refused unless both its installer and smartctl.exe hash as pinned.
-      - name: Fetch the pinned smartctl
-        run: python tools/fetch_smartctl.py
+      # smartctl (ROADMAP M5.3) is shelved, so it is not fetched or bundled.
+      # To bring it back, run `python tools/fetch_smartctl.py` here and set
+      # drivefusion.core.health.smart.ENABLED.
 
       - name: Build one-folder executable
         run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
@@ -96,7 +95,7 @@ jobs:
 
       # The GUI refuses to elevate a helper whose SHA-256 differs from the one
       # pinned at build time (REVIEW F-07), so the pin must be the shipped file's.
-      - name: Verify the pinned hashes match the shipped helper and smartctl
+      - name: Verify the pinned hashes match the shipped files
         run: python tools/verify_pins.py build/drivefusion/helper-pin/drivefusion_helper_pin.py dist/DriveFusion
 
       - uses: actions/upload-artifact@v4

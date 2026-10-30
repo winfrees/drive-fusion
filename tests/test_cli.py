@@ -466,6 +466,12 @@ def test_an_invalid_role_is_refused_by_the_parser(cli, capsys) -> None:
 
 # -- drive health (ROADMAP M5.3) ---------------------------------------------------
 
+def test_health_is_shelved(cli, capsys) -> None:
+    with pytest.raises(SystemExit):
+        cli("health", "read")
+    assert "invalid choice: 'health'" in capsys.readouterr().err
+
+
 @pytest.fixture
 def health_env(cli, sample_tree: Path, monkeypatch, capsys):
     """A catalogued drive, smartctl 'bundled', and every device 'connected'."""
@@ -476,6 +482,7 @@ def health_env(cli, sample_tree: Path, monkeypatch, capsys):
     capsys.readouterr()
     fixture = (Path(__file__).parent / "fixtures" / "smart" / "ata_hdd_healthy.json").read_text()
     runs = []
+    monkeypatch.setattr(smart, "ENABLED", True)      # shelved by default
     monkeypatch.setattr(client, "is_elevated", lambda: True)
     monkeypatch.setattr(smart, "bundled_smartctl", lambda: Path("smartctl.exe"))
     monkeypatch.setattr(smart, "device_for_drive", lambda c, d: ("/dev/pd1", ""))

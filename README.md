@@ -81,8 +81,6 @@ drivefusion verify                 # re-hash and compare against recorded hashes
 drivefusion status
 drivefusion drives list            # which physical drive each volume is on
 drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "Shelf B"
-drivefusion health read            # SMART, read-only; needs an Administrator terminal, asks first
-drivefusion health show
 drivefusion gui                    # the desktop window
 ```
 
@@ -161,9 +159,9 @@ Reproduce with `python tools/benchmark.py`. A 50M-file run is still to do.
 
 ## Third-party software
 
-The Windows build bundles `smartctl` from [smartmontools](https://www.smartmontools.org/)
-7.5 (GPL-2.0-or-later) for reading drive health. Its licence ships beside it, and where it
-comes from and how it is checked are in
+Reading drive health with `smartctl` from [smartmontools](https://www.smartmontools.org/)
+(GPL-2.0-or-later) is built but **shelved**: the build doesn't bundle it, and neither the CLI
+nor the GUI offers a health read. How it would be pinned and checked is in
 [packaging/README-smartmontools.md](packaging/README-smartmontools.md).
 
 ## Development

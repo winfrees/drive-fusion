@@ -27,6 +27,11 @@ from pathlib import Path
 
 from drivefusion.core import pinned
 
+#: Shelved 2026-10-30 (ROADMAP M5.3): the code and its tests stay, but the
+#: build bundles no smartctl and neither front end offers a health read.
+#: Durability is estimated without SMART until this is turned back on.
+ENABLED = False
+
 #: The only arguments smartctl is ever given, besides an optional ``-d TYPE``
 #: and the device: identity, overall health, attributes, self-test log.
 READ_ONLY_ARGS = ("--json=c", "-i", "-H", "-A", "-l", "selftest")
