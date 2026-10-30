@@ -129,6 +129,18 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("R-HL-04", "§3.2, ROADMAP M5.3",
                 "smartctl is never given a state-changing argument: every command the tool "
                 "builds uses read-only options only."),
+    Requirement("R-COL-01", "§8.4",
+                "Inference only proposes: after it runs, no collection and no membership "
+                "rule exists that a person did not create."),
+    Requirement("R-COL-02", "§8.4",
+                "Every proposal carries its evidence, and the evidence is true: the file "
+                "count, byte count and date span of the proposed folder's subtree."),
+    Requirement("R-COL-03", "§8.4",
+                "Proposals never nest, and no scan root (a whole drive or tree) is proposed."),
+    Requirement("R-COL-04", "§8.4",
+                "Each folder of a planted project series (alike-named, dated, one file type, "
+                "files from one period) is proposed as itself, not as an enclosing or "
+                "enclosed folder."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member.", status="planned", milestone="M6"),

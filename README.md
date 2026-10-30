@@ -84,6 +84,8 @@ drivefusion drives edit 1 --purchase-date 2021-03 --role archive --location "She
 drivefusion drives show 1            # what is known, and its estimated failure rate a year
 drivefusion report durability      # expected bytes lost a year, and where
 drivefusion standards list         # the failure-rate tables in force
+drivefusion collections propose    # queue folders that look like datasets, for you to confirm
+drivefusion collections queue
 drivefusion standards import-afr data_Q3_2025.zip   # a Backblaze Drive Stats ZIP you downloaded
 drivefusion gui                    # the desktop window
 ```

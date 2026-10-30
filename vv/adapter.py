@@ -199,6 +199,26 @@ class DriveFusionAdapter:
                 "full_hashed": c.full_hashed, "unreadable": c.unreadable,
                 "summary": c.summary()}
 
+    def propose(self) -> dict | None:
+        """Run collection inference (M6.2) and read back what it proposed, and
+        what collections and rules exist after it. None before M6.2."""
+        try:
+            infer = importlib.import_module("drivefusion.core.curate.infer")
+        except ImportError:
+            return None
+        proposals = []
+        for p in infer.infer(self.catalog):
+            drive, rel = self._locate(p.evidence["path"])
+            e = p.evidence
+            proposals.append({"drive": drive, "path": rel, "files": e["files"],
+                              "bytes": e["bytes"], "date_span": e["date_span"],
+                              "has_evidence": bool(e["why"]) and bool(e["samples"]),
+                              "queued": p.queued})
+        conn = self.catalog.conn
+        return {"proposals": proposals,
+                "collections": conn.execute("SELECT COUNT(*) FROM collection").fetchone()[0],
+                "rules": conn.execute("SELECT COUNT(*) FROM collection_rule").fetchone()[0]}
+
     def verify(self) -> dict:
         result = self.identity.verify_pass(self.catalog)
         incidents = []

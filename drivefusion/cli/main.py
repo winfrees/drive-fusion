@@ -198,6 +198,16 @@ def build_parser() -> argparse.ArgumentParser:
     standards_forget = standards_sub.add_parser("forget", help="stop using a table you imported")
     standards_forget.add_argument("name", help="e.g. backblaze-2025Q3")
 
+    collections = subparsers.add_parser(
+        "collections", help="datasets: proposed by inference, confirmed by you"
+    )
+    collections_sub = collections.add_subparsers(dest="collections_command", metavar="ACTION")
+    collections_sub.add_parser(
+        "propose", help="score the catalogued folders and queue likely collections for review "
+                        "(proposes only; nothing joins a collection)")
+    queue = collections_sub.add_parser("queue", help="the proposals waiting for your decision")
+    queue.add_argument("--all", action="store_true", help="include decided proposals")
+
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
     )
@@ -949,6 +959,50 @@ def cmd_standards_forget(args) -> int:
     return 0
 
 
+def _print_candidate(row) -> None:
+    import json
+
+    evidence = json.loads(row["evidence_json"])
+    span = evidence.get("date_span")
+    print(f"  [{row['id']}] {evidence['path']}  score {row['score']:.2f}  ({row['status']})")
+    print(f"        {evidence['files']:,} files, {_human_bytes(evidence['bytes'])}"
+          + (f", {span[0]} to {span[1]}" if span else "")
+          + ", " + ", ".join(f"{t or '(none)'} {n}" for t, n in evidence["types"][:3]))
+    for reason in evidence["why"]:
+        print(f"        - {reason}")
+    for name in evidence["samples"][:3]:
+        print(f"          e.g. {name}")
+
+
+def cmd_collections_propose(args) -> int:
+    from drivefusion.core.curate import infer
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        found = infer.infer(catalog)
+        queued = [p for p in found if p.queued]
+        print(f"{len(queued)} subtree(s) proposed for review"
+              + (f"; {len(found) - len(queued)} already decided and left as they were"
+                 if len(found) > len(queued) else ""))
+        print("Nothing has joined a collection: accept or reject each proposal first.")
+        for row in curation.candidates(catalog)[:10]:
+            _print_candidate(row)
+    return 0
+
+
+def cmd_collections_queue(args) -> int:
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        rows = curation.candidates(catalog, None if args.all else "proposed")
+        if not rows:
+            print("no proposals" + ("" if args.all else " waiting; run "
+                                    "`drivefusion collections propose`"))
+        for row in rows:
+            _print_candidate(row)
+    return 0
+
+
 def cmd_drives_edit(args) -> int:
     from drivefusion.core.health.metadata import FIELDS, MetadataError
 
@@ -1149,6 +1203,8 @@ DISPATCH = {
     ("drives", "assign"): cmd_drives_assign,
     ("drives", "show"): cmd_drives_show,
     ("drives", "edit"): cmd_drives_edit,
+    ("collections", "propose"): cmd_collections_propose,
+    ("collections", "queue"): cmd_collections_queue,
     ("standards", "list"): cmd_standards_list,
     ("standards", "import-afr"): cmd_standards_import_afr,
     ("standards", "forget"): cmd_standards_forget,
@@ -1195,8 +1251,10 @@ def main(argv: list[str] | None = None) -> int:
 
     action = (getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
               or getattr(args, "audit_command", None) or getattr(args, "health_command", None)
-              or getattr(args, "standards_command", None))
-    if args.command in ("scope", "drives", "audit", "health", "standards") and not action:
+              or getattr(args, "standards_command", None)
+              or getattr(args, "collections_command", None))
+    if args.command in ("scope", "drives", "audit", "health", "standards",
+                        "collections") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 
