@@ -39,7 +39,7 @@ def test_export_all_then_again_to_the_remembered_folder(tmp_path: Path, capsys) 
     assert "nothing on any scanned drive was changed" in text
     bundles = sorted(p for p in out.iterdir())
     assert len(bundles) == 4
-    record = json.loads((bundles[0] / "_EXPORT.json").read_text())
+    record = json.loads((bundles[0] / "_EXPORT.json").read_text(encoding="utf-8"))
     assert record["standards"]["rubrics"]["fair"]["version"] == "fair-2016"
 
     assert run("export", "manifests") == 0                  # the remembered folder
