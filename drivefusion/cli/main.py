@@ -9,6 +9,7 @@ be: consolidation plans are documents you execute with your own tools
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import textwrap
@@ -45,7 +46,6 @@ DEFAULT_CATALOG = Path(
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
-    "plan": ("build a consolidation plan", "M7"),
     "export": ("write reports, manifests, and bundles to an export folder", "M8"),
 }
 
@@ -240,6 +240,22 @@ def build_parser() -> argparse.ArgumentParser:
     versions_sub = versions.add_subparsers(dest="versions_command", metavar="ACTION")
     versions_sub.add_parser("find", help="find version sets in the catalog, replacing the last run's")
     versions_sub.add_parser("list", help="the version sets found, each with its preferred member")
+
+    plan = subparsers.add_parser(
+        "plan", help="a consolidation plan: copies to make, for you to carry out")
+    plan_sub = plan.add_subparsers(dest="plan_command", metavar="ACTION")
+    make = plan_sub.add_parser("make", help="plan from the catalog; the last draft is superseded")
+    make.add_argument("--name", default=None)
+    make.add_argument("--greedy", action="store_true",
+                      help="the greedy plan alone, even when ortools is installed")
+    make.add_argument("--time-limit", type=float, default=None, metavar="SECONDS",
+                      help="how long CP-SAT may search (default 10)")
+    make.add_argument("--json", action="store_true", help="machine-readable output")
+    plan_show = plan_sub.add_parser("show", help="a stored plan as a checklist")
+    plan_show.add_argument("plan_id", nargs="?", type=int, metavar="ID",
+                           help="default: the current draft")
+    plan_show.add_argument("--json", action="store_true", help="machine-readable output")
+    plan_sub.add_parser("list", help="the stored plans, newest first")
 
     score = subparsers.add_parser(
         "score", help="FAIR and NDSA scorecards for your confirmed collections")
@@ -1287,6 +1303,52 @@ def _print_scorecard(card, rubric, *, full: bool) -> None:
             print(f"      {'':13} → {r.remedy}")
 
 
+def cmd_plan_make(args) -> int:
+    from drivefusion.core.planner import cpsat, document
+
+    with Catalog(args.catalog) as catalog:
+        doc = document.make(catalog, name=args.name, use_cpsat=not args.greedy,
+                            time_limit=args.time_limit or cpsat.TIME_LIMIT)
+        plan_id = document.save(catalog, doc)
+        if args.json:
+            print(json.dumps(document.to_json(catalog, plan_id), indent=2))
+        else:
+            print(document.to_text(catalog, plan_id), end="")
+    return 0
+
+
+def cmd_plan_show(args) -> int:
+    from drivefusion.core.planner import document
+    from drivefusion.core.store import plans
+
+    with Catalog(args.catalog) as catalog:
+        row = plans.plan(catalog, args.plan_id) if args.plan_id else plans.current(catalog)
+        if row is None:
+            print(f"no plan {args.plan_id}" if args.plan_id else
+                  "no current plan; make one with `drivefusion plan make`", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(document.to_json(catalog, row["id"]), indent=2))
+        else:
+            print(document.to_text(catalog, row["id"]), end="")
+    return 0
+
+
+def cmd_plan_list(args) -> int:
+    from drivefusion.core.store import plans
+
+    with Catalog(args.catalog) as catalog:
+        rows = plans.plans(catalog)
+        if not rows:
+            print("no plans yet; make one with `drivefusion plan make`")
+        for row in rows:
+            summary = json.loads(row["summary_json"] or "{}")
+            print(f"{row['id']:>4}  {row['status']:<10} {row['created_at'][:16]}  "
+                  f"{row['solver']:<6}  {summary.get('copies', 0)} copies, "
+                  f"{_human_bytes(summary.get('bytes_to_copy') or 0)}  {row['name']}")
+    return 0
+
+
 def cmd_score(args) -> int:
     from drivefusion.core.curate import coverage
     from drivefusion.core.fair import rubrics, scorecard
@@ -1518,6 +1580,9 @@ DISPATCH = {
     ("score", None): cmd_score,
     ("versions", "find"): cmd_versions_find,
     ("versions", "list"): cmd_versions_list,
+    ("plan", "make"): cmd_plan_make,
+    ("plan", "show"): cmd_plan_show,
+    ("plan", "list"): cmd_plan_list,
     ("collections", "propose"): cmd_collections_propose,
     ("collections", "queue"): cmd_collections_queue,
     ("collections", "accept"): cmd_collections_accept,
@@ -1576,9 +1641,10 @@ def main(argv: list[str] | None = None) -> int:
               or getattr(args, "audit_command", None) or getattr(args, "health_command", None)
               or getattr(args, "standards_command", None)
               or getattr(args, "collections_command", None)
-              or getattr(args, "versions_command", None))
+              or getattr(args, "versions_command", None)
+              or getattr(args, "plan_command", None))
     if args.command in ("scope", "drives", "audit", "health", "standards",
-                        "collections", "versions") and not action:
+                        "collections", "versions", "plan") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 
