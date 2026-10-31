@@ -157,6 +157,8 @@ class Evaluator:
                                 phases.get("rescan", {}))
             self.package_tests(phases["export"], self.observed.get("export_tree", {}),
                                phases.get("rescan", {}))
+            self.mapping_tests(phases["export"], self.observed.get("export_tree", {}),
+                               phases.get("rescan", {}))
         self.deferred()
         return self.results
 
@@ -1359,6 +1361,81 @@ class Evaluator:
         for title in sorted(set(wanted) - seen):
             r.fail(f"collection {title!r} has no package")
         r.finish("no collection was confirmed")
+
+    #: The bench's own denylist, written from PLAN §3.2, not imported.
+    DESTRUCTIVE = {"del", "rm", "rmdir", "rd", "erase", "format", "diskpart", "unlink", "mv",
+                   "move", "shred", "mkfs", "dd"}
+    DESTRUCTIVE_FLAGS = ("/mir", "/purge", "/mov", "--delete", "--remove-source")
+
+    def mapping_tests(self, bundles: list | None, tree: dict, rescan: dict) -> None:
+        import csv
+        import io
+        import re
+
+        r = self.new("VV-EXP-04", "Mappings invert exactly; previews only copy",
+                     ["R-EXP-04"], "export")
+        if bundles is None or not any(b["kind"] == "mappings" for b in bundles):
+            r.finish("this version writes no mappings (before M8.4)")
+            return
+        exp = self.exp["rescan"]
+        roots = {d["id"]: d["root"].replace("\\", "/").rstrip("/") for d in self.manifest["drives"]}
+
+        def key_of(path: str):
+            path = re.sub(r"[\\/]+", "/", path)
+            for d, root in roots.items():
+                if path.startswith(root + "/"):
+                    return (d, path[len(root) + 1:])
+            return None
+
+        truths = []
+        for c in rescan.get("collections") or []:
+            prefixes = [(d, f"{p}/" if p else "") for d, p in c["folders"]]
+            truths.append((c["title"], {k for k in exp["files"] if any(
+                k[0] == d and k[1].startswith(p) for d, p in prefixes)}))
+        for rel, entry in sorted(tree.items()):
+            if not rel.endswith("/mapping.csv"):
+                continue
+            r.checked += 1
+            folder = rel[:-len("/mapping.csv")]
+            forward = list(csv.reader(io.StringIO(entry.get("text", ""))))[1:]
+            inverse = list(csv.reader(io.StringIO(
+                tree.get(f"{folder}/inverse.csv", {}).get("text", ""))))[1:]
+            olds = [key_of(o) for o, _ in forward]
+            news = [n.lower() for _, n in forward]
+            if len(set(news)) != len(news):
+                r.fail(f"{folder}: two files map to one new path")
+            if {(o, n) for o, n in forward} != {(o, n) for n, o in inverse}:
+                r.fail(f"{folder}: inverse.csv is not the exact inverse of mapping.csv")
+            match = [t for t, keys in truths if keys == set(olds)]
+            if not match or len(olds) != len(set(olds)):
+                r.fail(f"{folder}: maps {len(olds)} file(s) that are not exactly one "
+                       "collection's live members")
+        steps = [s for s in (rescan.get("plan") or {}).get("steps", []) if s["kind"] == "copy"]
+        for rel, entry in sorted(tree.items()):
+            if not rel.endswith(("/copy-commands.cmd", "/copy-commands.sh")):
+                continue
+            r.checked += 1
+            commands = 0
+            for number, line in enumerate(entry.get("text", "").splitlines(), start=1):
+                line = line.strip()
+                if not line or line.startswith("#") or line.upper().startswith("REM "):
+                    continue
+                commands += 1
+                unquoted = re.sub(r'"[^"]*"|\'[^\']*\'', " ", line)
+                if '"' in unquoted or "'" in unquoted:
+                    r.fail(f"{rel}:{number}: unbalanced quoting")
+                words = unquoted.lower().split()
+                if not words or words[0] not in ("robocopy", "rsync"):
+                    r.fail(f"{rel}:{number}: not a copy command: {line[:60]}")
+                for w in words:
+                    if w in self.DESTRUCTIVE or w.startswith(self.DESTRUCTIVE_FLAGS) or \
+                            any(ch in w for ch in "&|;`$<>") and w not in ("<", ">"):
+                        if w.startswith("<") and w.endswith(">"):
+                            continue
+                        r.fail(f"{rel}:{number}: {w!r} in a preview")
+            if commands != len(steps):
+                r.fail(f"{rel}: {commands} command(s) for {len(steps)} copy step(s)")
+        r.finish("no mapping was written")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

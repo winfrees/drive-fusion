@@ -345,6 +345,11 @@ class DriveFusionAdapter:
             made("collections", lambda b: packages.write(b, self.catalog))
         except ImportError:
             pass
+        try:
+            mappings = importlib.import_module("drivefusion.core.export.mappings")
+            made("mappings", lambda b: mappings.write(b, self.catalog))
+        except ImportError:
+            pass
         if not bundles:
             made("bench", lambda b: {"note": "the writer alone (M8.1)"})
         return bundles

@@ -884,3 +884,45 @@ def test_evaluator_catches_a_crate_missing_a_member(completed_run) -> None:
         root["hasPart"].pop()
 
     assert _rejudge(manifest, observed, drop)[("VV-EXP-03", "export")]["verdict"] == ev.FAIL
+
+
+def _mapping(obs):
+    return next(rel for rel in sorted(obs["export_tree"]) if rel.endswith("/mapping.csv"))
+
+
+def test_the_mapping_test_runs_and_passes(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-EXP-04", "export")]
+    assert r["verdict"] == ev.PASS and r["checked"] >= 1, r
+
+
+def test_evaluator_catches_a_broken_inverse_or_a_clash(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    rel = _mapping(observed)
+    inverse = rel.replace("mapping.csv", "inverse.csv")
+
+    def break_inverse(o):
+        o["export_tree"][inverse]["text"] = "new_path,old_path\n"
+
+    def clash(o):
+        lines = o["export_tree"][rel]["text"].splitlines()
+        if len(lines) < 3:
+            lines.append(lines[1])
+        else:
+            old2 = lines[2].split(",", 1)[0]
+            lines[2] = f"{old2},{lines[1].split(',', 1)[1]}"
+        o["export_tree"][rel]["text"] = "\n".join(lines) + "\n"
+
+    for mutate in (break_inverse, clash):
+        assert _rejudge(manifest, observed, mutate)[("VV-EXP-04", "export")]["verdict"] \
+            == ev.FAIL
+
+
+def test_evaluator_catches_a_destructive_preview(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    rel = next(r for r in sorted(observed["export_tree"]) if r.endswith("copy-commands.sh"))
+
+    def inject(o):
+        o["export_tree"][rel]["text"] += 'rsync -a --delete "/a/" "/b/"\n'
+
+    assert _rejudge(manifest, observed, inject)[("VV-EXP-04", "export")]["verdict"] == ev.FAIL
