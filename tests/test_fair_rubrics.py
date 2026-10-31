@@ -38,9 +38,9 @@ def test_ndsa_covers_five_areas_at_four_levels() -> None:
 def test_every_rubric_is_citable_and_says_how_it_was_obtained(rubric_id) -> None:
     r = rubrics.current(rubric_id)
     assert r.citation and r.url.startswith("https://")
-    assert r.retrieval in ("confirmed", "unconfirmed")
-    if r.retrieval == "confirmed":
-        assert r.retrieved, "a confirmed rubric records when it was checked"
+    assert r.retrieval in rubrics.RETRIEVALS
+    if r.retrieval in ("confirmed", "reviewed"):
+        assert r.retrieved, "a checked or reviewed rubric records when"
     else:
         assert r.retrieved is None, "an unconfirmed rubric claims no retrieval date"
     assert all(c.section and c.text.endswith(".") for c in r.criteria)
@@ -59,4 +59,15 @@ def test_standards_list_names_the_rubrics_and_their_state(tmp_path, capsys) -> N
     assert main(["--catalog", str(tmp_path / "c.db"), "standards", "list"]) == 0
     out = capsys.readouterr().out
     assert "fair-2016: FAIR Guiding Principles 2016, 15 criteria" in out
-    assert "ndsa-2.0:" in out and "not yet confirmed against the source" in out
+    assert "ndsa-2.0:" in out and "wording reviewed 2026-10-31" in out
+
+
+def test_provenance_says_how_the_wording_was_checked() -> None:
+    import dataclasses
+
+    r = rubrics.current("fair")
+    assert dataclasses.replace(r, retrieval="confirmed").provenance().startswith(
+        "confirmed against the source")
+    assert dataclasses.replace(r, retrieval="reviewed").provenance() == f"wording reviewed {r.retrieved}"
+    unconfirmed = dataclasses.replace(r, retrieval="unconfirmed", retrieved=None)
+    assert not unconfirmed.accepted and "not yet confirmed" in unconfirmed.provenance()

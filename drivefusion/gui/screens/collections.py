@@ -341,11 +341,13 @@ class ScorecardDialog(QDialog):
             self.setWindowTitle(f"Scorecard: {card.title}")
             rubric = rubrics.current(rubric_id)
             if card.levels:
-                summary = ", ".join(f"{rubric.groups[g]} {lv if lv is not None else 'not assessed'}"
-                                    for g, lv in card.levels.items())
+                summary = "consistent with levels " + ", ".join(
+                    f"{rubric.groups[g]} {lv if lv is not None else 'not assessed'}"
+                    for g, lv in card.levels.items())
             else:
-                summary = "—" if card.score is None else f"{card.score:.0%} of assessed criteria met"
-            note = "" if card.rubric_confirmed else " · rubric not yet confirmed against its source"
+                summary = ("—" if card.score is None
+                           else f"consistent with {card.score:.0%} of the assessed criteria")
+            note = "" if card.rubric_accepted else " · rubric not yet confirmed against its source"
             layout.addWidget(QLabel(f"<b>{rubric.source} {rubric.version}</b>: {summary}{note}"))
             tree = _tree(("Criterion", "Result", "Detail", "To close the gap"))
             for r in card.results:

@@ -15,8 +15,9 @@ assessed statements, and every lower level's, all pass. Statements left to
 judgement or planned don't hold a level back, and are listed with it; an
 area with nothing Drive Fusion can assess (control) has no level at all.
 
-A scorecard says which rubric version it used and whether that rubric has
-been confirmed against its source, and how much of the archive is in
+A scorecard says a collection is *consistent with* a rubric's criteria, to a
+degree; it certifies nothing. It names the rubric version it used and whether
+that rubric's wording has been checked or reviewed (ROADMAP D14), and how much of the archive is in
 collections at all (M6.4): a scorecard over 12 % of the bytes is not a
 scorecard over the archive.
 """
@@ -51,11 +52,12 @@ class Result:
 @dataclass
 class Scorecard:
     rubric: str                     # e.g. fair-2016
-    rubric_confirmed: bool
+    rubric_accepted: bool
     collection_id: int
     title: str
     results: list[Result] = field(default_factory=list)
     levels: dict[str, int | None] = field(default_factory=dict)  # NDSA; None: not assessed
+    rubric_retrieval: str = "unconfirmed"     # confirmed | reviewed | unconfirmed
 
     def result(self, criterion: str) -> Result:
         return next(r for r in self.results if r.criterion == criterion)
@@ -178,7 +180,8 @@ def fair(catalog, collection_id: int, *, today: dt.date | None = None) -> Scorec
     rubric = rubrics.current("fair")
     filled, total, missing = e.completeness
     row = e.row
-    card = Scorecard(rubric.name, rubric.retrieval == "confirmed", collection_id, row["title"])
+    card = Scorecard(rubric.name, rubric.accepted, collection_id, row["title"],
+                     rubric_retrieval=rubric.retrieval)
     add = lambda *a: card.results.append(Result(*a))  # noqa: E731
 
     add("F1", PASS if row["local_pid"] else FAIL,
@@ -233,7 +236,8 @@ def ndsa(catalog, collection_id: int, *, today: dt.date | None = None) -> Scorec
     e = gather(catalog, collection_id, today=today)
     rubric = rubrics.current("ndsa")
     filled, total, missing = e.completeness
-    card = Scorecard(rubric.name, rubric.retrieval == "confirmed", collection_id, e.row["title"])
+    card = Scorecard(rubric.name, rubric.accepted, collection_id, e.row["title"],
+                     rubric_retrieval=rubric.retrieval)
     add = lambda *a: card.results.append(Result(*a))  # noqa: E731
     n = e.items
 
@@ -336,7 +340,8 @@ def score(catalog, collection_id: int, rubric_id: str, **kw) -> Scorecard:
 
 
 def to_json(card: Scorecard) -> str:
-    return json.dumps({"rubric": card.rubric, "rubric_confirmed": card.rubric_confirmed,
+    return json.dumps({"rubric": card.rubric, "rubric_accepted": card.rubric_accepted,
+                       "rubric_retrieval": card.rubric_retrieval,
                        "collection_id": card.collection_id, "score": card.score,
                        "levels": card.levels,
                        "results": [r.__dict__ for r in card.results]}, indent=1)

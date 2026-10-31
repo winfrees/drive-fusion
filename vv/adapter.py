@@ -252,7 +252,7 @@ class DriveFusionAdapter:
             for rubric_id in ("fair", "ndsa"):
                 card = scorecard.score(self.catalog, row["id"], rubric_id)
                 cards[rubric_id] = {
-                    "rubric": card.rubric, "confirmed": card.rubric_confirmed,
+                    "rubric": card.rubric, "confirmed": card.rubric_accepted,  # checked or reviewed (D14)
                     "levels": card.levels,
                     "results": {r.criterion: [r.status, bool(r.remedy)] for r in card.results},
                     "order": [r.criterion for r in card.results]}

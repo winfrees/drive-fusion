@@ -2,8 +2,10 @@
 
 Each rubric is a file under ``drivefusion/standards/<id>/``, naming its source,
 version, citation and URL, and how it was obtained: ``retrieval`` is
-``confirmed`` once someone has checked it against the source, ``unconfirmed``
-until then (ROADMAP D14). Adopting a revised standard is a data change: add
+``confirmed`` once someone has checked it line by line against the source,
+``reviewed`` once its owner has reviewed the wording and accepted it (with the
+date in ``retrieved``), ``unconfirmed`` until then (ROADMAP D14). A scorecard
+says a collection is *consistent with* a rubric's criteria, never more. Adopting a revised standard is a data change: add
 its file, and reports name the version they used.
 """
 
@@ -15,6 +17,7 @@ from functools import lru_cache
 from importlib import resources
 
 RUBRICS = ("fair", "ndsa")
+RETRIEVALS = ("confirmed", "reviewed", "unconfirmed")
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,18 @@ class Rubric:
     groups: dict[str, str]
     criteria: tuple[Criterion, ...]
     levels: dict[int, str]
+
+    @property
+    def accepted(self) -> bool:
+        """Checked against the source, or its wording reviewed and accepted."""
+        return self.retrieval in ("confirmed", "reviewed")
+
+    def provenance(self) -> str:
+        if self.retrieval == "confirmed":
+            return f"confirmed against the source {self.retrieved}"
+        if self.retrieval == "reviewed":
+            return f"wording reviewed {self.retrieved}"
+        return "not yet confirmed against the source"
 
     @property
     def name(self) -> str:

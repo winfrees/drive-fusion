@@ -85,7 +85,7 @@ def test_fair_golden_for_an_undescribed_collection(archive) -> None:
     }
     assert card.score == pytest.approx((1 + 0 + 0.5 + 1 + 1 + 0 + 0 + 0 + 0.5) / 9)
     assert "no license recorded" in card.result("R1.1").detail
-    assert card.rubric == "fair-2016" and card.rubric_confirmed is False
+    assert card.rubric == "fair-2016" and card.rubric_accepted is True
 
 
 def test_describing_licensing_relating_and_verifying_raise_the_fair_score(archive) -> None:
@@ -144,8 +144,8 @@ def test_the_cli_scores_one_collection_in_full_and_all_in_summary(archive, tmp_p
     assert main(["--catalog", path, "score"]) == 0
     out = capsys.readouterr().out
     assert "scored over the" in out and "collection 1: Project" in out
-    assert "fair-2016 (rubric not yet confirmed against its source):" in out
-    assert "levels reached: storage 0" in out
+    assert "fair-2016: consistent with" in out and "not yet confirmed" not in out
+    assert "consistent with levels storage 0" in out
     assert main(["--catalog", path, "score", "1", "--rubric", "fair"]) == 0
     out = capsys.readouterr().out
     assert "✗ R1.1" in out and "→ `drivefusion collections edit ID --license" in out
