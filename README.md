@@ -91,6 +91,8 @@ drivefusion collections edit 1 --license CC-BY-4.0 --creators "A. Smith"
 drivefusion collections coverage   # share curated; size and risk of what is unfiled
 drivefusion versions find          # near-duplicates grouped, a preferred version proposed
 drivefusion score 1                # FAIR and NDSA scorecards: gaps and how to close them
+drivefusion plan make              # what to copy where, for you to carry out; nothing is copied
+drivefusion plan show --json       # the current plan, steps with their reasons
 drivefusion standards import-afr data_Q3_2025.zip   # a Backblaze Drive Stats ZIP you downloaded
 drivefusion gui                    # the desktop window
 ```
