@@ -105,7 +105,7 @@ def test_unknown_scope_root_is_an_error(cli, capsys) -> None:
 
 
 def test_planned_verbs_report_their_milestone(cli, capsys) -> None:
-    for verb, milestone in (("score", "M6"), ("plan", "M7"), ("export", "M8")):
+    for verb, milestone in (("plan", "M7"), ("export", "M8")):
         assert cli(verb) == 2
         assert milestone in capsys.readouterr().err
 

@@ -835,6 +835,11 @@ revised standard is a data change, not a code change.
 criterion cites its source section, and each file is marked `retrieval: unconfirmed` until
 checked against the source. `drivefusion standards list` shows which.
 
+**As built (ROADMAP M6.7):** `core/fair/scorecard.py` and `drivefusion score`. Results are pass,
+partial, fail, *planned* (capability not built yet) or *judgement* (outside what the tool can
+see); every gap names its remedy. NDSA gives a level per functional area; control, which the tool
+cannot observe, has none. Output is headed by coverage and names the rubric version.
+
 **FAIR scorecard**, scored per collection with each failing criterion naming the gap and its
 remedy: persistent local identifiers and content hashes as permanent names (**F1**), metadata
 completeness against the collection profile (**F2**), manifests binding PID ↔ checksums ↔ paths
