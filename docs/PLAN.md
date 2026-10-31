@@ -939,7 +939,9 @@ its footprint is kept per cluster size. Room at a destination is free space less
 max(10 % of capacity, 1 GiB); retired drives, working drives and drives of unknown size take
 nothing. The greedy pass adds each copy where it leaves the unit's P(loss) lowest, never
 putting more than target − 1 copies of a unit in one purchase batch or one recorded zone,
-then a swap pass moves added copies to a safer fit.
+then a swap pass moves added copies to a safer fit. CP-SAT (M7.5) maximises copies placed, then
+bytes × fall in P(loss), then fewer drives connected; its plan replaces greedy's only when it
+leaves fewer copies short, or as few with less expected loss.
 
 **The plan document** is a dependency-ordered checklist of `copy` / `organize` / `describe` /
 `verify` / `review-candidate` / `acquire` steps, each with a plain-language rationale and its

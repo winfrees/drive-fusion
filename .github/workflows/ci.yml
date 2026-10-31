@@ -42,6 +42,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,gui]"
 
+      # CP-SAT is optional (D15): Linux runs its tests, Windows tests greedy alone,
+      # as the Windows build ships.
+      - name: Optional solver (Linux)
+        if: runner.os == 'Linux'
+        run: python -m pip install -e ".[solver]"
+
       - name: Read-only lint
         run: python tools/ro_lint.py
 
