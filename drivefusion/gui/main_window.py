@@ -1,7 +1,7 @@
 """The window: navigation, a progress bar, and a permanent honesty notice.
 
-Screens not yet built (Exports, at M8) appear as disabled entries naming the
-milestone that lands each, rather than as buttons that do nothing: a
+Screens not yet built would appear as disabled entries naming the milestone
+that lands each (all eight of PLAN §11 are built since M8.6), rather than as buttons that do nothing: a
 dead control is a bug report waiting to be filed.
 
 The status bar always carries "Read-only — nothing on your drives is ever
@@ -37,6 +37,7 @@ from drivefusion.gui.screens.collections import CollectionsScreen
 from drivefusion.gui.screens.dashboard import DashboardScreen
 from drivefusion.gui.screens.drives import DrivesScreen
 from drivefusion.gui.screens.duplicates import DuplicatesScreen
+from drivefusion.gui.screens.exports import ExportsScreen
 from drivefusion.gui.screens.plan import PlanScreen
 from drivefusion.gui.screens.scope import ScopeScreen
 from drivefusion.gui.screens.settings import SettingsScreen
@@ -46,9 +47,7 @@ from drivefusion.gui.workers import TaskRunner
 READ_ONLY_NOTICE = "Read-only — nothing on your drives is ever modified"
 
 #: Screens the plan defines but this milestone does not ship, and their milestone.
-PLANNED = (
-    ("Exports", "M8"),
-)
+PLANNED: tuple[tuple[str, str], ...] = ()
 
 
 class MainWindow(QMainWindow):
@@ -93,6 +92,7 @@ class MainWindow(QMainWindow):
         self.collections = CollectionsScreen(self.session)
         self.duplicates = DuplicatesScreen(self.session)
         self.plan = PlanScreen(self.session)
+        self.exports = ExportsScreen(self.session)
         self.settings = SettingsScreen(self.session)
 
         for name, screen in (
@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
             ("Collections", self.collections),
             ("Duplicates & Versions", self.duplicates),
             ("Plan", self.plan),
+            ("Exports", self.exports),
             ("Settings", self.settings),
         ):
             self.nav.addItem(QListWidgetItem(name))
@@ -134,6 +135,7 @@ class MainWindow(QMainWindow):
         self.duplicates.versionsRequested.connect(
             lambda body: self.run_task(body, "Finding version sets"))
         self.plan.planRequested.connect(lambda body: self.run_task(body, "Planning"))
+        self.exports.exportRequested.connect(lambda body: self.run_task(body, "Exporting"))
         self.settings.importRequested.connect(
             lambda body: self.run_task(body, "Importing failure rates"))
         settings_action = self.menuBar().addMenu("&Tools").addAction("&Settings…")
@@ -156,6 +158,7 @@ class MainWindow(QMainWindow):
         self.collections.refresh()
         self.duplicates.refresh()
         self.plan.refresh()
+        self.exports.refresh()
         self.settings.refresh()
 
     # -- background work ----------------------------------------------------

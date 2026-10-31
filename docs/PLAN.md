@@ -1043,7 +1043,11 @@ because no such capability exists behind them.
    **As built (ROADMAP M8.5):** `core/export/reports.py` writes `summary.csv`,
    `under-protected.csv`, `duplicates.csv`, `durability.csv`, `scorecards.csv`, `plan.csv` and a
    self-contained `report.html` (no scripts, no links out, every value escaped; tables capped at
-   200 rows, the CSVs complete).
+   200 rows, the CSVs complete). **As built (ROADMAP M8.6):** `drivefusion export
+   {manifests,collections,mappings,reports,all} [--to FOLDER]` and `export list`
+   (`core/export/run.py`), and this screen: choose the folder once, then one button per kind
+   or Make all, each run as a background task; past exports listed with the standards versions
+   they used; Open folder. The folder is remembered as the last export's root (D22).
 
 **Threading, because a frozen window is a bug:** a ``sqlite3`` connection belongs to the
 thread that created it, so the GUI keeps **one catalog per thread** — never one shared
