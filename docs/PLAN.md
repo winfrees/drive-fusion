@@ -980,6 +980,11 @@ and archive as provenance.
    and `_CATALOG.md` (human): drive identity, contents by collection, counts, sizes, checksums,
    and where the sibling copies live. Copy it onto the drive and a shelved drive becomes
    self-describing without the app.
+   **As built (ROADMAP M8.2):** `core/export/manifests.py`, one folder per drive (partitions
+   of one device together) and one per volume whose drive is unconfirmed. The JSON lists
+   every live file with size, modified time, hash where known (`blake3:…`), collection and
+   `copies_elsewhere` (drive and path); the Markdown gives identity, volumes, totals, and
+   contents by collection and by top-level folder.
 3. **Global index** — the catalog, searchable by name, extension, size, date, drive, collection,
    or copy count (§7.4). It answers "which drive is this on" for drives in a box in a closet.
 4. **Stable identifiers** — the content hash is the permanent name of a piece of content and

@@ -795,3 +795,53 @@ def test_evaluator_catches_an_unfinished_bundle(completed_run) -> None:
     name = _first_bundle(observed)
     drop = lambda o: o["export_tree"].pop(f"{name}/_EXPORT.json")  # noqa: E731
     assert _rejudge(manifest, observed, drop)[("VV-EXP-01", "export")]["verdict"] == ev.FAIL
+
+
+def _manifests(obs):
+    return [e["json"] for rel, e in sorted(obs["export_tree"].items())
+            if rel.endswith("/_DRIVE-FUSION.json")]
+
+
+def test_the_manifest_test_runs_and_passes(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-EXP-02", "export")]
+    assert r["verdict"] == ev.PASS and r["checked"] >= 1, r
+
+
+def test_evaluator_catches_a_manifest_missing_a_file_or_a_size(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def drop(o):
+        _manifests(o)[0]["files"].pop()
+
+    def resize(o):
+        _manifests(o)[0]["files"][0]["bytes"] += 1
+
+    for mutate in (drop, resize):
+        assert _rejudge(manifest, observed, mutate)[("VV-EXP-02", "export")]["verdict"] \
+            == ev.FAIL
+
+
+def test_evaluator_catches_a_wrong_sibling_copy(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    if not any(f["copies_elsewhere"] for m in _manifests(observed) for f in m["files"]):
+        pytest.skip("no file with a copy on another drive in this dataset")
+
+    def forget(o):
+        for m in _manifests(o):
+            for f in m["files"]:
+                if f["copies_elsewhere"]:
+                    f["copies_elsewhere"] = []
+                    return
+
+    assert _rejudge(manifest, observed, forget)[("VV-EXP-02", "export")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_a_drive_without_a_manifest(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def lose(o):
+        rel = next(r for r in sorted(o["export_tree"]) if r.endswith("/_DRIVE-FUSION.json"))
+        del o["export_tree"][rel]
+
+    assert _rejudge(manifest, observed, lose)[("VV-EXP-02", "export")]["verdict"] == ev.FAIL
