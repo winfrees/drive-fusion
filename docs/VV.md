@@ -172,7 +172,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-PLAN-01 | §9, §3.2 | A plan only adds: no step removes or moves a copy, the plan store refuses a step that would, and every copy goes to a drive that is not its source |
 | R-PLAN-02 | §9 | No destination is planned over its free space less the reserve, each copied file counted at its size rounded up to the destination's clusters |
 | R-PLAN-03 | §9 | After the plan every unit has its target number of copies, or the plan says how many it falls short and an acquire step covers those bytes |
-| R-PLAN-04 | §9, §8.2 | No added copy puts more than target − 1 of a unit's copies in one purchase batch or one recorded disaster zone |
+| R-PLAN-04 | §9, §8.2 | An added copy that leaves more than target − 1 of a unit's copies in one purchase batch or recorded disaster zone says so in its step, and no other copy claims to (D18: allowed, costlier, named) |
 
 Requirements for milestones not yet built (exports) are not listed. Each new milestone should add its requirements and tests here
 (§9).
@@ -330,7 +330,7 @@ tool's code would agree with the tool's bugs.
 | VV-PLAN-01 | rescan | R-PLAN-01 | Every step is one of the six adding kinds, a removal step is refused by the store, and no copy lands on its source's device |
 | VV-PLAN-02 | rescan | R-PLAN-02 | Each copy's footprint is at least the oracle's (each live file in the unit at the destination's cluster size), and each destination's total fits its free space less max(10 % of capacity, 1 GiB) |
 | VV-PLAN-03 | rescan | R-PLAN-03 | Per unit, the fewest proven copies any item has after the plan (an item on unverified drives only counting as one) meets the target, or the plan's shortfall is at least the deficit and the acquire step's bytes cover all of them |
-| VV-PLAN-04 | rescan | R-PLAN-04 | For each added copy, the unit's copies on that device's batch (maker, model, purchase month) and recorded zone number at most target − 1 |
+| VV-PLAN-04 | rescan | R-PLAN-04 | For each added copy, the oracle counts the unit's copies on that device's batch (maker, model, purchase month) and recorded zone; the step says it shares exactly those over target − 1 |
 | VV-VER-01 | baseline | R-VER-01 | Each planted version chain is exactly one version set (none missing, not split, nothing extra) and its highest-numbered member is the one preferred |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three

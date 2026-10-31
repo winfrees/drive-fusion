@@ -302,7 +302,13 @@ class DriveFusionAdapter:
         steps = [{"seq": st["seq"], "kind": st["kind"], "unit": st["unit"],
                   "src": where(st["src_dir_id"]), "dst": to_manifest.get(st["dst_drive_id"]),
                   "bytes": st["bytes"], "footprint": st["footprint_bytes"],
-                  "depends_on": st["depends_on"]} for st in stored["steps"]]
+                  "depends_on": st["depends_on"],
+                  # What the plan says this copy shares with another (D18).
+                  "shares": [k for k, phrase in (("batch", "a purchase batch"),
+                                                 ("zone", "a recorded zone"))
+                             if st["kind"] == "copy" and "it shares" in st["rationale"]
+                             and phrase in st["rationale"].split("it shares", 1)[1]]}
+                 for st in stored["steps"]]
         units = [{"key": u.key, "kind": u.kind, "folder": where(u.dir_id), "target": u.target,
                   "bytes": u.bytes, "short": doc.short.get(u.key, (0, 0))[0]}
                  for u in doc.units]

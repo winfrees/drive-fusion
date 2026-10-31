@@ -103,3 +103,11 @@ def test_saved_plans_render_as_json_and_text(fleet) -> None:
     assert "Connect, in order: ARCHIVE-2" in text and "why:" in text
     assert "nothing; every existing copy stays" in text
     assert plans.current(fleet.c)["id"] == plan_id
+
+
+def test_a_copy_sharing_a_zone_says_so(fleet) -> None:
+    fleet.c.conn.execute("UPDATE drive SET disaster_zone = 'office' WHERE id = ?", (fleet.a,))
+    doc = document.make(fleet.c, use_cpsat=False)
+    copies = [s for s in doc.steps if s.kind == "copy"]
+    assert copies and all("shares a recorded zone" in s.rationale for s in copies)
+    assert all("keeps the copies apart" not in s.rationale for s in copies)

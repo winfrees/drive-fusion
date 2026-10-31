@@ -117,7 +117,15 @@ def make(catalog, *, name: str | None = None, today=None, use_cpsat: bool = True
             reason = (f"{what} is on {copies} drive{'s' if copies != 1 else ''} and its target "
                       f"is {u.target}; {labels[drive]} has room "
                       f"({added.footprint:,} bytes on its {by_id[drive].cluster_bytes:,}-byte "
-                      f"clusters) and keeps the copies apart by batch and zone")
+                      f"clusters)")
+            shared = [{"batch": "a purchase batch", "zone": "a recorded zone"}[k]
+                      for k in added.crowds[::2]]
+            if shared:
+                reason += (f"; it shares {' and '.join(shared)} with another of its copies, "
+                           "which the risk model counts as failing together, but it was the "
+                           "safest drive with room, and a second copy here beats none")
+            else:
+                reason += " and keeps the copies apart by batch and zone"
             if not sources:
                 reason += "; the source volume's drive is not confirmed, so check it first"
             steps.append(Step(

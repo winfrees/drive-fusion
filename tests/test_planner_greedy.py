@@ -16,7 +16,7 @@ AFR = 0.02
 
 
 def toy_risk(dests: list[Destination]):
-    """P(loss) as a product of AFRs, doubled per extra drive sharing a batch."""
+    """P(loss) as a product of AFRs, doubled per extra drive sharing a batch or a zone."""
     by_id = {d.drive_id: d for d in dests}
 
     def p_of(holders: frozenset) -> float:
@@ -24,7 +24,8 @@ def toy_risk(dests: list[Destination]):
             return AFR
         p = AFR ** len(holders)
         batches = Counter(by_id[h].batch_key for h in holders if h in by_id and by_id[h].batch_key)
-        for n in batches.values():
+        zones = Counter(by_id[h].zone for h in holders if h in by_id and by_id[h].zone)
+        for n in [*batches.values(), *zones.values()]:
             p *= 2 ** (n - 1)
         return min(p, AFR)
     return p_of
@@ -55,14 +56,16 @@ def check(units, dests, solution) -> None:
         after = solution.holders[u.key]
         assert u.holders <= after, "existing copies are pinned"
         assert len(after) >= len(u.holders), "never fewer copies than before"
-        added = after - u.holders
         limit = max(1, u.target - 1)
-        for attr in ("batch_key", "zone"):
-            values = Counter(getattr(by_id[h], attr) for h in after if h in by_id)
-            for value, n in values.items():
-                if value and n > limit:
-                    assert not any(getattr(by_id[h], attr) == value for h in added), \
-                        f"{attr} {value!r} over-concentrated by the plan"
+        for a in (a for a in solution.added if a.unit == u.key):
+            d = by_id[a.drive_id]
+            crowded = []
+            for attr, label in (("batch_key", "batch"), ("zone", "zone")):
+                value = getattr(d, attr)
+                if value and sum(1 for h in after if h in by_id
+                                 and getattr(by_id[h], attr) == value) > limit:
+                    crowded += [label, value]
+            assert a.crowds == tuple(crowded), "every crowded copy is marked, and only those"
         short = solution.short.get(u.key, (0, 0))[0]
         copies = len(after) + (0 if u.holders else 1)    # an unverified copy is one
         assert copies + short >= u.target, "a shortfall is an acquire"
@@ -93,17 +96,22 @@ def test_a_single_copy_gets_a_second_on_the_safer_drive() -> None:
     assert solution.short == {}
 
 
-def test_batch_diversity_is_a_rule_not_just_a_cost() -> None:
+def test_a_same_batch_copy_beats_no_copy_and_says_so() -> None:
+    """D18: batch diversity is a cost, not a rule."""
     dests = [dest(1, 100 * GiB, batch="b1"), dest(2, 100 * GiB, batch="b1")]
-    solution = greedy.solve([unit("u", GiB, holders=[1])], dests, lambda h: AFR ** len(h))
-    assert solution.holders["u"] == {1} and solution.short == {"u": (1, GiB)}
+    solution = greedy.solve([unit("u", GiB, holders=[1])], dests, toy_risk(dests))
+    assert solution.holders["u"] == {1, 2} and solution.short == {}
+    assert solution.added[0].crowds == ("batch", "b1")
 
 
-def test_zone_separation_and_unknown_zones() -> None:
+def test_a_diverse_drive_wins_where_it_has_room() -> None:
     dests = [dest(1, 100 * GiB, zone="home"), dest(2, 100 * GiB, zone="home"),
              dest(3, 100 * GiB)]
-    solution = greedy.solve([unit("u", GiB, holders=[1])], dests, lambda h: AFR ** len(h))
-    assert solution.holders["u"] == {1, 3}
+    solution = greedy.solve([unit("u", GiB, holders=[1])], dests, toy_risk(dests))
+    assert solution.holders["u"] == {1, 3} and solution.added[0].crowds == ()
+    dests[2] = dest(3, 0)                                    # no room apart: same zone, marked
+    solution = greedy.solve([unit("u", GiB, holders=[1])], dests, toy_risk(dests))
+    assert solution.holders["u"] == {1, 2} and solution.added[0].crowds == ("zone", "home")
 
 
 def test_footprint_not_size_decides_fit() -> None:

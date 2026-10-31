@@ -7,11 +7,15 @@ connected for this plan, then to the one with the most room left. A
 destination is admissible when
 
 * it doesn't already hold the unit and isn't excluded (``capacity.py``);
-* the unit's **footprint** at that destination's cluster size fits its room;
-* it keeps **batch diversity** and **zone separation**: no more than
-  ``target - 1`` of the unit's copies in one purchase batch or one recorded
-  disaster zone. Drives with no zone recorded aren't grouped by this rule
-  (they may well be apart); P(loss) already counts them as together.
+* the unit's **footprint** at that destination's cluster size fits its room.
+
+Batch diversity and zone separation are costs, not rules (D18): P(loss)
+already counts drives of one purchase batch, and drives in one recorded zone,
+as failing together, so a diverse drive wins whenever it is the safer place.
+But a second copy on a drive from the same batch beats no second copy, so
+where nothing diverse has room the copy is still planned, and marked: an
+added copy that leaves more than ``target - 1`` of the unit's copies in one
+batch or one recorded zone carries what it shares in ``Added.crowds``.
 
 A unit's copies are counted per item, the fewest any item has, so a copy to
 a drive that already holds some of the unit's items is only counted when it
@@ -39,6 +43,9 @@ class Added:
     drive_id: int
     footprint: int
     bytes: int
+    #: What this copy shares with too many of the unit's other copies, e.g.
+    #: ("batch", "maker|model|2021-03"); empty when it keeps them apart.
+    crowds: tuple = ()
 
 
 @dataclass
@@ -59,15 +66,29 @@ def _admissible(unit: Unit, holders: set, dest: Destination, room: dict[int, int
                 by_id: dict[int, Destination]) -> bool:
     if dest.excluded or dest.drive_id in holders:
         return False
-    if unit.footprint.get(dest.cluster_bytes, unit.bytes) > room[dest.drive_id]:
-        return False
+    return unit.footprint.get(dest.cluster_bytes, unit.bytes) <= room[dest.drive_id]
+
+
+def crowding(unit: Unit, holders, dest: Destination, by_id: dict[int, Destination]) -> tuple:
+    """What a copy on ``dest`` shares with more than ``target - 1`` of the
+    unit's copies (``holders`` includes ``dest``): a purchase batch, a zone."""
     limit = max(1, unit.target - 1)
     known = [by_id[h] for h in holders if h in by_id]
-    if dest.batch_key and Counter(d.batch_key for d in known)[dest.batch_key] >= limit:
-        return False
-    if dest.zone and Counter(d.zone for d in known)[dest.zone] >= limit:
-        return False
-    return True
+    out = []
+    for attr, label in (("batch_key", "batch"), ("zone", "zone")):
+        value = getattr(dest, attr)
+        if value and Counter(getattr(d, attr) for d in known)[value] > limit:
+            out += [label, value]
+    return tuple(out)
+
+
+def mark_crowding(units: list[Unit], destinations: list[Destination],
+                  solution: "Solution") -> None:
+    by_id = {d.drive_id: d for d in destinations}
+    units_by_key = {u.key: u for u in units}
+    for a in solution.added:
+        a.crowds = crowding(units_by_key[a.unit], solution.holders[a.unit], by_id[a.drive_id],
+                            by_id)
 
 
 def solve(units: list[Unit], destinations: list[Destination],
@@ -129,6 +150,7 @@ def solve(units: list[Unit], destinations: list[Destination],
         out.p_after[unit.key] = (p_of(out.holders[unit.key]) if added[unit.key]
                                  else unit.p_loss)
     out.room_left = room
+    mark_crowding(units, destinations, out)
     return out
 
 
