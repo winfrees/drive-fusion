@@ -13,8 +13,11 @@ destination is admissible when
   disaster zone. Drives with no zone recorded aren't grouped by this rule
   (they may well be apart); P(loss) already counts them as together.
 
-When nothing admissible is left the unit is **short**, by so many copies and
-bytes: the plan's ``acquire`` step. Then a swap pass moves *added* copies to a
+A unit's copies are counted per item, the fewest any item has, so a copy to
+a drive that already holds some of the unit's items is only counted when it
+still gives every least-copied item another drive. When nothing admissible is
+left the unit is **short**, by so many copies and bytes: the plan's
+``acquire`` step. Then a swap pass moves *added* copies to a
 destination that lowers their unit's P(loss) if one has room. Existing copies
 are pinned throughout: holders only grow, and the planner cannot express a
 state where a copy is gone.
@@ -73,48 +76,57 @@ def solve(units: list[Unit], destinations: list[Destination],
     room = {d.drive_id: d.room for d in destinations}
     out = Solution()
     touched: set[int] = set()
-    holders = {u.key: set(u.holders) for u in units}
+    added: dict[str, set] = {u.key: set() for u in units}
+
+    def holders(u: Unit) -> set:
+        return set(u.holders) | added[u.key]
 
     for unit in units:
         out.p_before[unit.key] = unit.p_loss
-        need = unit.target - unit.copies
-        while need > 0:
+        while unit.copies_with(added[unit.key]) < unit.target:
+            now = unit.copies_with(added[unit.key])
+            # Only a drive that gives every least-copied item another copy counts.
             options = [d for d in destinations
-                       if _admissible(unit, holders[unit.key], d, room, by_id)]
+                       if _admissible(unit, holders(unit), d, room, by_id)
+                       and unit.copies_with(added[unit.key] | {d.drive_id}) > now]
             if not options:
                 break
             best = min(options, key=lambda d: (
-                p_of(frozenset(holders[unit.key] | {d.drive_id})),
+                p_of(frozenset(holders(unit) | {d.drive_id})),
                 d.drive_id not in touched, -room[d.drive_id]))
             cost = unit.footprint.get(best.cluster_bytes, unit.bytes)
             room[best.drive_id] -= cost
-            holders[unit.key].add(best.drive_id)
+            added[unit.key].add(best.drive_id)
             touched.add(best.drive_id)
             out.added.append(Added(unit.key, best.drive_id, cost, unit.bytes))
-            need -= 1
+        need = unit.target - unit.copies_with(added[unit.key])
         if need > 0:
             out.short[unit.key] = (need, need * unit.bytes)
 
-    # Swap pass: an added copy may move where its unit is safer, if it fits.
+    # Swap pass: an added copy may move where its unit is safer, if it fits
+    # and the unit keeps as many copies.
     units_by_key = {u.key: u for u in units}
-    for added in out.added:
-        unit = units_by_key[added.unit]
-        others = holders[unit.key] - {added.drive_id}
-        current = p_of(frozenset(holders[unit.key]))
-        room[added.drive_id] += added.footprint
-        candidates = [d for d in destinations if d.drive_id != added.drive_id
-                      and _admissible(unit, others, d, room, by_id)]
+    for a in out.added:
+        unit = units_by_key[a.unit]
+        kept = unit.copies_with(added[unit.key])
+        rest = added[unit.key] - {a.drive_id}
+        others = set(unit.holders) | rest
+        current = p_of(frozenset(holders(unit)))
+        room[a.drive_id] += a.footprint
+        candidates = [d for d in destinations if d.drive_id != a.drive_id
+                      and _admissible(unit, others, d, room, by_id)
+                      and unit.copies_with(rest | {d.drive_id}) >= kept]
         better = min(candidates, key=lambda d: p_of(frozenset(others | {d.drive_id})),
                      default=None)
         if better is not None and p_of(frozenset(others | {better.drive_id})) < current:
-            holders[unit.key] = others | {better.drive_id}
-            added.drive_id = better.drive_id
-            added.footprint = unit.footprint.get(better.cluster_bytes, unit.bytes)
-        room[added.drive_id] -= added.footprint
+            added[unit.key] = rest | {better.drive_id}
+            a.drive_id = better.drive_id
+            a.footprint = unit.footprint.get(better.cluster_bytes, unit.bytes)
+        room[a.drive_id] -= a.footprint
 
     for unit in units:
-        out.holders[unit.key] = frozenset(holders[unit.key])
-        out.p_after[unit.key] = (p_of(out.holders[unit.key]) if holders[unit.key] != unit.holders
+        out.holders[unit.key] = frozenset(holders(unit))
+        out.p_after[unit.key] = (p_of(out.holders[unit.key]) if added[unit.key]
                                  else unit.p_loss)
     out.room_left = room
     return out

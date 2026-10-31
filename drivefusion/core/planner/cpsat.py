@@ -78,9 +78,12 @@ def _cp(units, destinations, p_of, baseline, time_limit, seed) -> Solution | Non
         if need <= 0:
             continue
         p_now = p_of(frozenset(u.holders))
+        # Only drives holding none of the unit's items, so that every copy
+        # placed gives every item one more (greedy also weighs the others).
+        anywhere = set().union(*u.holder_sets) if u.holder_sets else set(u.holders)
         for d in open_dests:
             fp = u.footprint.get(d.cluster_bytes, u.bytes)
-            if d.drive_id in u.holders or fp > d.room:
+            if d.drive_id in anywhere or fp > d.room:
                 continue
             x[u.key, d.drive_id] = model.NewBoolVar(f"x[{u.key},{d.drive_id}]")
             value[u.key, d.drive_id] = u.bytes * max(0.0, p_now - p_of(
@@ -145,7 +148,7 @@ def _cp(units, destinations, p_of, baseline, time_limit, seed) -> Solution | Non
         out.holders[u.key] = frozenset(holders[u.key])
         out.p_after[u.key] = (p_of(out.holders[u.key]) if holders[u.key] != u.holders
                               else u.p_loss)
-        need = u.target - u.copies - (len(holders[u.key]) - len(u.holders))
+        need = u.target - u.copies_with(holders[u.key] - u.holders)
         if need > 0:
             out.short[u.key] = (need, need * u.bytes)
     out.room_left = room

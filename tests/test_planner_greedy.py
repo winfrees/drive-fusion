@@ -154,3 +154,17 @@ def test_end_to_end_on_a_catalog(tmp_path) -> None:
         photos = next(u for u in found if u.label.endswith("Photos"))
         assert solution.holders[photos.key] == {a, b}
         assert solution.p_after[photos.key] < solution.p_before[photos.key]
+
+
+def test_a_copy_counts_only_where_every_item_gains_a_drive() -> None:
+    """Found by VV-PLAN-03: one item on an unverified volume, another on A. The
+    unit holds no drive in common, but a copy onto A adds nothing to the item
+    already there; it has to go to B."""
+    dests = [dest(1, 100 * GiB), dest(2, 100 * GiB)]
+    u = unit("u", GiB)
+    u.holder_sets = frozenset({frozenset(), frozenset({1})})
+    assert u.copies == 1 and u.copies_with({1}) == 1 and u.copies_with({2}) == 2
+    solution = greedy.solve([u], dests, lambda h: AFR ** max(1, len(h)))
+    assert [a.drive_id for a in solution.added] == [2] and solution.short == {}
+    only_a = greedy.solve([u], dests[:1], lambda h: AFR ** max(1, len(h)))
+    assert only_a.added == [] and only_a.short == {"u": (1, GiB)}
