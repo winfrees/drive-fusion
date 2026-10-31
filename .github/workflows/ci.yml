@@ -99,8 +99,28 @@ jobs:
       - name: Fetch the pinned Backblaze Drive Stats
         run: python tools/fetch_backblaze.py
 
+      # Authenticode (ROADMAP M8.8, D21): only with a certificate supplied as the
+      # SIGNING_CERT_BASE64 / SIGNING_CERT_PASSWORD secrets. Without one the
+      # build is unsigned and says so; the spec signs the helper before pinning.
+      - name: Code-signing certificate, when configured
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.SIGNING_CERT_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if ($env:SIGNING_CERT_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
+            "DRIVEFUSION_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+            "DRIVEFUSION_SIGN_PASSWORD=$env:SIGNING_CERT_PASSWORD" >> $env:GITHUB_ENV
+          } else {
+            Write-Output "::warning::No code-signing certificate is configured; this build is unsigned (ROADMAP D21)."
+          }
+
       - name: Build one-folder executable
         run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
+
+      - name: Sign the main executables, when configured
+        run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion.exe
 
       - name: Verify the built executables run
         run: |
