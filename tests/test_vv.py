@@ -105,7 +105,7 @@ def test_every_requirement_is_planted(tmp_path: Path) -> None:
     optional = {"R-CAT-06", "R-RED-02", "R-SC-03"}
     from vv.requirements import REQUIREMENTS
 
-    missing = {r.id for r in REQUIREMENTS} - planted - optional - {"R-RO-01", "R-CAT-07", "R-RED-05"}
+    missing = {r.id for r in REQUIREMENTS} - planted - optional - {"R-RO-01", "R-CAT-07", "R-RED-05", "R-EXP-01"}
     assert not missing, f"seed {manifest['seed']}: not planted: {sorted(missing)}"
 
 
@@ -751,3 +751,47 @@ def test_the_plan_tests_pass_where_copies_are_planned(fleet_run) -> None:
     failing = [f"{r['id']}: {r['details'][:1]}" for r in results
                if r["verdict"] not in (ev.PASS, ev.NA, ev.DEFERRED)]
     assert not failing, f"seed {manifest['seed']}: {failing}"
+
+
+# -- exports (ROADMAP M8) ----------------------------------------------------------------
+
+def test_the_export_phase_runs_untouched_and_passes(completed_run) -> None:
+    manifest, observed, results = completed_run
+    v = _verdicts(results)
+    assert "export" in observed["phases"] and not observed["no_touch"]["export"]
+    r = v[("VV-EXP-01", "export")]
+    assert r["verdict"] == ev.PASS and r["checked"] > 0, r
+    assert v[("VV-RO-01", "export")]["verdict"] == ev.PASS
+
+
+def _first_bundle(observed):
+    return observed["phases"]["export"][0]["path"]
+
+
+def test_evaluator_catches_a_file_outside_a_bundle(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    stray = lambda o: o["export_tree"].update({"stray.txt": {"bytes": 1, "sha256": "x"}})  # noqa: E731
+    assert _rejudge(manifest, observed, stray)[("VV-EXP-01", "export")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_an_unlisted_or_altered_file(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    name = _first_bundle(observed)
+
+    def unlisted(o):
+        o["export_tree"][f"{name}/extra.csv"] = {"bytes": 3, "sha256": "abc"}
+
+    def altered(o):
+        record = o["export_tree"][f"{name}/_EXPORT.json"]
+        record["listing"] = [{"path": "ghost.txt", "bytes": 1, "sha256": "0"}]
+
+    for mutate in (unlisted, altered):
+        assert _rejudge(manifest, observed, mutate)[("VV-EXP-01", "export")]["verdict"] \
+            == ev.FAIL
+
+
+def test_evaluator_catches_an_unfinished_bundle(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    name = _first_bundle(observed)
+    drop = lambda o: o["export_tree"].pop(f"{name}/_EXPORT.json")  # noqa: E731
+    assert _rejudge(manifest, observed, drop)[("VV-EXP-01", "export")]["verdict"] == ev.FAIL

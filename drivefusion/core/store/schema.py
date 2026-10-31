@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -399,6 +399,22 @@ CREATE TABLE IF NOT EXISTS plan_step (
     UNIQUE (plan_id, seq)
 );
 
+-- Exports (ROADMAP M8.1): one row per bundle written under an export root.
+-- The files themselves are listed, with their SHA-256, in the bundle's own
+-- _EXPORT.json; the catalog keeps where and what, so the Exports screen can
+-- list them without reading the export root.
+CREATE TABLE IF NOT EXISTS export (
+    id             INTEGER PRIMARY KEY,
+    created_at     TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    root           TEXT NOT NULL,           -- the export root chosen
+    path           TEXT NOT NULL UNIQUE,    -- the bundle folder, inside root
+    files          INTEGER NOT NULL,
+    bytes          INTEGER NOT NULL,
+    standards_json TEXT,                    -- rubric and table versions used
+    summary_json   TEXT
+);
+
 -- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
 -- change made around these; they stop the ordinary ones.
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
@@ -441,6 +457,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     11: (),
     # v12 adds plan and plan_step (ROADMAP M7.1), which the DDL creates.
     12: (),
+    # v13 adds the export table (ROADMAP M8.1), which the DDL creates.
+    13: (),
 }
 
 

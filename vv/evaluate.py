@@ -149,6 +149,10 @@ class Evaluator:
             self.phase_error("verify", errors.get("verify", "phase did not run"))
         else:
             self.fixity_tests(phases["verify"])
+        if "export" in errors:
+            self.phase_error("export", errors["export"])
+        elif "export" in phases:
+            self.export_tests(phases["export"], self.observed.get("export_tree", {}))
         self.deferred()
         return self.results
 
@@ -1155,6 +1159,48 @@ class Evaluator:
                         r.fail(f"{where}: the copy on {st['dst']} says it shares a {label}, but "
                                "it keeps the copies apart")
         r.finish("no copy step planned")
+
+    # -- R-EXP ------------------------------------------------------------------------
+
+    def export_tests(self, bundles: list | None, tree: dict) -> None:
+        r = self.new("VV-EXP-01", "Exports stay in their bundles, every file listed",
+                     ["R-EXP-01"], "export")
+        if bundles is None:
+            r.finish("this version writes no exports (before M8)")
+            return
+        names = {b["path"] for b in bundles}
+        for rel, entry in sorted(tree.items()):
+            r.checked += 1
+            top = rel.split("/", 1)[0]
+            if top not in names or "/" not in rel:
+                r.fail(f"{rel}: written outside any bundle the tool reported")
+            if entry.get("link"):
+                r.fail(f"{rel}: a link in the export root")
+        for name in sorted(names):
+            r.checked += 1
+            record = tree.get(f"{name}/_EXPORT.json")
+            if record is None:
+                r.fail(f"{name}: closed without an _EXPORT.json")
+                continue
+            listing = record.get("listing")
+            if listing is None:
+                r.fail(f"{name}/_EXPORT.json: not a readable record")
+                continue
+            listed = {f["path"]: f for f in listing}
+            present = {rel.split("/", 1)[1]: e for rel, e in tree.items()
+                       if rel.startswith(name + "/") and not e.get("link")
+                       and rel != f"{name}/_EXPORT.json"}
+            for path in sorted(set(present) - set(listed)):
+                r.fail(f"{name}/{path}: written but not listed in _EXPORT.json")
+            for path in sorted(set(listed) - set(present)):
+                r.fail(f"{name}/{path}: listed in _EXPORT.json but not there")
+            for path in sorted(set(listed) & set(present)):
+                if (listed[path]["sha256"], listed[path]["bytes"]) != \
+                        (present[path]["sha256"], present[path]["bytes"]):
+                    r.fail(f"{name}/{path}: _EXPORT.json says {listed[path]['bytes']:,} bytes, "
+                           f"{listed[path]['sha256'][:12]}…; the file is "
+                           f"{present[path]['bytes']:,}, {present[path]['sha256'][:12]}…")
+        r.finish("no export was made")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

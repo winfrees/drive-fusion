@@ -154,6 +154,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-FIX-01 | §8.1 | Silent corruption (bytes changed, size and mtime not) is reported |
 | R-FIX-02 | §8.1 | Verification has no false positives and covers both hash tiers |
 | R-FIX-03 | §8.1 | Each fixity incident states how many drives hold the content |
+| R-EXP-01 | §3.1, §3.2 | Exports land only in new bundle folders under the chosen export root: every file written is inside a bundle, none is a link, each bundle closes with an `_EXPORT.json` listing exactly its other files with their sizes and SHA-256 |
 | R-FIX-04 | §8.1, REVIEW F-06 | A file edited since the last scan (new modification time) is reported as modified, never as corruption |
 | R-HL-01 | §8.2, ROADMAP M5.3 | A drive that returns no SMART data is recorded as unknown, never as zeros, and its failure rate is never labelled measured; one that does is recorded with exactly the counts it reported |
 | R-HL-02 | §8.2 | Two copies on drives from one purchase batch have a higher P(loss) than the same drives from different batches; drives that can fail together (one batch, one disaster zone) are correlated as specified |
@@ -174,7 +175,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-PLAN-03 | §9 | After the plan every unit has its target number of copies, or the plan says how many it falls short and an acquire step covers those bytes |
 | R-PLAN-04 | §9, §8.2 | An added copy that leaves more than target − 1 of a unit's copies in one purchase batch or recorded disaster zone says so in its step, and no other copy claims to (D18: allowed, costlier, named) |
 
-Requirements for milestones not yet built (exports) are not listed. Each new milestone should add its requirements and tests here
+Requirements for exports arrive with each M8 item; the ones not yet built are not listed. Each new milestone should add its requirements and tests here
 (§9).
 
 ## 4. Dataset design
@@ -265,9 +266,11 @@ changes and the modification time moves on two seconds. They are edits, not corr
 ```
 snapshot ─ BASELINE: register drives · scan · hash · record ─ snapshot   (VV-RO-01@baseline)
 bench applies mutations
-snapshot ─ RESCAN:   scan · hash · record                   ─ snapshot   (VV-RO-01@rescan)
+snapshot ─ RESCAN:   scan · hash · plan · record            ─ snapshot   (VV-RO-01@rescan)
 bench corrupts files silently
 snapshot ─ VERIFY:   fixity pass · record                   ─ snapshot   (VV-RO-01@verify)
+snapshot ─ EXPORT:   exports into runs/<run>/exports        ─ snapshot   (VV-RO-01@export)
+bench lists and hashes every file under the export root itself
 evaluate observed.json against the oracle → report.md / results.json / junit.xml
 ```
 
@@ -286,7 +289,7 @@ tool's code would agree with the tool's bugs.
 
 | Test | Phases | Requirements | Passes when |
 |---|---|---|---|
-| VV-RO-01 | baseline, rescan, verify | R-RO-01 | The before/after snapshots of the phase are identical |
+| VV-RO-01 | baseline, rescan, verify, export | R-RO-01 | The before/after snapshots of the phase are identical |
 | VV-SC-01 | baseline | R-SC-01 | No catalogued path lies outside a scope root |
 | VV-SC-02 | baseline, rescan | R-SC-02 | No excluded entry or anything beneath it is catalogued, and each drive's excluded count equals the planted count |
 | VV-SC-03 | baseline, rescan | R-SC-03 | Nothing is catalogued at or through a link, and each drive's links-not-traversed count is exact |
@@ -313,6 +316,7 @@ tool's code would agree with the tool's bugs.
 | VV-FIX-02 | verify | R-FIX-02 | No intact file is reported, and at least every identified small file plus every corrupted large file was checked |
 | VV-FIX-03 | verify | R-FIX-03 | Each incident's drive count equals the drives truly holding the content |
 | VV-CAT-08 | baseline, rescan | R-CAT-08 | Every drive's "last scanned" is set, not before the run began, and not moved backwards by the rescan. N/A for versions that don't report it |
+| VV-EXP-01 | export | R-EXP-01 | From the bench's own listing and hashes of the export root: every file is under a bundle the tool reported, none is a link, every bundle has an `_EXPORT.json`, and its list equals the files present, size and SHA-256 alike |
 | VV-FIX-04 | verify | R-FIX-04 | No edited file appears as an incident, and each is in the tool's `modified` list where the tool reports one |
 | VV-HL-01 | baseline (simulated) | R-HL-01 | Every hidden-SMART drive is recorded `unknown` with no numbers and a rate not labelled measured; every healthy or failing one is `measured` with exactly the planted counts and power-on hours |
 | VV-HL-02 | baseline | R-HL-02 | Each multi-drive set's correlation equals the oracle's (same batch ×5, same zone ×10 per extra drive, as shipped), and the batch pair's P(loss) is higher than the oracle's for the same two drives from different batches. N/A with fewer than two identified devices |

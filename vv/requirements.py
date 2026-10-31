@@ -174,6 +174,11 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "An added copy that leaves more than target − 1 of a unit's copies in one "
                 "purchase batch or one recorded disaster zone says so in its step, and no "
                 "other copy claims to (D18: allowed, but costlier and named)."),
+    Requirement("R-EXP-01", "§3.1, §3.2",
+                "Exports land only in new bundle folders under the chosen export root: every "
+                "file written is inside a bundle, none is a link, each bundle closes with an "
+                "_EXPORT.json, and that record lists exactly the bundle's other files with "
+                "their sizes and SHA-256."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "

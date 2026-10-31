@@ -321,6 +321,19 @@ class DriveFusionAdapter:
         return {"steps": steps, "units": units, "removal_refused": refused,
                 "solver": stored["solver"]}
 
+    def export(self, export_root: str) -> list[dict] | None:
+        """Write the exports a person would (M8), into ``export_root``, and say
+        which bundles were made. None before M8."""
+        try:
+            writer = importlib.import_module("drivefusion.core.export.writer")
+        except ImportError:
+            return None
+        bundles = []
+        bundle = writer.open_bundle(self.catalog, export_root, "bench")
+        bundle.close(summary={"note": "the writer alone (M8.1)"})
+        bundles.append({"kind": bundle.kind, "path": bundle.path.name})
+        return bundles
+
     def collections(self) -> list[dict] | None:
         """Each confirmed collection's folders and members, by the tool's rules."""
         try:
