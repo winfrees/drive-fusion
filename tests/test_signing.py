@@ -44,5 +44,5 @@ def test_version_says_when_a_frozen_build_is_unsigned(monkeypatch) -> None:
 
 
 def test_the_spec_signs_the_helper_before_pinning_it() -> None:
-    spec = (Path(__file__).resolve().parents[1] / "packaging" / "drivefusion.spec").read_text()
+    spec = (Path(__file__).resolve().parents[1] / "packaging" / "drivefusion.spec").read_text(encoding="utf-8")
     assert spec.index("sign.sign([helper_exe.name])") < spec.index("HELPER_SHA256 = hashlib")
