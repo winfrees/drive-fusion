@@ -330,6 +330,14 @@ class DriveFusionAdapter:
         except ImportError:
             return None
         bundles = []
+        try:
+            run = importlib.import_module("drivefusion.core.export.run")
+        except ImportError:
+            run = None
+        if run is not None:             # the front ends' own path (M8.6)
+            for m in run.make(self.catalog, ["all"], export_root, min_copies=self.min_copies):
+                bundles.append({"kind": m["kind"], "path": Path(m["path"]).name})
+            return bundles
 
         def made(kind, body):
             bundle = writer.open_bundle(self.catalog, export_root, kind)

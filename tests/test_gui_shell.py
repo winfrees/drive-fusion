@@ -125,11 +125,11 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
 
     from drivefusion.gui.main_window import PLANNED
 
-    assert window.stack.count() == 8
-    assert window.nav.count() == 8 + len(PLANNED)
+    assert window.stack.count() == 9
+    assert window.nav.count() == 9 + len(PLANNED)
 
     for offset, (name, milestone) in enumerate(PLANNED):
-        item = window.nav.item(8 + offset)
+        item = window.nav.item(9 + offset)
         assert name in item.text()
         assert milestone in item.text()
         assert item.flags() == Qt.NoItemFlags, "a pending screen must not be clickable"
@@ -926,3 +926,23 @@ def test_the_plan_screen_shows_the_plan_by_drive(window) -> None:
                 if archive.child(i).data(0, 0x0100) == "copy")
     assert copy.text(2).startswith("−") and copy.text(3)
     assert "deletes nothing" in screen.findChildren(type(screen.requires))[0].text()
+
+
+# -- Exports (ROADMAP M8.6) -----------------------------------------------------------
+
+def test_the_exports_screen_makes_and_lists_exports(window, tmp_path) -> None:
+    from drivefusion.core.export import run
+
+    screen = window.exports
+    assert "No export folder yet" in screen.root_label.text()
+    assert not screen.make_buttons["all"].isEnabled()
+    out = tmp_path / "out"
+    out.mkdir()
+    screen.set_root(str(out))
+    assert screen.make_buttons["reports"].isEnabled()
+    run.make(window.session.catalog(), ["reports", "manifests"], str(out))
+    screen.refresh()
+    assert screen.list.topLevelItemCount() == 2
+    kinds = {screen.list.topLevelItem(i).text(1) for i in range(2)}
+    assert kinds == {"reports", "manifests"}
+    assert str(out) in screen.root_label.text()

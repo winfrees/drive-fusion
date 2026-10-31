@@ -105,7 +105,9 @@ def test_unknown_scope_root_is_an_error(cli, capsys) -> None:
 
 
 def test_planned_verbs_report_their_milestone(cli, capsys) -> None:
-    for verb, milestone in (("export", "M8"),):
+    from drivefusion.cli.main import PLANNED_VERBS
+
+    for verb, (_, milestone) in PLANNED_VERBS.items():
         assert cli(verb) == 2
         assert milestone in capsys.readouterr().err
 
