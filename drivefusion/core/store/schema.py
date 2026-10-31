@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -365,6 +365,40 @@ CREATE TABLE IF NOT EXISTS version_member (
     PRIMARY KEY (version_set_id, file_id)
 );
 
+-- Plans are documents (PLAN §7.3, §9, ROADMAP M7). A plan only ever adds
+-- placements: no step kind removes or moves anything, and the CHECK makes
+-- that a property of the catalog, not just of the planner.
+CREATE TABLE IF NOT EXISTS plan (
+    id              INTEGER PRIMARY KEY,
+    created_at      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft', 'exported', 'superseded')),
+    solver          TEXT,                   -- greedy, cp-sat, ...
+    policy_json     TEXT,                   -- the targets and reserves it planned to
+    standards_json  TEXT,                   -- rate tables, rubrics and model versions used
+    summary_json    TEXT                    -- the before/after simulation
+);
+CREATE TABLE IF NOT EXISTS plan_step (
+    id              INTEGER PRIMARY KEY,
+    plan_id         INTEGER NOT NULL REFERENCES plan(id),
+    seq             INTEGER NOT NULL,
+    kind            TEXT NOT NULL CHECK (kind IN
+                    ('copy', 'organize', 'describe', 'verify', 'review-candidate', 'acquire')),
+    rationale       TEXT NOT NULL,
+    unit            TEXT,                   -- what the step is about, in words
+    src_drive_id    INTEGER REFERENCES drive(id),
+    src_dir_id      INTEGER REFERENCES dir(id),
+    dst_drive_id    INTEGER REFERENCES drive(id),
+    dst_path        TEXT,
+    collection_id   INTEGER REFERENCES collection(id),
+    bytes           INTEGER,
+    footprint_bytes INTEGER,                -- on the destination, by its cluster size
+    depends_on      TEXT,                   -- seqs this step waits for, comma-separated
+    risk_delta      REAL,                   -- change in expected bytes lost a year
+    UNIQUE (plan_id, seq)
+);
+
 -- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
 -- change made around these; they stop the ordinary ones.
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
@@ -405,6 +439,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # v11 adds the name search index (ROADMAP M6.8); ensure_search_index()
     # creates and fills it, after the DDL, where SQLite has FTS5.
     11: (),
+    # v12 adds plan and plan_step (ROADMAP M7.1), which the DDL creates.
+    12: (),
 }
 
 
