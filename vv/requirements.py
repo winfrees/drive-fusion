@@ -183,6 +183,11 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Each drive's manifest lists exactly the live files the catalog holds on it, "
                 "with their sizes, and for each identified file every other copy on another "
                 "drive or unconfirmed volume; a volume no drive is known for gets its own."),
+    Requirement("R-EXP-03", "§8.3",
+                "Each confirmed collection is exported as a BagIt 1.0 bag that validates (every "
+                "payload file in the SHA-256 manifest with a matching checksum, the Payload-"
+                "Oxum correct, the tag files in the tag manifest) whose RO-Crate lists exactly "
+                "the collection's live member files, with their sizes."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "

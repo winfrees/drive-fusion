@@ -108,11 +108,14 @@ def export_tree(root: Path) -> dict:
                     out[rel]["listing"] = json.loads(data)["files"]
                 except (ValueError, KeyError, TypeError):
                     out[rel]["listing"] = None
-            elif path.name == "_DRIVE-FUSION.json":
+            elif path.name in ("_DRIVE-FUSION.json", "ro-crate-metadata.json"):
                 try:
                     out[rel]["json"] = json.loads(data)
                 except ValueError:
                     out[rel]["json"] = None
+            elif path.name in ("bagit.txt", "bag-info.txt", "manifest-sha256.txt",
+                               "tagmanifest-sha256.txt"):
+                out[rel]["text"] = data.decode("utf-8", errors="replace")
     return out
 
 

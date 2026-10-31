@@ -339,6 +339,13 @@ class DriveFusionAdapter:
             manifests = importlib.import_module("drivefusion.core.export.manifests")
             made("manifests", lambda b: manifests.write(b, self.catalog))
         except ImportError:
+            pass
+        try:
+            packages = importlib.import_module("drivefusion.core.export.packages")
+            made("collections", lambda b: packages.write(b, self.catalog))
+        except ImportError:
+            pass
+        if not bundles:
             made("bench", lambda b: {"note": "the writer alone (M8.1)"})
         return bundles
 

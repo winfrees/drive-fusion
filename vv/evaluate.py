@@ -155,6 +155,8 @@ class Evaluator:
             self.export_tests(phases["export"], self.observed.get("export_tree", {}))
             self.manifest_tests(phases["export"], self.observed.get("export_tree", {}),
                                 phases.get("rescan", {}))
+            self.package_tests(phases["export"], self.observed.get("export_tree", {}),
+                               phases.get("rescan", {}))
         self.deferred()
         return self.results
 
@@ -1275,6 +1277,88 @@ class Evaluator:
             r.fail(f"no manifest for {group[0]} {group[1]}, which holds "
                    f"{len(want[group])} live file(s)")
         r.finish("no manifest was written")
+
+    def package_tests(self, bundles: list | None, tree: dict, rescan: dict) -> None:
+        r = self.new("VV-EXP-03", "Each collection is a valid bag whose crate lists its members",
+                     ["R-EXP-03"], "export")
+        if bundles is None or not any(b["kind"] == "collections" for b in bundles):
+            r.finish("this version writes no collection packages (before M8.3)")
+            return
+        exp = self.exp["rescan"]
+        roots = {d["id"]: d["root"].replace("\\", "/").rstrip("/") for d in self.manifest["drives"]}
+
+        def key_of(uri: str):
+            from urllib.parse import unquote, urlparse
+
+            path = unquote(urlparse(uri).path)
+            if len(path) > 2 and path[0] == "/" and path[2] == ":":
+                path = path[1:]
+            for d, root in roots.items():
+                if path.startswith(root + "/"):
+                    return (d, path[len(root) + 1:])
+            return None
+
+        bags = sorted(rel[:-len("/bagit.txt")] for rel in tree if rel.endswith("/bagit.txt"))
+        wanted = {c["title"]: c for c in rescan.get("collections") or []}
+        seen = set()
+        for bag in bags:
+            r.checked += 1
+            if not tree[f"{bag}/bagit.txt"].get("text", "").startswith("BagIt-Version: 1.0"):
+                r.fail(f"{bag}: bagit.txt does not declare BagIt 1.0")
+            payload = {rel[len(bag) + 1:]: e for rel, e in tree.items()
+                       if rel.startswith(f"{bag}/data/")}
+            lines = [line.split("  ", 1) for line in
+                     tree.get(f"{bag}/manifest-sha256.txt", {}).get("text", "").splitlines()]
+            listed = {p: h for h, p in lines}
+            if set(listed) != set(payload):
+                r.fail(f"{bag}: manifest lists {sorted(listed)}, the payload is {sorted(payload)}")
+            for p in sorted(set(listed) & set(payload)):
+                if listed[p] != payload[p]["sha256"]:
+                    r.fail(f"{bag}/{p}: manifest checksum does not match the file")
+            info = dict(line.split(": ", 1) for line in
+                        tree.get(f"{bag}/bag-info.txt", {}).get("text", "").splitlines()
+                        if ": " in line)
+            oxum = f"{sum(e['bytes'] for e in payload.values())}.{len(payload)}"
+            if info.get("Payload-Oxum") != oxum:
+                r.fail(f"{bag}: Payload-Oxum {info.get('Payload-Oxum')}, truly {oxum}")
+            tags = {p: h for h, p in (line.split("  ", 1) for line in tree.get(
+                f"{bag}/tagmanifest-sha256.txt", {}).get("text", "").splitlines())}
+            for name in ("bagit.txt", "bag-info.txt", "manifest-sha256.txt"):
+                entry = tree.get(f"{bag}/{name}")
+                if name not in tags or entry is None or tags[name] != entry["sha256"]:
+                    r.fail(f"{bag}: the tag manifest does not cover {name} correctly")
+            crate = tree.get(f"{bag}/data/ro-crate-metadata.json", {}).get("json")
+            if not crate:
+                r.fail(f"{bag}: no readable RO-Crate")
+                continue
+            graph = {e["@id"]: e for e in crate.get("@graph", [])}
+            root = graph.get("./", {})
+            title = root.get("name")
+            coll = wanted.get(title)
+            if coll is None:
+                r.fail(f"{bag}: a crate for {title!r}, which is not a confirmed collection")
+                continue
+            seen.add(title)
+            prefixes = [(d, f"{p}/" if p else "") for d, p in coll["folders"]]
+            truth = {k for k in exp["files"]
+                     if any(k[0] == d and k[1].startswith(p) for d, p in prefixes)}
+            parts = {}
+            for ref in root.get("hasPart", []):
+                entity = graph.get(ref["@id"], {})
+                parts[key_of(ref["@id"])] = int(entity.get("contentSize", -1))
+            if set(parts) != truth:
+                extra, missing = set(parts) - truth, truth - set(parts)
+                r.fail(f"{title}: crate lists {len(parts)} file(s), the collection holds "
+                       f"{len(truth)}" + (f"; extra {sorted(map(_fmt, extra - {None}))[:3]}"
+                                          if extra else "")
+                       + (f"; missing {sorted(map(_fmt, missing))[:3]}" if missing else ""))
+            for k in sorted(set(parts) & truth):
+                if parts[k] != exp["files"][k]["size"]:
+                    r.fail(f"{title}: {_fmt(k)} is {parts[k]:,} bytes in the crate, "
+                           f"{exp['files'][k]['size']:,} truly")
+        for title in sorted(set(wanted) - seen):
+            r.fail(f"collection {title!r} has no package")
+        r.finish("no collection was confirmed")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

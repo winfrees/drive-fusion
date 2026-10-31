@@ -845,3 +845,42 @@ def test_evaluator_catches_a_drive_without_a_manifest(completed_run) -> None:
         del o["export_tree"][rel]
 
     assert _rejudge(manifest, observed, lose)[("VV-EXP-02", "export")]["verdict"] == ev.FAIL
+
+
+def _bag(obs):
+    return next(rel[:-len("/bagit.txt")] for rel in sorted(obs["export_tree"])
+                if rel.endswith("/bagit.txt"))
+
+
+def test_the_package_test_runs_and_passes(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-EXP-03", "export")]
+    assert r["verdict"] == ev.PASS and r["checked"] >= 1, r
+
+
+def test_evaluator_catches_a_bag_that_does_not_validate(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    bag = _bag(observed)
+
+    def checksum(o):
+        o["export_tree"][f"{bag}/data/members.csv"]["sha256"] = "0" * 64
+
+    def oxum(o):
+        entry = o["export_tree"][f"{bag}/bag-info.txt"]
+        entry["text"] = entry["text"].replace("Payload-Oxum: ", "Payload-Oxum: 1")
+
+    for mutate in (checksum, oxum):
+        assert _rejudge(manifest, observed, mutate)[("VV-EXP-03", "export")]["verdict"] \
+            == ev.FAIL
+
+
+def test_evaluator_catches_a_crate_missing_a_member(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    bag = _bag(observed)
+
+    def drop(o):
+        crate = o["export_tree"][f"{bag}/data/ro-crate-metadata.json"]["json"]
+        root = next(e for e in crate["@graph"] if e["@id"] == "./")
+        root["hasPart"].pop()
+
+    assert _rejudge(manifest, observed, drop)[("VV-EXP-03", "export")]["verdict"] == ev.FAIL
