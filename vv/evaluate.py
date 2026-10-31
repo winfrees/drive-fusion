@@ -135,6 +135,7 @@ class Evaluator:
                 self.scope_tests(obs, exp, phases[name], name, scope_only=True)
                 self.rescan_tests(obs, exp)
                 self.membership_test(phases[name], exp)
+                self.scorecard_tests(phases[name], exp)
             self.last_scanned_test(phases, name)
             self.dirs_test(obs, exp, name)
             self.identity_tests(obs, exp, name)
@@ -891,6 +892,103 @@ class Evaluator:
                 r.fail(f"{found['label']}: preferred {[_fmt(k) for k in preferred]}, the "
                        f"latest version is {_fmt(newest)}")
         r.finish("no version chain planted")
+
+    def scorecard_tests(self, raw: dict, exp: dict) -> None:
+        from vv.oracle import _drive_identity
+
+        phase = "rescan"
+        titles = {
+            "VV-FAIR-01": ("Every criterion gets one result; every gap a remedy", ["R-FAIR-01"]),
+            "VV-FAIR-02": ("FAIR results follow what is recorded", ["R-FAIR-02"]),
+            "VV-FAIR-03": ("NDSA storage results follow copies and zones", ["R-FAIR-03"]),
+        }
+        cards = raw.get("scorecards")
+        if cards is None:
+            for test_id, (title, reqs) in titles.items():
+                self.new(test_id, title, reqs, phase).finish(
+                    "this version has no scorecards (before M6.7)")
+            return
+
+        r = self.new("VV-FAIR-01", *titles["VV-FAIR-01"], phase)
+        for card in cards:
+            for rubric_id in ("fair", "ndsa"):
+                got = card[rubric_id]
+                r.checked += 1
+                if len(got["order"]) != len(set(got["order"])):
+                    r.fail(f"{card['title']} {rubric_id}: a criterion scored twice")
+                for criterion, (status, has_remedy) in got["results"].items():
+                    if status not in ("pass", "judgement") and not has_remedy:
+                        r.fail(f"{card['title']} {got['rubric']} {criterion}: {status} "
+                               "without a remedy")
+                if not got["rubric"].startswith(rubric_id + "-"):
+                    r.fail(f"{card['title']}: scorecard names rubric {got['rubric']!r}")
+        r.finish("no collection was confirmed")
+
+        device, unknown = _drive_identity(self.manifest)
+        zone = {}
+        for d in self.manifest["drives"]:
+            if d["id"] not in unknown:
+                zone.setdefault(device[d["id"]], (d.get("health") or {}).get("disaster_zone"))
+        plans = {(d["drive"], d["folder"]): d["fields"]
+                 for sc in self.manifest["scenarios"] for d in sc.get("describe", [])}
+
+        def items_under(folders):
+            prefixes = [(dr, f"{p}/" if p else "") for dr, p in folders]
+            inside = lambda k: any(k[0] == dr and k[1].startswith(p) for dr, p in prefixes)  # noqa: E731
+            out = []
+            for g in exp["groups"].values():
+                if any(inside(k) for k in g["paths"]):
+                    out.append({device[k[0]] for k in g["paths"] if k[0] not in unknown})
+            for k in exp["singles"]:
+                if inside(k):
+                    out.append({device[k[0]]} if k[0] not in unknown else set())
+            return out
+
+        def expect(test, label):
+            return "pass" if test else label
+
+        r2 = self.new("VV-FAIR-02", *titles["VV-FAIR-02"], phase)
+        r3 = self.new("VV-FAIR-03", *titles["VV-FAIR-03"], phase)
+        for card in cards:
+            fields = {}
+            for folder in card["folders"]:
+                fields.update(plans.get(tuple(folder), {}))
+            filled = 1 + sum(1 for k in ("description", "creators_json", "contact", "license",
+                                         "data_type", "project") if fields.get(k))
+            items = items_under(card["folders"])
+            fair = {c: v[0] for c, v in card["fair"]["results"].items()}
+            ndsa = {c: v[0] for c, v in card["ndsa"]["results"].items()}
+            completeness = "pass" if filled == 7 else "partial" if filled >= 4 else "fail"
+            located = sum(1 for holders in items if holders)
+            want2 = {
+                "F2": completeness, "R1": completeness,
+                "R1.1": expect(fields.get("license"), "fail"),
+                "I3": "fail",
+                "A1": "pass" if located == len(items) else "partial" if located else "fail",
+            }
+            for criterion, want in want2.items():
+                r2.checked += 1
+                if fair.get(criterion) != want:
+                    r2.fail(f"{card['title']} {criterion}: {fair.get(criterion)}, expected "
+                            f"{want} ({filled} of 7 fields, {located} of {len(items)} located)")
+
+            def share(test):
+                n = sum(1 for holders in items if test(holders))
+                return "pass" if items and n == len(items) else "partial" if n else "fail"
+
+            zones = lambda h: len({zone[x] for x in h if zone.get(x)})  # noqa: E731
+            want3 = {
+                "storage-1a": share(lambda h: len(h) >= 2),
+                "storage-3a": share(lambda h: zones(h) >= 2),
+                "storage-2a": share(lambda h: len(h) >= 3 and zones(h) >= 2),
+            }
+            for criterion, want in want3.items():
+                r3.checked += 1
+                if ndsa.get(criterion) != want:
+                    r3.fail(f"{card['title']} {criterion}: {ndsa.get(criterion)}, expected "
+                            f"{want} over {len(items)} item(s)")
+        r2.finish("no collection was confirmed")
+        r3.finish("no collection was confirmed")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

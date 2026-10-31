@@ -539,7 +539,15 @@ def test_evaluator_catches_nested_proposals_and_a_whole_drive(completed_run) -> 
 
 def test_evaluator_catches_a_missed_project(completed_run) -> None:
     manifest, observed, _ = completed_run
-    v = _rejudge(manifest, observed, lambda o: _curation(o)["proposals"].pop())
+    planted = {tuple(f) for sc in manifest["scenarios"] if sc["kind"] == "project-series"
+               for f in sc["folders"]}
+
+    def drop_one(obs):
+        proposals = _curation(obs)["proposals"]
+        victim = next(p for p in proposals if (p["drive"], p["path"]) in planted)
+        proposals.remove(victim)
+
+    v = _rejudge(manifest, observed, drop_one)
     assert v[("VV-COL-04", "baseline")]["verdict"] == ev.FAIL
 
 
@@ -587,3 +595,50 @@ def test_the_version_chain_is_one_set_with_its_latest_preferred(completed_run) -
     for tamper in (prefer_the_first, split):
         assert _rejudge(manifest, observed, tamper)[("VV-VER-01", "baseline")]["verdict"] \
             == ev.FAIL, tamper.__name__
+
+
+
+# -- scorecards (ROADMAP M6.10) ----------------------------------------------------------
+
+def test_the_scorecard_tests_run_and_pass(completed_run) -> None:
+    manifest, _observed, results = completed_run
+    verdicts = _verdicts(results, phase="rescan")
+    for test_id in ("VV-FAIR-01", "VV-FAIR-02", "VV-FAIR-03"):
+        r = verdicts[(test_id, "rescan")]
+        assert r["verdict"] == ev.PASS and r["checked"] > 0, (test_id, r)
+    plans = [d for sc in manifest["scenarios"] for d in sc.get("describe", [])]
+    assert len(plans) >= 3 and plans[0]["fields"]["license"], "collections described unevenly"
+
+
+def _cards(obs):
+    return obs["phases"]["rescan"]["scorecards"]
+
+
+def test_evaluator_catches_a_gap_without_a_remedy(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def strip(obs):
+        results = _cards(obs)[0]["fair"]["results"]
+        results["R1.1"] = ["fail", False]
+
+    assert _rejudge(manifest, observed, strip)[("VV-FAIR-01", "rescan")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_metadata_scored_wrong(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def flatter(obs):
+        for card in _cards(obs):
+            card["fair"]["results"]["R1.1"] = ["pass", False]
+
+    assert _rejudge(manifest, observed, flatter)[("VV-FAIR-02", "rescan")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_copies_scored_wrong(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def flatter(obs):
+        for card in _cards(obs):
+            card["ndsa"]["results"]["storage-1a"] = ["pass", False]
+
+    assert _rejudge(manifest, observed, flatter)[("VV-FAIR-03", "rescan")]["verdict"] == ev.FAIL

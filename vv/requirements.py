@@ -148,6 +148,18 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Coverage is reported against all distinct bytes: filed bytes are exactly "
                 "the distinct content with a copy in a confirmed collection, and filed plus "
                 "unfiled equals the whole."),
+    Requirement("R-FAIR-01", "§8.3",
+                "Every criterion of the FAIR and NDSA rubrics gets exactly one result for "
+                "each confirmed collection, every result short of a pass names a remedy, "
+                "and the scorecard names its rubric version and whether it is confirmed."),
+    Requirement("R-FAIR-02", "§8.3",
+                "FAIR results follow what is recorded: F2 and R1 from how many descriptive "
+                "fields are filled, R1.1 from the license, I3 from recorded relations, A1 "
+                "from whether every item is on a drive the catalog can name."),
+    Requirement("R-FAIR-03", "§8.3, §8.2",
+                "NDSA storage results follow the copies and disaster zones: two or more "
+                "proven drives for every item (storage-1a), two or more recorded zones "
+                "(storage-3a), three drives across two zones (storage-2a)."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "

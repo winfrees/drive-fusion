@@ -67,7 +67,7 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "drive-health": ("R-HL-01", "R-HL-03", "R-HL-04"),
     "batch-copy": ("R-HL-02", "R-HL-03"),
     "project-series": ("R-COL-01", "R-COL-02", "R-COL-03", "R-COL-04", "R-COL-05",
-                       "R-COL-06"),
+                       "R-COL-06", "R-FAIR-01", "R-FAIR-02", "R-FAIR-03"),
     "cross-batch-copy": ("R-HL-02", "R-HL-03"),
 }
 
@@ -363,6 +363,7 @@ class Builder:
         year = r.randint(2014, 2024)
         s = self.scenario("project-series", f"{parent} on {drive}")
         s["folders"] = []
+        first_keys: list[tuple[str, int]] = []
         for month in r.sample(range(1, 13), r.randint(3, 4)):
             folder = self.mkdir(drive, f"{parent}/{year}-{month:02d} {topic}", s["id"])
             s["folders"].append([drive, folder])
@@ -373,6 +374,8 @@ class Builder:
                 self.place(drive, key, s, directory=folder,
                            name=f"{topic.split()[0].lower()}_{n:02d}.{ext}",
                            mtime_ns=when * 1_000_000_000)
+                if len(s["folders"]) == 1:
+                    first_keys.append((key, when))
         # R-COL-05: a file that appears in a confirmed folder between scans
         # joins its collection. Skipped if an earlier change removes the folder.
         folder = s["folders"][0][1]
@@ -385,6 +388,34 @@ class Builder:
                                    "path": path, "content": key,
                                    "mtime_ns": (int(start) // 2 * 2) * 1_000_000_000})
             s["members"].append([drive, path])
+        self._plan_scorecards(s, drive, topic, ext, first_keys)
+
+    def _plan_scorecards(self, s: dict, drive: str, topic: str, ext: str,
+                         first_keys: list) -> None:
+        """R-FAIR-02/03: collections described to different degrees, and one
+        backed up to another drive, so their scorecards differ in known ways.
+
+        The adapter accepts every proposal and records ``describe`` for the
+        matching folders, as a person would with ``collections edit``.
+        """
+        full = {"description": f"{topic}: planted for the V&V bench",
+                "creators_json": '["V. V. Bench"]', "contact": "bench@example.org",
+                "license": "CC-BY-4.0", "data_type": "tabular", "project": topic}
+        plans = [full, {"license": "CC0-1.0"},
+                 {k: full[k] for k in ("description", "creators_json", "contact")}]
+        s["describe"] = [{"drive": d, "folder": f, "fields": fields}
+                         for (d, f), fields in zip(s["folders"], plans)]
+        others = [i for i in self.ids if self.identified(i)
+                  and self.device(i) != self.device(drive)]
+        if not others or not first_keys:
+            return
+        backup = self.rng.choice(others)
+        folder = self.mkdir(backup, f"Backups/{topic} copy", s["id"])
+        for n, (key, when) in enumerate(first_keys):
+            self.place(backup, key, s, directory=folder,
+                       name=f"{topic.split()[0].lower()}_{n:02d}.{ext}",
+                       mtime_ns=when * 1_000_000_000)
+        s["backup"] = [backup, folder]
 
     def health_copies(self) -> None:
         """R-HL-02: two copies on one purchase batch, and two across batches.

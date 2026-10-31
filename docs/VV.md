@@ -165,10 +165,12 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-COL-04 | §8.4 | Each folder of a planted project series is proposed as itself, not as an enclosing or enclosed folder |
 | R-COL-05 | §8.4 | A confirmed collection's members are exactly the live files under its folders, including files that appear there after it was confirmed |
 | R-COL-06 | §8.4, §11 | Coverage is against all distinct bytes: filed bytes are exactly the distinct content with a copy in a confirmed collection, and filed plus unfiled is the whole |
+| R-FAIR-01 | §8.3 | Every criterion of the FAIR and NDSA rubrics gets exactly one result per confirmed collection, every result short of a pass names a remedy, and the scorecard names its rubric version |
+| R-FAIR-02 | §8.3 | FAIR results follow what is recorded: F2 and R1 from the descriptive fields filled, R1.1 from the license, I3 from recorded relations, A1 from whether every item is on a drive the catalog can name |
+| R-FAIR-03 | §8.3, §8.2 | NDSA storage results follow copies and zones: storage-1a (two or more proven drives per item), storage-3a (two or more recorded zones), storage-2a (three drives across two zones) |
 | R-VER-01 | §8.1 | Near-duplicates are grouped into version sets with a proposed preferred member: a planted version chain is exactly one set, its highest-numbered version preferred |
 
-Requirements for milestones not yet built (the rest of M6, the planner, exports) are not
-listed. Each new milestone should add its requirements and tests here
+Requirements for milestones not yet built (the planner, exports) are not listed. Each new milestone should add its requirements and tests here
 (§9).
 
 ## 4. Dataset design
@@ -226,7 +228,7 @@ support. `tests/test_vv.py` asserts that.
 | unreadable | A permission-denied file whose readable twin shares its size, so hashing *tries* to open it | R-CAT-06 |
 | drive-health | Per simulated device (not files): a purchase month, a disaster zone or none recorded, and what its SMART says: healthy, failing (48 reallocated, 8 pending, 2 uncorrectable) or hidden behind a bridge. Partitions of one device share it; an unidentified drive has none. Two identified devices are made one purchase batch (same maker, model and month). From its own random stream | R-HL-01, R-HL-03, R-HL-04 |
 | batch-copy | Content on the two batch drives and nowhere else | R-HL-02, R-HL-03 |
-| project-series | On one drive, `Projects/<topic> series/` holding 3–4 folders named `<year>-<month> <topic>`, each with 6–9 files of one type dated within 20 days of the folder's month, and one more file added to the first folder between scans (unless an earlier change removes it). Planned last, so the rest of a seed's dataset is unchanged. The adapter accepts every proposal after the baseline, as a person would | R-COL-01…06 |
+| project-series | Also, since M6.10: the series folders are described unevenly (fully; license only; three fields; the rest not at all) through `collections edit`, and the first folder's files are copied to `Backups/<topic> copy` on another identified device, so scorecard results differ in known ways. On one drive, `Projects/<topic> series/` holding 3–4 folders named `<year>-<month> <topic>`, each with 6–9 files of one type dated within 20 days of the folder's month, and one more file added to the first folder between scans (unless an earlier change removes it). Planned last, so the rest of a seed's dataset is unchanged. The adapter accepts every proposal after the baseline, as a person would | R-COL-01…06, R-FAIR-01…03 |
 | cross-batch-copy | Content on one batch drive and a drive from another batch | R-HL-02, R-HL-03 |
 
 ### 4.2 Between scans (the rescan phase)
@@ -318,6 +320,9 @@ tool's code would agree with the tool's bugs.
 | VV-COL-04 | baseline | R-COL-04 | Every planted series folder is proposed exactly (an enclosing or enclosed proposal is named in the failure) |
 | VV-COL-05 | rescan | R-COL-05 | Each confirmed collection's member files and bytes equal the rescan truth under its folders, the late file included |
 | VV-COL-06 | rescan | R-COL-06 | Coverage's total equals all distinct bytes, its filed bytes equal the distinct content with a path under a confirmed folder, and filed + unfiled = total |
+| VV-FAIR-01 | rescan | R-FAIR-01 | Each collection's FAIR and NDSA cards score each criterion once, with a remedy for every gap, and name their rubric |
+| VV-FAIR-02 | rescan | R-FAIR-02 | F2, R1, R1.1, I3 and A1 equal the oracle's from the planted description and the drives' identity |
+| VV-FAIR-03 | rescan | R-FAIR-03 | storage-1a, storage-3a and storage-2a equal the oracle's from proven devices and their planted disaster zones |
 | VV-VER-01 | baseline | R-VER-01 | Each planted version chain is exactly one version set (none missing, not split, nothing extra) and its highest-numbered member is the one preferred |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three
