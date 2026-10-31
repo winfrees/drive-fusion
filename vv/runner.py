@@ -135,7 +135,7 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
             scan = adapter.scan()
             hashed = adapter.hash()
             return {**adapter.collect(min_copies), "scan": scan, "hash": hashed,
-                    "curation": adapter.propose()}
+                    "versions": adapter.versions(), "curation": adapter.propose()}
 
         log("baseline: scan + hash ...")
         tool_phase("baseline", baseline)

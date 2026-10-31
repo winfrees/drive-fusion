@@ -36,7 +36,8 @@ class CurationError(ValueError):
 
 @dataclass(frozen=True)
 class VersionMember:
-    content_id: int
+    file_id: int
+    content_id: int | None = None
     preferred: bool = False
 
 
@@ -227,8 +228,9 @@ def replace_version_sets(catalog, sets: list[dict], *, method: str) -> int:
             (found.get("label"), method, found.get("confidence"), found.get("rationale"), now),
         ).lastrowid
         conn.executemany(
-            "INSERT INTO version_member (version_set_id, content_id, is_preferred) "
-            "VALUES (?, ?, ?)", [(set_id, m.content_id, int(m.preferred)) for m in members])
+            "INSERT INTO version_member (version_set_id, file_id, content_id, is_preferred) "
+            "VALUES (?, ?, ?, ?)",
+            [(set_id, m.file_id, m.content_id, int(m.preferred)) for m in members])
     catalog.record("versions.find", {"method": method, "sets": len(sets)})
     return len(sets)
 
@@ -240,4 +242,4 @@ def version_sets(catalog):
 def version_members(catalog, set_id: int):
     return catalog.conn.execute(
         "SELECT * FROM version_member WHERE version_set_id = ? ORDER BY is_preferred DESC, "
-        "content_id", (set_id,)).fetchall()
+        "file_id", (set_id,)).fetchall()

@@ -48,7 +48,7 @@ def last_action(catalog) -> dict:
 
 def test_the_schema_is_v9_with_the_curation_tables(tree) -> None:
     catalog, _ = tree
-    assert schema.current_version(catalog.conn) == 9
+    assert schema.current_version(catalog.conn) == schema.SCHEMA_VERSION
     tables = {r[0] for r in catalog.conn.execute("SELECT name FROM sqlite_master")}
     assert {"collection", "collection_rule", "collection_relation", "collection_candidate",
             "version_set", "version_member"} <= tables
@@ -164,21 +164,36 @@ def test_edits_are_audited_with_old_and_new_values(tree) -> None:
 
 def test_version_sets_are_replaced_per_run(tree) -> None:
     catalog, _ = tree
-    conn = catalog.conn
-    ids = [conn.execute("INSERT INTO content (size_bytes) VALUES (?)", (n,)).lastrowid
-           for n in (10, 11, 12)]
+    files = [r["id"] for r in catalog.conn.execute("SELECT id FROM file ORDER BY id")]
     stored = curation.replace_version_sets(catalog, [
         {"label": "report", "confidence": 0.9, "rationale": "newest",
-         "members": [VersionMember(ids[0]), VersionMember(ids[1], preferred=True)]},
-    ], method="name+size")
+         "members": [VersionMember(files[0]), VersionMember(files[1], preferred=True)]},
+    ], method="name-stem")
     assert stored == 1 and last_action(catalog)["action"] == "versions.find"
     [found] = curation.version_sets(catalog)
     members = curation.version_members(catalog, found["id"])
-    assert [m["content_id"] for m in members] == [ids[1], ids[0]]
-    assert members[0]["is_preferred"] == 1
+    assert [m["file_id"] for m in members] == [files[1], files[0]]
+    assert members[0]["is_preferred"] == 1 and members[0]["content_id"] is None
 
-    curation.replace_version_sets(catalog, [], method="name+size")
+    curation.replace_version_sets(catalog, [], method="name-stem")
     assert curation.version_sets(catalog) == []
     with pytest.raises(CurationError, match="two or more members"):
-        curation.replace_version_sets(catalog, [{"members": [VersionMember(ids[2])]}],
+        curation.replace_version_sets(catalog, [{"members": [VersionMember(files[2])]}],
                                       method="m")
+
+
+def test_v10_rebuilds_the_version_tables(tmp_path: Path) -> None:
+    """A v9 catalog's version report is dropped and the tables recreated."""
+    import sqlite3
+
+    db = tmp_path / "catalog.db"
+    with Catalog(db) as catalog:
+        catalog.conn.execute("DELETE FROM schema_version")
+        catalog.conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (9, 'x')")
+        catalog.conn.execute("DROP TABLE version_member")
+        catalog.conn.execute("CREATE TABLE version_member (version_set_id INTEGER, "
+                             "content_id INTEGER NOT NULL, is_preferred INTEGER)")
+    with Catalog(db) as catalog:
+        assert schema.current_version(catalog.conn) == 10
+        columns = {r[1] for r in catalog.conn.execute("PRAGMA table_info(version_member)")}
+        assert {"file_id", "content_id"} <= columns
