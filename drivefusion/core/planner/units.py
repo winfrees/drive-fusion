@@ -12,7 +12,9 @@ planner places **units**, each one folder's worth of content on one volume:
 
 Each unit carries its files and bytes, its **footprint** on each cluster size
 the destinations use, its **holders** (the proven drives holding a copy of
-every item in it), its P(loss) over those holders (M5.5) and its copy
+every item in it), the distinct sets of drives its items are on (so a copy is
+only counted for the items it adds a drive to), its P(loss) over its holders
+(M5.5) and its copy
 **target**: a collection's ``min_copies``; else 3 when its NDSA target is 2
 or more; else 2 (NDSA level 1: two complete copies in separate locations).
 
@@ -46,13 +48,22 @@ class Unit:
     bytes: int = 0
     items: int = 0
     holders: frozenset = frozenset()   # proven drives holding every item
+    holder_sets: frozenset = frozenset()   # each item's proven drives, distinct sets
     footprint: dict[int, int] = field(default_factory=dict)   # cluster -> bytes
     p_loss: float = 0.0
 
     @property
     def copies(self) -> int:
-        """Proven complete copies; a unit on an unverified drive is still one."""
-        return max(1, len(self.holders))
+        """Complete copies: the fewest any item has. An item on unverified
+        drives only counts as one."""
+        return self.copies_with(())
+
+    def copies_with(self, added) -> int:
+        """Complete copies once the drives ``added`` hold the unit too. A
+        drive that already holds some items adds nothing to those."""
+        extra = set(added)
+        return min(len(s | extra) + (0 if s else 1)
+                   for s in (self.holder_sets or {self.holders}))
 
 
 def target_for(row) -> int:
@@ -137,6 +148,7 @@ def build(catalog, *, clusters=(4096,), target_units: int = TARGET_UNITS,
     # hold a copy of every item.
     content_sets, _single = durability.drive_sets(catalog)
     holders: dict[str, set | None] = {}
+    holder_sets: dict[str, set] = defaultdict(set)
     seen_items: dict[str, set] = defaultdict(set)
     for row in conn.execute(
         "SELECT f.id, f.dir_id, f.content_id, f.size_bytes, v.drive_id FROM file f "
@@ -159,6 +171,7 @@ def build(catalog, *, clusters=(4096,), target_units: int = TARGET_UNITS,
         held = (set(content_sets.get(row["content_id"], ())) if row["content_id"] is not None
                 else ({row["drive_id"]} if row["drive_id"] is not None else set()))
         holders[key] = held if holders.get(key) is None else holders[key] & held
+        holder_sets[key].add(frozenset(held))
 
     params = afr.model()
     tables = afr.tables(catalog)
@@ -174,6 +187,7 @@ def build(catalog, *, clusters=(4096,), target_units: int = TARGET_UNITS,
             continue
         unit.items = len(seen_items[key])
         unit.holders = frozenset(holders.get(key) or ())
+        unit.holder_sets = frozenset(holder_sets[key])
         found = durability.set_risk(tuple(sorted(unit.holders)), risks, drive_rows, params,
                                     unverified)
         unit.p_loss = found.p_loss
