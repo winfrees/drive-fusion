@@ -693,6 +693,11 @@ CREATE TABLE plan_step (
   depends_on TEXT, risk_delta REAL
 );
 
+-- As built (schema v12, ROADMAP M7.1): plan.status is CHECKed to draft|exported|superseded,
+-- plan_step.kind to the six kinds above, so no stored plan can hold a step that removes;
+-- steps name source and destination drives, carry bytes and footprint on the destination,
+-- and every step must state its rationale. Written by core/store/plans.py, audited.
+
 -- Append-only, hash-chained (FAIR R1.2 provenance).
 CREATE TABLE audit (id INTEGER PRIMARY KEY, at TEXT, actor TEXT, action TEXT,
                     detail_json TEXT, prev_hash BLOB, entry_hash BLOB);
