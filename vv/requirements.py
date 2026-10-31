@@ -179,6 +179,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "file written is inside a bundle, none is a link, each bundle closes with an "
                 "_EXPORT.json, and that record lists exactly the bundle's other files with "
                 "their sizes and SHA-256."),
+    Requirement("R-EXP-02", "§10",
+                "Each drive's manifest lists exactly the live files the catalog holds on it, "
+                "with their sizes, and for each identified file every other copy on another "
+                "drive or unconfirmed volume; a volume no drive is known for gets its own."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "

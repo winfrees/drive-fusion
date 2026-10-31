@@ -329,9 +329,17 @@ class DriveFusionAdapter:
         except ImportError:
             return None
         bundles = []
-        bundle = writer.open_bundle(self.catalog, export_root, "bench")
-        bundle.close(summary={"note": "the writer alone (M8.1)"})
-        bundles.append({"kind": bundle.kind, "path": bundle.path.name})
+
+        def made(kind, body):
+            bundle = writer.open_bundle(self.catalog, export_root, kind)
+            bundle.close(summary=body(bundle))
+            bundles.append({"kind": kind, "path": bundle.path.name})
+
+        try:
+            manifests = importlib.import_module("drivefusion.core.export.manifests")
+            made("manifests", lambda b: manifests.write(b, self.catalog))
+        except ImportError:
+            made("bench", lambda b: {"note": "the writer alone (M8.1)"})
         return bundles
 
     def collections(self) -> list[dict] | None:

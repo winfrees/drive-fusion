@@ -108,6 +108,11 @@ def export_tree(root: Path) -> dict:
                     out[rel]["listing"] = json.loads(data)["files"]
                 except (ValueError, KeyError, TypeError):
                     out[rel]["listing"] = None
+            elif path.name == "_DRIVE-FUSION.json":
+                try:
+                    out[rel]["json"] = json.loads(data)
+                except ValueError:
+                    out[rel]["json"] = None
     return out
 
 

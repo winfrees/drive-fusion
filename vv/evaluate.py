@@ -153,6 +153,8 @@ class Evaluator:
             self.phase_error("export", errors["export"])
         elif "export" in phases:
             self.export_tests(phases["export"], self.observed.get("export_tree", {}))
+            self.manifest_tests(phases["export"], self.observed.get("export_tree", {}),
+                                phases.get("rescan", {}))
         self.deferred()
         return self.results
 
@@ -1201,6 +1203,78 @@ class Evaluator:
                            f"{listed[path]['sha256'][:12]}…; the file is "
                            f"{present[path]['bytes']:,}, {present[path]['sha256'][:12]}…")
         r.finish("no export was made")
+
+    def manifest_tests(self, bundles: list | None, tree: dict, rescan: dict) -> None:
+        from vv.oracle import _drive_identity
+
+        r = self.new("VV-EXP-02", "Each drive's manifest lists exactly its files and copies",
+                     ["R-EXP-02"], "export")
+        found = [e["json"] for rel, e in sorted(tree.items())
+                 if rel.endswith("/_DRIVE-FUSION.json")]
+        if bundles is None or not any(b["kind"] == "manifests" for b in bundles):
+            r.finish("this version writes no per-drive manifests (before M8.2)")
+            return
+        exp = self.exp["rescan"]
+        device, unknown = _drive_identity(self.manifest)
+        roots = {d["id"]: d["root"].replace("\\", "/").rstrip("/") for d in self.manifest["drives"]}
+        by_volume = {info["volume_id"]: d for d, info in rescan.get("volumes", {}).items()}
+
+        def key_of(path: str):
+            path = path.replace("\\", "/")
+            for d, root in roots.items():
+                if path.startswith(root + "/"):
+                    return (d, path[len(root) + 1:])
+            return None
+
+        # The oracle's grouping: one manifest per identified device, one per
+        # unidentified drive (its volume has no drive).
+        def group_of(drive_id: str):
+            return ("device", device[drive_id]) if drive_id not in unknown else ("volume", drive_id)
+
+        want: dict = defaultdict(set)
+        for k in exp["files"]:
+            want[group_of(k[0])].add(k)
+        members = {k: g["paths"] for g in exp["groups"].values() for k in g["paths"]}
+        seen_groups = set()
+        for m in found:
+            r.checked += 1
+            if m is None:
+                r.fail("a _DRIVE-FUSION.json that is not JSON")
+                continue
+            drives_in = {by_volume.get(v["id"]) for v in m["volumes"]} - {None}
+            if not drives_in:
+                r.fail(f"{m['label']}: no volume the bench registered")
+                continue
+            group = group_of(sorted(drives_in)[0])
+            seen_groups.add(group)
+            listed = {}
+            for f in m["files"]:
+                k = key_of(f["path"])
+                if k is None:
+                    r.fail(f"{m['label']}: {f['path']} is under no drive root")
+                    continue
+                listed[k] = f
+            for k in sorted(set(listed) - want[group]):
+                r.fail(f"{m['label']}: lists {_fmt(k)}, which is not a live file there")
+            for k in sorted(want[group] - set(listed)):
+                r.fail(f"{m['label']}: leaves out {_fmt(k)}")
+            for k in sorted(set(listed) & want[group]):
+                f = listed[k]
+                if f["bytes"] != exp["files"][k]["size"]:
+                    r.fail(f"{m['label']}: {_fmt(k)} is {f['bytes']:,} bytes in the manifest, "
+                           f"{exp['files'][k]['size']:,} truly")
+                if k not in exp["identified"]:
+                    continue
+                others = {p for p in members.get(k, ()) if group_of(p[0]) != group}
+                said = {key_of(s["path"]) for s in f["copies_elsewhere"]}
+                if said != others:
+                    r.fail(f"{m['label']}: {_fmt(k)} names copies at "
+                           f"{sorted(map(_fmt, said - {None}))}; truly "
+                           f"{sorted(map(_fmt, others))}")
+        for group in sorted(set(want) - seen_groups, key=str):
+            r.fail(f"no manifest for {group[0]} {group[1]}, which holds "
+                   f"{len(want[group])} live file(s)")
+        r.finish("no manifest was written")
 
     def deferred(self) -> None:
         for req in BY_ID.values():
