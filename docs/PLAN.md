@@ -1040,6 +1040,10 @@ because no such capability exists behind them.
    "requires: connect ARCHIVE-3, then ARCHIVE-7."
 8. **Exports** — RO-Crate/BagIt bundles, DataCite metadata, per-drive manifests, CSV/HTML
    reports, each timestamped into its own folder recording the standards versions used.
+   **As built (ROADMAP M8.5):** `core/export/reports.py` writes `summary.csv`,
+   `under-protected.csv`, `duplicates.csv`, `durability.csv`, `scorecards.csv`, `plan.csv` and a
+   self-contained `report.html` (no scripts, no links out, every value escaped; tables capped at
+   200 rows, the CSVs complete).
 
 **Threading, because a frozen window is a bug:** a ``sqlite3`` connection belongs to the
 thread that created it, so the GUI keeps **one catalog per thread** — never one shared

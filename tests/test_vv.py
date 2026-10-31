@@ -926,3 +926,43 @@ def test_evaluator_catches_a_destructive_preview(completed_run) -> None:
         o["export_tree"][rel]["text"] += 'rsync -a --delete "/a/" "/b/"\n'
 
     assert _rejudge(manifest, observed, inject)[("VV-EXP-04", "export")]["verdict"] == ev.FAIL
+
+
+def _report(obs, name):
+    bundle = next(b["path"] for b in obs["phases"]["export"] if b["kind"] == "reports")
+    return obs["export_tree"][f"{bundle}/{name}"]
+
+
+def test_the_report_test_runs_and_passes(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-EXP-05", "export")]
+    assert r["verdict"] == ev.PASS and r["checked"] >= 1, r
+
+
+def test_evaluator_catches_a_wrong_headline_or_a_missing_row(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def skew(o):
+        entry = _report(o, "summary.csv")
+        lines = entry["text"].splitlines()
+        key, value = lines[1].split(",", 1)
+        lines[1] = f"{key},{int(value) + 1}"
+        entry["text"] = "\n".join(lines) + "\n"
+
+    def drop(o):
+        entry = _report(o, "under-protected.csv")
+        lines = entry["text"].splitlines()
+        entry["text"] = "\n".join(lines[:-1]) + "\n"
+
+    for mutate in (skew, drop):
+        assert _rejudge(manifest, observed, mutate)[("VV-EXP-05", "export")]["verdict"] \
+            == ev.FAIL
+
+
+def test_evaluator_catches_a_script_or_an_outside_link(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    for bad in ("<script>alert(1)</script>", '<img src="https://example.com/x.png">'):
+        def inject(o, bad=bad):
+            _report(o, "report.html")["text"] += bad
+        assert _rejudge(manifest, observed, inject)[("VV-EXP-05", "export")]["verdict"] \
+            == ev.FAIL

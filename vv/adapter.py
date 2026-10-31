@@ -61,6 +61,7 @@ class DriveFusionAdapter:
         self.discovered: dict[str, dict] = {}
         self.health_drives: set[int] = set()
         self.smart_argvs: list[list[str]] = []
+        self.min_copies = 2
 
     def close(self) -> None:
         self.catalog.close()
@@ -350,6 +351,11 @@ class DriveFusionAdapter:
             made("mappings", lambda b: mappings.write(b, self.catalog))
         except ImportError:
             pass
+        try:
+            reports = importlib.import_module("drivefusion.core.export.reports")
+            made("reports", lambda b: reports.write(b, self.catalog, min_copies=self.min_copies))
+        except ImportError:
+            pass
         if not bundles:
             made("bench", lambda b: {"note": "the writer alone (M8.1)"})
         return bundles
@@ -426,6 +432,7 @@ class DriveFusionAdapter:
         return out
 
     def collect(self, min_copies: int) -> dict:
+        self.min_copies = min_copies
         dirs = self._dir_paths()
         files = []
         file_keys: dict[int, list] = {}

@@ -159,6 +159,7 @@ class Evaluator:
                                phases.get("rescan", {}))
             self.mapping_tests(phases["export"], self.observed.get("export_tree", {}),
                                phases.get("rescan", {}))
+            self.report_tests(phases["export"], self.observed.get("export_tree", {}))
         self.deferred()
         return self.results
 
@@ -1436,6 +1437,44 @@ class Evaluator:
             if commands != len(steps):
                 r.fail(f"{rel}: {commands} command(s) for {len(steps)} copy step(s)")
         r.finish("no mapping was written")
+
+    def report_tests(self, bundles: list | None, tree: dict) -> None:
+        import csv
+        import io
+        import re
+
+        r = self.new("VV-EXP-05", "Reports state the true numbers; the page stands alone",
+                     ["R-EXP-05"], "export")
+        if bundles is None or not any(b["kind"] == "reports" for b in bundles):
+            r.finish("this version writes no reports (before M8.5)")
+            return
+        exp = self.exp["rescan"]["summary"]
+        for b in (b for b in bundles if b["kind"] == "reports"):
+            name = b["path"]
+            r.checked += 1
+            rows = list(csv.reader(io.StringIO(tree.get(f"{name}/summary.csv", {})
+                                               .get("text", ""))))[1:]
+            got = {k: v for k, v in rows}
+            for key, value in exp.items():
+                if got.get(key) != str(value):
+                    r.fail(f"{name}/summary.csv: {key} {got.get(key)!r}, true {value!r}")
+            under = list(csv.DictReader(io.StringIO(
+                tree.get(f"{name}/under-protected.csv", {}).get("text", ""))))
+            if len(under) != exp["under_protected_items"]:
+                r.fail(f"{name}/under-protected.csv: {len(under)} rows, "
+                       f"{exp['under_protected_items']} items truly under-protected")
+            if sum(int(u["bytes"]) for u in under) != exp["under_protected_bytes"]:
+                r.fail(f"{name}/under-protected.csv: bytes do not add up to "
+                       f"{exp['under_protected_bytes']:,}")
+            page = tree.get(f"{name}/report.html", {}).get("text")
+            if page is None:
+                r.fail(f"{name}: no report.html")
+            else:
+                if re.search(r"<\s*script", page, re.I):
+                    r.fail(f"{name}/report.html runs a script")
+                if re.search(r"(href|src)\s*=\s*[\"']?\s*(https?:|//)", page, re.I):
+                    r.fail(f"{name}/report.html links outside itself")
+        r.finish("no report was written")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

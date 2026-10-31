@@ -192,6 +192,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "Each collection's mapping covers exactly its live members, one to one, and its "
                 "inverse restores every path; the plan's command previews hold one copy-only "
                 "command per copy step and nothing a denylist would refuse."),
+    Requirement("R-EXP-05", "§8.1, §11",
+                "The exported reports state the true headline numbers (distinct content, unique "
+                "bytes, under-protected items and bytes, single-copy files), list every under-"
+                "protected item, and the HTML report runs no script and links nowhere outside."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "
