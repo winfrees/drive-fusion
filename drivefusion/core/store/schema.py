@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -355,11 +355,14 @@ CREATE TABLE IF NOT EXISTS version_set (
     rationale       TEXT,
     found_at        TEXT NOT NULL
 );
+-- Members are files: versions of a document usually differ in size, and a
+-- file of unique size is never hashed, so it has no content id (schema v10).
 CREATE TABLE IF NOT EXISTS version_member (
     version_set_id  INTEGER NOT NULL REFERENCES version_set(id),
-    content_id      INTEGER NOT NULL REFERENCES content(id),
+    file_id         INTEGER NOT NULL REFERENCES file(id),
+    content_id      INTEGER REFERENCES content(id),
     is_preferred    INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (version_set_id, content_id)
+    PRIMARY KEY (version_set_id, file_id)
 );
 
 -- Append-only (REVIEW SR-26). The hash chain in core/store/audit.py detects a
@@ -395,6 +398,10 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     8: (),
     # v9 adds the curation and version-set tables (ROADMAP M6.1), likewise.
     9: (),
+    # v10 keys version members by file (ROADMAP M6.5). Both tables hold only a
+    # report that `versions find` rebuilds, so they are dropped and the DDL
+    # recreates them.
+    10: ("DROP TABLE IF EXISTS version_member", "DROP TABLE IF EXISTS version_set"),
 }
 
 

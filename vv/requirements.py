@@ -150,7 +150,8 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "unfiled equals the whole."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
-                "preferred member.", status="planned", milestone="M6"),
+                "preferred member: a planted version chain is exactly one set, and its "
+                "highest-numbered version is the one preferred."),
 )
 
 BY_ID = {r.id: r for r in REQUIREMENTS}

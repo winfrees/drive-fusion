@@ -165,7 +165,7 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-COL-04 | §8.4 | Each folder of a planted project series is proposed as itself, not as an enclosing or enclosed folder |
 | R-COL-05 | §8.4 | A confirmed collection's members are exactly the live files under its folders, including files that appear there after it was confirmed |
 | R-COL-06 | §8.4, §11 | Coverage is against all distinct bytes: filed bytes are exactly the distinct content with a copy in a confirmed collection, and filed plus unfiled is the whole |
-| R-VER-01 | §8.1 | *Planned (M6):* near-duplicates grouped into version sets. Test data is planted now; the test reports DEFERRED |
+| R-VER-01 | §8.1 | Near-duplicates are grouped into version sets with a proposed preferred member: a planted version chain is exactly one set, its highest-numbered version preferred |
 
 Requirements for milestones not yet built (the rest of M6, the planner, exports) are not
 listed. Each new milestone should add its requirements and tests here
@@ -318,7 +318,7 @@ tool's code would agree with the tool's bugs.
 | VV-COL-04 | baseline | R-COL-04 | Every planted series folder is proposed exactly (an enclosing or enclosed proposal is named in the failure) |
 | VV-COL-05 | rescan | R-COL-05 | Each confirmed collection's member files and bytes equal the rescan truth under its folders, the late file included |
 | VV-COL-06 | rescan | R-COL-06 | Coverage's total equals all distinct bytes, its filed bytes equal the distinct content with a path under a confirmed folder, and filed + unfiled = total |
-| VV-VER-01 | — | R-VER-01 | DEFERRED until M6 |
+| VV-VER-01 | baseline | R-VER-01 | Each planted version chain is exactly one version set (none missing, not split, nothing extra) and its highest-numbered member is the one preferred |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three
 paths are one content" is the claim a user acts on. When a redundancy number is wrong

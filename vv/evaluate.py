@@ -142,6 +142,7 @@ class Evaluator:
         if "baseline" in phases and "baseline" not in errors:
             self.health_tests(phases["baseline"])
             self.curation_tests(phases["baseline"])
+            self.version_tests(phases["baseline"])
         if "verify" in errors or "verify" not in phases:
             self.phase_error("verify", errors.get("verify", "phase did not run"))
         else:
@@ -852,6 +853,44 @@ class Evaluator:
         if cov["filed_bytes"] + cov["unfiled_bytes"] != cov["total_bytes"]:
             r.fail("filed plus unfiled is not the whole")
         r.finish()
+
+    def version_tests(self, raw: dict) -> None:
+        import re
+
+        r = self.new("VV-VER-01", "A version chain is one set, its latest preferred",
+                     ["R-VER-01"], "baseline")
+        sets = raw.get("versions")
+        if sets is None:
+            r.finish("this version has no version sets (before M6.5)")
+            return
+        by_path = {}
+        for found in sets:
+            for m in found["members"]:
+                by_path[tuple(m["path"])] = found
+        for scenario in self.manifest["scenarios"]:
+            if scenario["kind"] != "version-chain":
+                continue
+            r.checked += 1
+            chain = {tuple(m) for m in scenario["members"]}
+            holders = {id(by_path[k]) for k in chain if k in by_path}
+            missing = sorted(k for k in chain if k not in by_path)
+            if missing:
+                r.fail(f"not in any version set: {[_fmt(k) for k in missing]}")
+                continue
+            if len(holders) > 1:
+                r.fail(f"one chain split over {len(holders)} sets: {sorted(map(_fmt, chain))}")
+                continue
+            found = by_path[next(iter(chain))]
+            paths = {tuple(m["path"]) for m in found["members"]}
+            if paths != chain:
+                r.fail(f"{found['label']}: set holds {sorted(map(_fmt, paths))}, the chain is "
+                       f"{sorted(map(_fmt, chain))}")
+            newest = max(chain, key=lambda k: int(re.findall(r"_v(\d+)", k[1])[-1]))
+            preferred = [tuple(m["path"]) for m in found["members"] if m["preferred"]]
+            if preferred != [newest]:
+                r.fail(f"{found['label']}: preferred {[_fmt(k) for k in preferred]}, the "
+                       f"latest version is {_fmt(newest)}")
+        r.finish("no version chain planted")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

@@ -236,6 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
     edit.add_argument("--ndsa-target", dest="set_ndsa_target", type=int, choices=(1, 2, 3, 4))
     edit.add_argument("--min-copies", dest="set_min_copies", type=int)
 
+    versions = subparsers.add_parser(
+        "versions", help="near-duplicates grouped into version sets (a report, never an action)")
+    versions_sub = versions.add_subparsers(dest="versions_command", metavar="ACTION")
+    versions_sub.add_parser("find", help="find version sets in the catalog, replacing the last run's")
+    versions_sub.add_parser("list", help="the version sets found, each with its preferred member")
+
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
     )
@@ -1205,6 +1211,45 @@ def cmd_collections_edit(args) -> int:
         return _curation_call(work)
 
 
+def _print_version_sets(catalog, limit: int | None = None) -> None:
+    from drivefusion.core.store import curation
+
+    rows = curation.version_sets(catalog)
+    for row in rows[:limit]:
+        print(f"  [{row['id']}] {row['label']}  confidence {row['confidence']:.2f}")
+        print(f"        {row['rationale']}")
+        for member in curation.version_members(catalog, row["id"]):
+            path = catalog.conn.execute(
+                "SELECT dir_id, name, size_bytes FROM file WHERE id = ? AND vanished_at IS NULL",
+                (member["file_id"],)).fetchone()
+            if path is None:
+                continue
+            mark = "*" if member["is_preferred"] else " "
+            print(f"      {mark} {_human_bytes(path['size_bytes']):>10}  "
+                  f"{catalog.dir_path(path['dir_id'], os.sep)}{os.sep}{path['name']}")
+
+
+def cmd_versions_find(args) -> int:
+    from drivefusion.core.curate import versions
+
+    with Catalog(args.catalog) as catalog:
+        stored = versions.refresh(catalog)
+        print(f"{stored} version set(s) found (* marks the proposed preferred member). "
+              "Nothing was changed on any drive.")
+        _print_version_sets(catalog, limit=20)
+    return 0
+
+
+def cmd_versions_list(args) -> int:
+    with Catalog(args.catalog) as catalog:
+        from drivefusion.core.store import curation
+
+        if not curation.version_sets(catalog):
+            print("no version sets; run `drivefusion versions find` after `drivefusion hash`")
+        _print_version_sets(catalog)
+    return 0
+
+
 def cmd_drives_edit(args) -> int:
     from drivefusion.core.health.metadata import FIELDS, MetadataError
 
@@ -1405,6 +1450,8 @@ DISPATCH = {
     ("drives", "assign"): cmd_drives_assign,
     ("drives", "show"): cmd_drives_show,
     ("drives", "edit"): cmd_drives_edit,
+    ("versions", "find"): cmd_versions_find,
+    ("versions", "list"): cmd_versions_list,
     ("collections", "propose"): cmd_collections_propose,
     ("collections", "queue"): cmd_collections_queue,
     ("collections", "accept"): cmd_collections_accept,
@@ -1462,9 +1509,10 @@ def main(argv: list[str] | None = None) -> int:
     action = (getattr(args, "scope_command", None) or getattr(args, "drives_command", None)
               or getattr(args, "audit_command", None) or getattr(args, "health_command", None)
               or getattr(args, "standards_command", None)
-              or getattr(args, "collections_command", None))
+              or getattr(args, "collections_command", None)
+              or getattr(args, "versions_command", None))
     if args.command in ("scope", "drives", "audit", "health", "standards",
-                        "collections") and not action:
+                        "collections", "versions") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 

@@ -229,6 +229,27 @@ class DriveFusionAdapter:
             confirm.accept(self.catalog, row["id"])
         return found
 
+    def versions(self) -> list[dict] | None:
+        """Run version-set detection (M6.5) and read back each set's member
+        paths and which one is preferred. None before M6.5."""
+        try:
+            versions = importlib.import_module("drivefusion.core.curate.versions")
+        except ImportError:
+            return None
+        curation = importlib.import_module("drivefusion.core.store.curation")
+        versions.refresh(self.catalog)
+        out = []
+        for found in curation.version_sets(self.catalog):
+            members = []
+            for m in curation.version_members(self.catalog, found["id"]):
+                row = self.catalog.conn.execute(
+                    "SELECT dir_id, name FROM file WHERE id = ?", (m["file_id"],)).fetchone()
+                full = os.path.join(self.catalog.dir_path(row["dir_id"], os.sep), row["name"])
+                members.append({"path": list(self._locate(full)),
+                                "preferred": bool(m["is_preferred"])})
+            out.append({"label": found["label"], "members": members})
+        return out
+
     def collections(self) -> list[dict] | None:
         """Each confirmed collection's folders and members, by the tool's rules."""
         try:

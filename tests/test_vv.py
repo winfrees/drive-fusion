@@ -567,3 +567,23 @@ def test_coverage_is_checked_after_the_rescan(completed_run) -> None:
         obs["phases"]["rescan"]["coverage"]["filed_bytes"] += 1
 
     assert _rejudge(manifest, observed, inflate)[("VV-COL-06", "rescan")]["verdict"] == ev.FAIL
+
+
+def test_the_version_chain_is_one_set_with_its_latest_preferred(completed_run) -> None:
+    manifest, observed, results = completed_run
+    r = _verdicts(results)[("VV-VER-01", "baseline")]
+    assert r["verdict"] == ev.PASS and r["checked"] == 1
+
+    def prefer_the_first(obs):
+        for found in obs["phases"]["baseline"]["versions"]:
+            for i, m in enumerate(found["members"]):
+                m["preferred"] = i == len(found["members"]) - 1
+
+    def split(obs):
+        sets = obs["phases"]["baseline"]["versions"]
+        first = sets[0]
+        sets.append({"label": "x", "members": [first["members"].pop()]})
+
+    for tamper in (prefer_the_first, split):
+        assert _rejudge(manifest, observed, tamper)[("VV-VER-01", "baseline")]["verdict"] \
+            == ev.FAIL, tamper.__name__

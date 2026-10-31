@@ -661,6 +661,8 @@ CREATE TABLE version_member (version_set_id INTEGER, content_id INTEGER, is_pref
 -- subtree, score, evidence_json, proposed|accepted|rejected), rule kind 'subtree' by dir_id,
 -- created_at stamps, and version_set.rationale. Written only by core/store/curation.py:
 -- inference only proposes, a rejection sticks, and every decision and edit is audited.
+-- Schema v10 (ROADMAP M6.5): version_member is keyed by file_id, with content_id optional,
+-- because a file of unique size has no content id.
 
 CREATE TABLE fixity_check (
   content_id INTEGER, file_id INTEGER, checked_at TEXT,
