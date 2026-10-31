@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import os
 import sys
 from pathlib import Path
 
@@ -120,3 +122,37 @@ def qt_app():
     from PySide6.QtWidgets import QApplication
 
     return QApplication.instance()
+
+
+# -- a scanned archive with a project series (ROADMAP M6) -----------------------------
+
+def _write_dated(path: Path, size: int, when: dt.datetime) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(os.urandom(size))
+    stamp = when.replace(tzinfo=dt.timezone.utc).timestamp()
+    os.utime(path, (stamp, stamp))
+
+
+@pytest.fixture
+def archive(tmp_path: Path):
+    """Projects/Surveys/<three dated survey folders of CSVs>, and Misc/ (mixed, old)."""
+    from drivefusion.cli.main import main
+    from drivefusion.core.store.catalog import Catalog
+
+    root = tmp_path / "archive"
+    for i, month in enumerate((3, 6, 9)):
+        folder = root / "Projects" / "Surveys" / f"2021-{month:02d} Lake Survey"
+        for n in range(8):
+            _write_dated(folder / f"station_{n:02d}.csv", 2000 + 97 * n + i,
+                   dt.datetime(2021, month, 1 + n))
+    for n, (ext, year) in enumerate([("docx", 2013), ("jpg", 2016), ("pdf", 2019),
+                                     ("txt", 2023), ("xlsx", 2015), ("zip", 2021)]):
+        _write_dated(root / "Misc" / f"thing{n}.{ext}", 500 + n, dt.datetime(year, 5, 1))
+    catalog = tmp_path / "catalog" / "catalog.db"
+    assert main(["--catalog", str(catalog), "--accept-disclaimer", "scope", "add",
+                 str(root)]) == 0
+    assert main(["--catalog", str(catalog), "scan"]) == 0
+    with Catalog(catalog) as cat:
+        yield cat, catalog
+
+

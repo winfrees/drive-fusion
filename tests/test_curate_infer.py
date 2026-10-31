@@ -15,33 +15,6 @@ from drivefusion.core.store import audit, curation
 from drivefusion.core.store.catalog import Catalog
 
 
-def _write(path: Path, size: int, when: dt.datetime) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(os.urandom(size))
-    stamp = when.replace(tzinfo=dt.timezone.utc).timestamp()
-    os.utime(path, (stamp, stamp))
-
-
-@pytest.fixture
-def archive(tmp_path: Path):
-    """Projects/Surveys/<three dated survey folders of CSVs>, and Misc/ (mixed, old)."""
-    root = tmp_path / "archive"
-    for i, month in enumerate((3, 6, 9)):
-        folder = root / "Projects" / "Surveys" / f"2021-{month:02d} Lake Survey"
-        for n in range(8):
-            _write(folder / f"station_{n:02d}.csv", 2000 + 97 * n + i,
-                   dt.datetime(2021, month, 1 + n))
-    for n, (ext, year) in enumerate([("docx", 2013), ("jpg", 2016), ("pdf", 2019),
-                                     ("txt", 2023), ("xlsx", 2015), ("zip", 2021)]):
-        _write(root / "Misc" / f"thing{n}.{ext}", 500 + n, dt.datetime(year, 5, 1))
-    catalog = tmp_path / "catalog" / "catalog.db"
-    assert main(["--catalog", str(catalog), "--accept-disclaimer", "scope", "add",
-                 str(root)]) == 0
-    assert main(["--catalog", str(catalog), "scan"]) == 0
-    with Catalog(catalog) as cat:
-        yield cat, catalog
-
-
 def _paths(catalog, proposals) -> list[str]:
     return sorted(os.path.basename(p.evidence["path"]) for p in proposals)
 
