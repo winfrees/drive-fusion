@@ -136,6 +136,7 @@ class Evaluator:
                 self.rescan_tests(obs, exp)
                 self.membership_test(phases[name], exp)
                 self.scorecard_tests(phases[name], exp)
+                self.plan_tests(phases[name], exp)
             self.last_scanned_test(phases, name)
             self.dirs_test(obs, exp, name)
             self.identity_tests(obs, exp, name)
@@ -989,6 +990,162 @@ class Evaluator:
                             f"{want} over {len(items)} item(s)")
         r2.finish("no collection was confirmed")
         r3.finish("no collection was confirmed")
+
+    # -- R-PLAN ----------------------------------------------------------------------
+
+    PLAN_KINDS = {"copy", "organize", "describe", "verify", "review-candidate", "acquire"}
+    RESERVE_SHARE, RESERVE_FLOOR, DEFAULT_CLUSTER = 0.10, 1 << 30, 4096
+
+    def plan_tests(self, raw: dict, exp: dict) -> None:
+        from vv.oracle import _drive_identity
+
+        phase = "rescan"
+        titles = {
+            "VV-PLAN-01": ("A plan only adds copies", ["R-PLAN-01"]),
+            "VV-PLAN-02": ("No destination is planned over its room", ["R-PLAN-02"]),
+            "VV-PLAN-03": ("Every unit meets its target or an acquire covers it", ["R-PLAN-03"]),
+            "VV-PLAN-04": ("Added copies keep batches and zones apart", ["R-PLAN-04"]),
+        }
+        plan = raw.get("plan")
+        if plan is None:
+            for test_id, (title, reqs) in titles.items():
+                self.new(test_id, title, reqs, phase).finish("this version has no planner "
+                                                             "(before M7)")
+            return
+        device, unknown = _drive_identity(self.manifest)
+        drives = {d["id"]: d for d in self.manifest["drives"]}
+        units = {u["key"]: u for u in plan["units"]}
+        copies = [st for st in plan["steps"] if st["kind"] == "copy"]
+
+        # Each live file belongs to the unit with the deepest folder over it
+        # (a "loose" unit only holds the files directly in its folder).
+        def owner(key):
+            drive, path = key
+            folder = path.rsplit("/", 1)[0] if "/" in path else ""
+            best = None
+            for u in plan["units"]:
+                d, p = u["folder"]
+                if d != drive:
+                    continue
+                inside = folder == p if u["kind"] == "loose" else (
+                    p == "" or folder == p or folder.startswith(p + "/"))
+                if inside and (best is None or len(p) > len(best["folder"][1])
+                               or (len(p) == len(best["folder"][1]) and u["kind"] == "loose")):
+                    best = u
+            return best
+
+        members: dict[str, list] = defaultdict(list)
+        for key, entry in exp["files"].items():
+            u = owner(key)
+            if u is not None:
+                members[u["key"]].append(key)
+        content_devices = {c: {device[k[0]] for k in g["paths"] if k[0] not in unknown}
+                           for c, g in exp["groups"].items()}
+
+        def item_devices(key):
+            content = exp["files"][key]["content"]
+            if key in exp["identified"] and content in content_devices:
+                return content_devices[content]
+            return {device[key[0]]} if key[0] not in unknown else set()
+
+        added: dict[str, set] = defaultdict(set)
+        for st in copies:
+            if st["dst"]:
+                added[st["unit"]].add(device[st["dst"]])
+
+        r = self.new("VV-PLAN-01", *titles["VV-PLAN-01"], phase)
+        r.checked = 1 + len(plan["steps"])
+        if not plan["removal_refused"]:
+            r.fail("the plan store accepted a step that removes a copy")
+        for st in plan["steps"]:
+            if st["kind"] not in self.PLAN_KINDS:
+                r.fail(f"step {st['seq']} is a {st['kind']!r}")
+        for st in copies:
+            unit = units.get(st["unit"])
+            if not st["dst"] or unit is None:
+                r.fail(f"copy step {st['seq']} has no destination or unit")
+                continue
+            if device[st["dst"]] == device[unit["folder"][0]]:
+                r.fail(f"copy step {st['seq']} copies {_fmt(tuple(unit['folder']))} onto its "
+                       "own drive")
+        r.finish()
+
+        r = self.new("VV-PLAN-02", *titles["VV-PLAN-02"], phase)
+        used: dict[str, int] = defaultdict(int)
+        for st in copies:
+            dst = drives.get(st["dst"])
+            if dst is None or st["unit"] not in units:
+                continue
+            cluster = dst.get("cluster_bytes") or self.DEFAULT_CLUSTER
+            fp = sum(-(-exp["files"][k]["size"] // cluster) * cluster
+                     for k in members[st["unit"]] if exp["files"][k]["size"])
+            used[st["dst"]] += fp
+            r.checked += 1
+            if (st["footprint"] or 0) < fp:
+                r.fail(f"copy step {st['seq']}: footprint {st['footprint']:,} bytes on "
+                       f"{st['dst']}, independently {fp:,} at {cluster:,}-byte clusters")
+        for drive_id, fp in sorted(used.items()):
+            d = drives[drive_id]
+            if not d.get("capacity_bytes"):
+                r.fail(f"{drive_id}: planned as a destination with no known size")
+                continue
+            free = d["capacity_bytes"] - d.get("baseline_bytes", 0)
+            room = free - max(int(d["capacity_bytes"] * self.RESERVE_SHARE), self.RESERVE_FLOOR)
+            if fp > room:
+                r.fail(f"{drive_id}: {fp:,} bytes planned onto {room:,} of room "
+                       f"({free:,} free less the reserve)")
+        r.finish("no copy step planned (drives of unknown size take nothing)")
+
+        r = self.new("VV-PLAN-03", *titles["VV-PLAN-03"], phase)
+        owed = 0
+        for key, unit in sorted(units.items()):
+            items = members.get(key, [])
+            if not items:
+                continue
+            r.checked += 1
+            after = []
+            for k in items:
+                held = item_devices(k) | added[key]
+                after.append(len(held) + (0 if item_devices(k) else 1))
+            deficit = max(0, unit["target"] - min(after))
+            if deficit > unit["short"]:
+                r.fail(f"{_fmt(tuple(unit['folder']))}: {min(after)} of {unit['target']} copies "
+                       f"after the plan, but the plan says {unit['short']} short")
+            owed += deficit * sum(exp["files"][k]["size"] for k in items)
+        acquire = sum(st["bytes"] or 0 for st in plan["steps"] if st["kind"] == "acquire")
+        if owed and acquire < owed:
+            r.fail(f"{owed:,} bytes of copies are short of target; the acquire step covers "
+                   f"{acquire:,}")
+        r.finish("no unit planned")
+
+        r = self.new("VV-PLAN-04", *titles["VV-PLAN-04"], phase)
+        traits: dict[str, tuple] = {}
+        for d in self.manifest["drives"]:
+            if d["id"] in unknown:
+                continue
+            health = d.get("health") or {}
+            date = health.get("purchase_date") or ""
+            batch = ((d.get("manufacturer") or "").strip().lower(),
+                     (d.get("model") or "").strip().lower(), date[:7]) if len(date) >= 7 else None
+            if device[d["id"]] not in traits or (batch and not traits[device[d["id"]]][0]):
+                traits[device[d["id"]]] = (batch, health.get("disaster_zone"))
+        for key, new in sorted(added.items()):
+            unit = units[key]
+            items = members.get(key, [])
+            before = set.intersection(*(item_devices(k) for k in items)) if items else set()
+            after = before | new
+            limit = max(1, unit["target"] - 1)
+            for dev in sorted(new):
+                r.checked += 1
+                batch, zone = traits.get(dev, (None, None))
+                for label, value, index in (("batch", batch, 0), ("zone", zone, 1)):
+                    if not value:
+                        continue
+                    n = sum(1 for x in after if traits.get(x, (None, None))[index] == value)
+                    if n > limit:
+                        r.fail(f"{_fmt(tuple(unit['folder']))}: the copy on {dev} makes {n} "
+                               f"copies in one {label} ({value}); at most {limit}")
+        r.finish("no copy step planned")
 
     def deferred(self) -> None:
         for req in BY_ID.values():

@@ -280,6 +280,41 @@ class DriveFusionAdapter:
             out.append({"label": found["label"], "members": members})
         return out
 
+    def plan(self) -> dict | None:
+        """Make a plan (M7) as a person would, and read back its steps and units
+        in manifest terms. Also probe that a step that removes is refused.
+        None before M7."""
+        try:
+            document = importlib.import_module("drivefusion.core.planner.document")
+        except ImportError:
+            return None
+        capacity = importlib.import_module("drivefusion.core.planner.capacity")
+        plans = importlib.import_module("drivefusion.core.store.plans")
+        cat = self.catalog
+        doc = document.make(cat, use_cpsat=False)
+        stored = document.to_json(cat, document.save(cat, doc))
+        to_manifest = {d.drive_id: self.by_volume.get(d.volume_id)
+                       for d in capacity.destinations(cat)}
+
+        def where(dir_id):
+            return list(self._locate(cat.dir_path(dir_id, os.sep))) if dir_id else None
+
+        steps = [{"seq": st["seq"], "kind": st["kind"], "unit": st["unit"],
+                  "src": where(st["src_dir_id"]), "dst": to_manifest.get(st["dst_drive_id"]),
+                  "bytes": st["bytes"], "footprint": st["footprint_bytes"],
+                  "depends_on": st["depends_on"]} for st in stored["steps"]]
+        units = [{"key": u.key, "kind": u.kind, "folder": where(u.dir_id), "target": u.target,
+                  "bytes": u.bytes, "short": doc.short.get(u.key, (0, 0))[0]}
+                 for u in doc.units]
+        try:
+            plans.create(cat, "vv probe", [plans.Step("delete", "a removal, which must fail")],
+                         solver="vv", policy={}, standards={}, summary={})
+            refused = False
+        except plans.PlanError:
+            refused = True
+        return {"steps": steps, "units": units, "removal_refused": refused,
+                "solver": stored["solver"]}
+
     def collections(self) -> list[dict] | None:
         """Each confirmed collection's folders and members, by the tool's rules."""
         try:

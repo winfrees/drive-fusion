@@ -160,6 +160,19 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "NDSA storage results follow the copies and disaster zones: two or more "
                 "proven drives for every item (storage-1a), two or more recorded zones "
                 "(storage-3a), three drives across two zones (storage-2a)."),
+    Requirement("R-PLAN-01", "§9, §3.2",
+                "A plan only adds: no step removes or moves a copy, a step that would is "
+                "refused by the store, and every copy step goes to a drive that is not its "
+                "source."),
+    Requirement("R-PLAN-02", "§9",
+                "No destination is planned over its free space less the reserve, counting "
+                "each copied file at its size rounded up to the destination's clusters."),
+    Requirement("R-PLAN-03", "§9",
+                "After the plan every unit has its target number of copies, or the plan says "
+                "by how many it falls short and an acquire step covers those bytes."),
+    Requirement("R-PLAN-04", "§9, §8.2",
+                "No added copy puts more than target − 1 of a unit's copies in one purchase "
+                "batch or one recorded disaster zone."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "

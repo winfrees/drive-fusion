@@ -935,7 +935,8 @@ optimizer can only improve on an explainable baseline.
 
 *As built (ROADMAP M7.2–M7.4):* units are confirmed collections plus unfiled subtrees cut
 at max(total / 2000, 1 MiB); a unit's holders are the proven drives holding every item, and
-its footprint is kept per cluster size. Room at a destination is free space less a reserve of
+its footprint is kept per cluster size. Its copies are counted per item, the fewest any item
+has, so a copy onto a drive that already holds some of its items is not counted for them (M7.8). Room at a destination is free space less a reserve of
 max(10 % of capacity, 1 GiB); retired drives, working drives and drives of unknown size take
 nothing. The greedy pass adds each copy where it leaves the unit's P(loss) lowest, never
 putting more than target − 1 copies of a unit in one purchase batch or one recorded zone,

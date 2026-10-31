@@ -169,8 +169,12 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-FAIR-02 | §8.3 | FAIR results follow what is recorded: F2 and R1 from the descriptive fields filled, R1.1 from the license, I3 from recorded relations, A1 from whether every item is on a drive the catalog can name |
 | R-FAIR-03 | §8.3, §8.2 | NDSA storage results follow copies and zones: storage-1a (two or more proven drives per item), storage-3a (two or more recorded zones), storage-2a (three drives across two zones) |
 | R-VER-01 | §8.1 | Near-duplicates are grouped into version sets with a proposed preferred member: a planted version chain is exactly one set, its highest-numbered version preferred |
+| R-PLAN-01 | §9, §3.2 | A plan only adds: no step removes or moves a copy, the plan store refuses a step that would, and every copy goes to a drive that is not its source |
+| R-PLAN-02 | §9 | No destination is planned over its free space less the reserve, each copied file counted at its size rounded up to the destination's clusters |
+| R-PLAN-03 | §9 | After the plan every unit has its target number of copies, or the plan says how many it falls short and an acquire step covers those bytes |
+| R-PLAN-04 | §9, §8.2 | No added copy puts more than target − 1 of a unit's copies in one purchase batch or one recorded disaster zone |
 
-Requirements for milestones not yet built (the planner, exports) are not listed. Each new milestone should add its requirements and tests here
+Requirements for milestones not yet built (exports) are not listed. Each new milestone should add its requirements and tests here
 (§9).
 
 ## 4. Dataset design
@@ -323,6 +327,10 @@ tool's code would agree with the tool's bugs.
 | VV-FAIR-01 | rescan | R-FAIR-01 | Each collection's FAIR and NDSA cards score each criterion once, with a remedy for every gap, and name their rubric |
 | VV-FAIR-02 | rescan | R-FAIR-02 | F2, R1, R1.1, I3 and A1 equal the oracle's from the planted description and the drives' identity |
 | VV-FAIR-03 | rescan | R-FAIR-03 | storage-1a, storage-3a and storage-2a equal the oracle's from proven devices and their planted disaster zones |
+| VV-PLAN-01 | rescan | R-PLAN-01 | Every step is one of the six adding kinds, a removal step is refused by the store, and no copy lands on its source's device |
+| VV-PLAN-02 | rescan | R-PLAN-02 | Each copy's footprint is at least the oracle's (each live file in the unit at the destination's cluster size), and each destination's total fits its free space less max(10 % of capacity, 1 GiB) |
+| VV-PLAN-03 | rescan | R-PLAN-03 | Per unit, the fewest proven copies any item has after the plan (an item on unverified drives only counting as one) meets the target, or the plan's shortfall is at least the deficit and the acquire step's bytes cover all of them |
+| VV-PLAN-04 | rescan | R-PLAN-04 | For each added copy, the unit's copies on that device's batch (maker, model, purchase month) and recorded zone number at most target − 1 |
 | VV-VER-01 | baseline | R-VER-01 | Each planted version chain is exactly one version set (none missing, not split, nothing extra) and its highest-numbered member is the one preferred |
 
 Identity is always compared as **a partition of paths**, never by catalog id. "These three

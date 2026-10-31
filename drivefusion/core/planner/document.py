@@ -52,6 +52,10 @@ class Document:
     summary: dict = field(default_factory=dict)
     policy: dict = field(default_factory=dict)
     standards: dict = field(default_factory=dict)
+    #: The units planned over, and each one's shortfall (copies, bytes): kept
+    #: with the document for a caller to inspect, not stored with the plan.
+    units: list = field(default_factory=list)
+    short: dict = field(default_factory=dict)
 
 
 def _relative(catalog, dir_id: int) -> str:
@@ -162,7 +166,8 @@ def make(catalog, *, name: str | None = None, today=None, use_cpsat: bool = True
                 "reserve_share": capacity.RESERVE_SHARE,
                 "reserve_floor": capacity.RESERVE_FLOOR,
                 "batch_and_zone_limit": "target - 1"},
-        standards={"ndsa": _projection(catalog, found, solution, by_id, today)})
+        standards={"ndsa": _projection(catalog, found, solution, by_id, today)},
+        units=found, short=dict(solution.short))
 
 
 def _summary(catalog, found, dests, solution, labels, order, by_id) -> dict:

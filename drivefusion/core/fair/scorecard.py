@@ -260,6 +260,8 @@ def ndsa(catalog, collection_id: int, *, today: dt.date | None = None) -> Scorec
     add("storage-3b", _all(dated, len(e.drives)),
         f"{_share(dated, len(e.drives))} holding drives have a purchase date, so their age "
         "and failure rate are tracked",
+        "confirm the unverified volumes' drives, then record their purchase dates"
+        if not e.drives else
         "" if dated == len(e.drives) else "record purchase dates (`drivefusion drives edit`)")
     three_zones = count(lambda i: e.zones[i] >= 3)
     add("storage-4a", _all(three_zones, n), f"{_share(three_zones, n)} items in three zones",

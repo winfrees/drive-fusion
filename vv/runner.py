@@ -5,7 +5,7 @@ The sequence, with the no-touch snapshot taken around every tool phase:
 1. snapshot → **baseline**: register drives, scan, hash, record → snapshot
 2. the bench applies the manifest's mutations (adds, edits, deletes, a move,
    a deleted folder, a new folder)
-3. snapshot → **rescan**: scan, hash, record → snapshot
+3. snapshot → **rescan**: scan, hash, plan, record → snapshot
 4. the bench silently corrupts the chosen files (bytes flipped, mtime kept)
 5. snapshot → **verify**: fixity pass, record → snapshot
 
@@ -143,7 +143,8 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
         def rescan() -> dict:
             scan = adapter.scan()
             hashed = adapter.hash()
-            return {**adapter.collect(min_copies), "scan": scan, "hash": hashed}
+            return {**adapter.collect(min_copies), "scan": scan, "hash": hashed,
+                    "plan": adapter.plan()}
 
         # A baseline that never ran leaves nothing to compare a rescan with,
         # and stopping here keeps the dataset unspent for the next attempt.
