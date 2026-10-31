@@ -6,9 +6,9 @@
   "citation": "Wilkinson, M. D. et al. The FAIR Guiding Principles for scientific data management and stewardship. Scientific Data 3, 160018 (2016). doi:10.1038/sdata.2016.18",
   "url": "https://doi.org/10.1038/sdata.2016.18",
   "also": "https://www.go-fair.org/fair-principles/",
-  "retrieved": null,
-  "retrieval": "unconfirmed",
-  "retrieval_note": "Written from the published principles without access to the source (ROADMAP D14). Check each criterion's wording against Box 2 of the paper or go-fair.org, then set 'retrieved' to the date and 'retrieval' to 'confirmed'.",
+  "retrieved": "2026-10-31",
+  "retrieval": "reviewed",
+  "retrieval_note": "Wording reviewed by the project owner on 2026-10-31 and accepted as capturing the source's principal points; not compared line by line with the source (ROADMAP D14). Scorecards report whether a collection is consistent with these criteria; they certify nothing.",
   "groups": [
     {"id": "F", "title": "Findable"},
     {"id": "A", "title": "Accessible"},

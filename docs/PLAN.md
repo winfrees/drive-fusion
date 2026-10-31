@@ -64,9 +64,10 @@ of these numbers and would be over-built without them.
 
 > Drive Fusion is not intended for, and has not been validated for, identifiable human-subjects
 > data, protected health information, or otherwise regulated data. Do not add such data to its
-> scan scope. The tool assists with documentation and preservation planning; it does not
-> determine regulatory compliance. Responsibility for compliance with institutional, funder,
-> and legal requirements remains with you.
+> scan scope. The tool assists with documentation and preservation planning. Its scorecards
+> report how far your records are consistent with FAIR and NDSA criteria; they do not establish
+> that any requirement is met. Responsibility for meeting institutional, funder, and legal
+> requirements remains with you.
 
 First run requires explicit acknowledgement, recorded in the audit log with a timestamp.
 
@@ -837,8 +838,11 @@ revised standard is a data change, not a code change.
 
 **As built (ROADMAP M6.6, D14):** `drivefusion/standards/fair/rubric-fair-2016.json` and
 `drivefusion/standards/ndsa/rubric-ndsa-2.0.json`, written from the published texts; each
-criterion cites its source section, and each file is marked `retrieval: unconfirmed` until
-checked against the source. `drivefusion standards list` shows which.
+criterion cites its source section. Their wording was reviewed by the project owner on
+2026-10-31 and accepted (`retrieval: reviewed`), without a line-by-line comparison with the
+sources, which this environment could not reach (D14). Scorecards therefore say a collection is
+*consistent with* a criterion, and certify nothing; `drivefusion standards list` shows each
+file's state, and `confirmed` stays available for a later line-by-line check.
 
 **As built (ROADMAP M6.7):** `core/fair/scorecard.py` and `drivefusion score`. Results are pass,
 partial, fail, *planned* (capability not built yet) or *judgement* (outside what the tool can
@@ -1245,7 +1249,7 @@ would mean reworking the scan pipeline.
 | **Hardlinks and NTFS dedup inflate apparent redundancy** | FRN-based physical-copy counting; logical vs. allocated size tracked separately |
 | **SMART unavailable over USB bridges** | Degrade to age/capacity heuristics, labeled `estimated`; never invent a number |
 | **Published standards change mid-project** | Exactly what happened with the May 2026 DMS format; all rubrics are versioned data files naming their source, version, and retrieval date |
-| **The tool is mistaken for a compliance instrument** | Acknowledged disclaimer at first run and in every export (§1) |
+| **A scorecard is read as certification rather than consistency with a standard** | Acknowledged disclaimer at first run and in every export (§1) |
 | **Optimizer output is unreviewable** | Placement units, per-step rationale, plain-language simulation |
 
 ---

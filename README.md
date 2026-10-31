@@ -183,8 +183,9 @@ Settings imports a newer one you downloaded. Drive Fusion never downloads it its
 
 Scorecards use the FAIR Guiding Principles (Wilkinson et al., *Scientific Data* 2016) and the
 NDSA Levels of Digital Preservation 2.0, shipped as rubric files under `drivefusion/standards/`.
-They were written from the published texts and are marked unconfirmed until checked against
-those sources; `drivefusion standards list` says which.
+They were written from the published texts and their wording reviewed and accepted; a
+scorecard reports how far a collection is *consistent with* their criteria, and certifies
+nothing. `drivefusion standards list` shows how each was checked.
 
 ## Development
 

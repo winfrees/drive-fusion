@@ -126,7 +126,7 @@ implemented as a library with no user-facing entry point.
 | **UN-8** | Nothing leaves my machine, and cloud-only files are never downloaded. |
 | **UN-9** | What the tool does not know is shown as unknown: coverage, staleness and unhashed files. |
 | **UN-10** | Long operations stay responsive and can be cancelled. |
-| **UN-11** | I am not misled into treating the tool as a compliance instrument. |
+| **UN-11** | I am not misled into reading a scorecard as certification: it reports how far my records are consistent with FAIR and NDSA, nothing more. |
 
 ### 2.2 Requirements and specification traceability
 

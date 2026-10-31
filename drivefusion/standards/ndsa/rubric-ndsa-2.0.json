@@ -6,9 +6,9 @@
   "citation": "National Digital Stewardship Alliance. Levels of Digital Preservation, version 2.0 (2019). Levels of Preservation Revisions Working Group.",
   "url": "https://ndsa.org/publications/levels-of-digital-preservation/",
   "also": "https://osf.io/qgz98/",
-  "retrieved": null,
-  "retrieval": "unconfirmed",
-  "retrieval_note": "Written from the published v2.0 matrix without access to the source (ROADMAP D14). Check each cell against the v2.0 matrix on ndsa.org or OSF, then set 'retrieved' to the date and 'retrieval' to 'confirmed'.",
+  "retrieved": "2026-10-31",
+  "retrieval": "reviewed",
+  "retrieval_note": "Wording reviewed by the project owner on 2026-10-31 and accepted as capturing the source's principal points; not compared line by line with the source (ROADMAP D14). Scorecards report whether a collection is consistent with these criteria; they certify nothing.",
   "levels": [
     {"level": 1, "title": "Know your content"},
     {"level": 2, "title": "Protect your content"},

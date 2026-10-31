@@ -984,8 +984,7 @@ def cmd_standards_list(args) -> int:
 
     for rubric_id in rubrics.RUBRICS:
         r = rubrics.current(rubric_id)
-        state = (f"confirmed against the source {r.retrieved}" if r.retrieval == "confirmed"
-                 else "not yet confirmed against the source")
+        state = r.provenance()
         print(f"{r.name}: {r.source} {r.version}, {len(r.criteria)} criteria; {state}")
 
     with Catalog(args.catalog) as catalog:
@@ -1286,15 +1285,15 @@ _MARKS = {"pass": "✓", "partial": "~", "fail": "✗", "planned": "·", "judgem
 
 
 def _print_scorecard(card, rubric, *, full: bool) -> None:
-    confirmed = "" if card.rubric_confirmed else " (rubric not yet confirmed against its source)"
+    confirmed = "" if card.rubric_accepted else " (rubric not yet confirmed against its source)"
     if card.levels:
         levels = ", ".join(f"{rubric.groups[g].lower()} "
                            + (str(lv) if lv is not None else "not assessed")
                            for g, lv in card.levels.items())
-        print(f"  {card.rubric}{confirmed}: levels reached: {levels}")
+        print(f"  {card.rubric}{confirmed}: consistent with levels {levels}")
     else:
         score = "—" if card.score is None else f"{card.score:.0%}"
-        print(f"  {card.rubric}{confirmed}: {score} of the assessed criteria met")
+        print(f"  {card.rubric}{confirmed}: consistent with {score} of the assessed criteria")
     if not full:
         return
     for r in card.results:

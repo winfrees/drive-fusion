@@ -22,8 +22,9 @@ TEXT = (
     "Drive Fusion is not intended for, and has not been validated for, identifiable "
     "human-subjects data, protected health information, or otherwise regulated data. "
     "Do not add such data to its scan scope. The tool assists with documentation and "
-    "preservation planning; it does not determine regulatory compliance. Responsibility "
-    "for compliance with institutional, funder, and legal requirements remains with you."
+    "preservation planning. Its scorecards report how far your records are consistent with "
+    "FAIR and NDSA criteria; they do not establish that any requirement is met. "
+    "Responsibility for meeting institutional, funder, and legal requirements remains with you."
 )
 
 ENVIRONMENT_VARIABLE = "DRIVEFUSION_ACCEPT_DISCLAIMER"
