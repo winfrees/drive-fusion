@@ -942,6 +942,10 @@ putting more than target − 1 copies of a unit in one purchase batch or one rec
 then a swap pass moves added copies to a safer fit. CP-SAT (M7.5) maximises copies placed, then
 bytes × fall in P(loss), then fewer drives connected; its plan replaces greedy's only when it
 leaves fewer copies short, or as few with less expected loss.
+The document (M7.6) puts copies by destination drive, each followed by its verify step,
+then describe and review-candidate steps, then acquire; copies land under
+`Drive Fusion copies/<source drive>/<path>`. The NDSA projection only counts a unit's
+guaranteed holders. The wall-clock estimate waits for measured throughput.
 
 **The plan document** is a dependency-ordered checklist of `copy` / `organize` / `describe` /
 `verify` / `review-candidate` / `acquire` steps, each with a plain-language rationale and its
