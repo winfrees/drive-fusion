@@ -1120,6 +1120,13 @@ Two further rules M4 settled in code:
 - **Authenticode signing** is the difference between "it runs" and "users can run it," and it
   matters more than usual here: an unsigned executable that reads raw volume handles is exactly
   what antivirus heuristics flag. Budget for a certificate before any external release.
+  **As built (ROADMAP M8.8, D21):** `tools/sign.py`. With a certificate supplied to CI as the
+  `SIGNING_CERT_BASE64` and `SIGNING_CERT_PASSWORD` secrets, the spec signs `dfscan-helper.exe`
+  before pinning its SHA-256 (so the F-07 pin is the signed file's), CI signs `DriveFusion.exe`
+  and `drivefusion.exe` after the build, and each is verified with `signtool verify /pa`.
+  Without one the build is unsigned, with a CI warning, and `--version` says
+  `(unsigned build)`. No certificate exists yet, so the signing path has been tested only
+  with `signtool` replaced.
 
 ---
 
