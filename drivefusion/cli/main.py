@@ -27,6 +27,7 @@ from drivefusion.core.analysis import (
     under_protected,
 )
 from drivefusion.core.enum.backend import describe_age, method_summary, plan_enumeration
+from drivefusion.core import locations
 from drivefusion.core.errors import CatalogLocationError
 from drivefusion.core.identity import HASH_ALGO, hash_pass, verify_pass
 from drivefusion.core.scan import preview_root, scan_root
@@ -40,13 +41,10 @@ from drivefusion.core.store.catalog import Catalog
 
 BANNER = "Drive Fusion — read-only cataloging and consolidation planning"
 
-DEFAULT_CATALOG = Path(
-    os.environ.get("DRIVEFUSION_CATALOG", Path.home() / ".drivefusion" / "catalog.db")
-)
+DEFAULT_CATALOG = locations.default_catalog()
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
-    "export": ("write reports, manifests, and bundles to an export folder", "M8"),
 }
 
 
@@ -256,6 +254,24 @@ def build_parser() -> argparse.ArgumentParser:
                            help="default: the current draft")
     plan_show.add_argument("--json", action="store_true", help="machine-readable output")
     plan_sub.add_parser("list", help="the stored plans, newest first")
+
+    export = subparsers.add_parser(
+        "export", help="write manifests, collection packages, mappings and reports to a folder")
+    export_sub = export.add_subparsers(dest="export_command", metavar="WHAT")
+    for kind, text in (("manifests", "a _DRIVE-FUSION.json and _CATALOG.md per drive"),
+                       ("collections", "an RO-Crate, DataCite and BagIt package per collection"),
+                       ("mappings", "proposed names per collection, and copy-only commands "
+                                    "for the current plan"),
+                       ("reports", "CSV and HTML reports"),
+                       ("all", "every export kind")):
+        made = export_sub.add_parser(kind, help=text)
+        made.add_argument("--to", metavar="FOLDER", default=None,
+                          help="an existing folder; remembered for next time")
+        if kind in ("mappings", "all"):
+            made.add_argument("--template", default=None,
+                              help="naming template, default {collection}/{yyyy}/{name}")
+        made.add_argument("--min-copies", type=int, default=2)
+    export_sub.add_parser("list", help="the exports made, newest first")
 
     score = subparsers.add_parser(
         "score", help="FAIR and NDSA scorecards for your confirmed collections")
@@ -841,7 +857,7 @@ def cmd_gui(args) -> int:
 def cmd_status(args) -> int:
     with Catalog(args.catalog) as catalog:
         counts = catalog.counts()
-        print(f"catalog: {args.catalog}")
+        print(f"catalog: {args.catalog} ({locations.describe(Path(args.catalog))})")
         size = args.catalog.stat().st_size if args.catalog.exists() else 0
         print(f"  size:        {_human_bytes(size)}")
         print(f"  volumes:     {counts['volumes']:,}")
@@ -1348,6 +1364,38 @@ def cmd_plan_list(args) -> int:
     return 0
 
 
+def cmd_export_make(args) -> int:
+    from drivefusion.core.export import run, writer
+
+    with Catalog(args.catalog) as catalog:
+        try:
+            made = run.make(catalog, [args.export_command], args.to,
+                            template=getattr(args, "template", None),
+                            min_copies=args.min_copies)
+        except (writer.ExportError, CatalogLocationError) as exc:
+            print(f"drivefusion export: {exc}", file=sys.stderr)
+            return 1
+        for m in made:
+            details = ", ".join(f"{k} {v}" for k, v in m["summary"].items()
+                                if isinstance(v, int))
+            print(f"{m['kind']}: {m['path']}" + (f" ({details})" if details else ""))
+        print("Written into new folders only; nothing on any scanned drive was changed.")
+    return 0
+
+
+def cmd_export_list(args) -> int:
+    from drivefusion.core.store import exports
+
+    with Catalog(args.catalog) as catalog:
+        rows = exports.exports(catalog)
+        if not rows:
+            print("no exports yet; make one with `drivefusion export all --to FOLDER`")
+        for row in rows:
+            print(f"{row['id']:>4}  {row['created_at'][:16]}  {row['kind']:<12} "
+                  f"{row['files']:>5} files  {_human_bytes(row['bytes']):>10}  {row['path']}")
+    return 0
+
+
 def cmd_score(args) -> int:
     from drivefusion.core.curate import coverage
     from drivefusion.core.fair import rubrics, scorecard
@@ -1582,6 +1630,9 @@ DISPATCH = {
     ("plan", "make"): cmd_plan_make,
     ("plan", "show"): cmd_plan_show,
     ("plan", "list"): cmd_plan_list,
+    **{("export", k): cmd_export_make for k in ("manifests", "collections", "mappings",
+                                                 "reports", "all")},
+    ("export", "list"): cmd_export_list,
     ("collections", "propose"): cmd_collections_propose,
     ("collections", "queue"): cmd_collections_queue,
     ("collections", "accept"): cmd_collections_accept,
@@ -1641,9 +1692,10 @@ def main(argv: list[str] | None = None) -> int:
               or getattr(args, "standards_command", None)
               or getattr(args, "collections_command", None)
               or getattr(args, "versions_command", None)
-              or getattr(args, "plan_command", None))
+              or getattr(args, "plan_command", None)
+              or getattr(args, "export_command", None))
     if args.command in ("scope", "drives", "audit", "health", "standards",
-                        "collections", "versions", "plan") and not action:
+                        "collections", "versions", "plan", "export") and not action:
         parser.parse_args([args.command, "--help"])
         return 0
 

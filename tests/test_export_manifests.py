@@ -71,9 +71,9 @@ def test_written_into_a_bundle_with_the_markdown_beside(fleet) -> None:
     folders = sorted(p.name for p in bundle.path.iterdir() if p.is_dir())
     assert len(folders) == 3
     for folder in folders:
-        data = json.loads((bundle.path / folder / "_DRIVE-FUSION.json").read_text())
-        text = (bundle.path / folder / "_CATALOG.md").read_text()
+        data = json.loads((bundle.path / folder / "_DRIVE-FUSION.json").read_text(encoding="utf-8"))
+        text = (bundle.path / folder / "_CATALOG.md").read_text(encoding="utf-8")
         assert data["format"] == "drive-fusion-manifest/1"
         assert data["label"] in text and "changed nothing on this drive" in text
     a = bundle.path / next(f for f in folders if f.startswith("ARCHIVE-1"))
-    assert "| Project | 2 | 377 B |" in (a / "_CATALOG.md").read_text()
+    assert "| Project | 2 | 377 B |" in (a / "_CATALOG.md").read_text(encoding="utf-8")

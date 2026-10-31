@@ -18,15 +18,15 @@ from tests.test_export_manifests import fleet  # noqa: F401  (the fixture)
 def validate_bag(bag: Path) -> list[str]:
     """An RFC 8493 check written from the RFC, not from the writer."""
     problems = []
-    if (bag / "bagit.txt").read_text().splitlines()[0] != "BagIt-Version: 1.0":
+    if (bag / "bagit.txt").read_text(encoding="utf-8").splitlines()[0] != "BagIt-Version: 1.0":
         problems.append("bagit.txt")
-    info = dict(line.split(": ", 1) for line in (bag / "bag-info.txt").read_text().splitlines())
+    info = dict(line.split(": ", 1) for line in (bag / "bag-info.txt").read_text(encoding="utf-8").splitlines())
     payload = sorted(p for p in (bag / "data").rglob("*") if p.is_file())
     octets = sum(p.stat().st_size for p in payload)
     if info.get("Payload-Oxum") != f"{octets}.{len(payload)}":
         problems.append(f"oxum {info.get('Payload-Oxum')} != {octets}.{len(payload)}")
     listed = {}
-    for line in (bag / "manifest-sha256.txt").read_text().splitlines():
+    for line in (bag / "manifest-sha256.txt").read_text(encoding="utf-8").splitlines():
         digest, rel = line.split("  ", 1)
         listed[rel] = digest
     if set(listed) != {p.relative_to(bag).as_posix() for p in payload}:
@@ -35,7 +35,7 @@ def validate_bag(bag: Path) -> list[str]:
         if hashlib.sha256((bag / rel).read_bytes()).hexdigest() != digest:
             problems.append(f"{rel}: checksum")
     tags = {}
-    for line in (bag / "tagmanifest-sha256.txt").read_text().splitlines():
+    for line in (bag / "tagmanifest-sha256.txt").read_text(encoding="utf-8").splitlines():
         digest, rel = line.split("  ", 1)
         tags[rel] = digest
     if not {"bagit.txt", "bag-info.txt", "manifest-sha256.txt"} <= set(tags):
@@ -66,12 +66,12 @@ def test_each_collection_is_a_valid_bag(packaged) -> None:
     _, bag, summary = packaged
     assert summary == {"collections": 1, "members": 2}
     assert validate_bag(bag) == []
-    assert "content itself is not in this bag" in (bag / "bag-info.txt").read_text()
+    assert "content itself is not in this bag" in (bag / "bag-info.txt").read_text(encoding="utf-8")
 
 
 def test_the_ro_crate_lists_exactly_the_members(packaged) -> None:
     _, bag, _ = packaged
-    crate = json.loads((bag / "data" / "ro-crate-metadata.json").read_text())
+    crate = json.loads((bag / "data" / "ro-crate-metadata.json").read_text(encoding="utf-8"))
     graph = {e["@id"]: e for e in crate["@graph"]}
     assert graph["ro-crate-metadata.json"]["conformsTo"]["@id"] == packages.ROCRATE
     root = graph["./"]
@@ -86,14 +86,14 @@ def test_the_ro_crate_lists_exactly_the_members(packaged) -> None:
 
 def test_datacite_has_its_required_properties(packaged) -> None:
     _, bag, _ = packaged
-    dc = json.loads((bag / "data" / "datacite.json").read_text())
+    dc = json.loads((bag / "data" / "datacite.json").read_text(encoding="utf-8"))
     for key in ("identifiers", "creators", "titles", "publisher", "publicationYear", "types"):
         assert dc[key], key
     assert dc["types"]["resourceTypeGeneral"] == "Dataset"
     assert dc["relatedIdentifiers"] == [{"relatedIdentifier": "10.1234/abc",
                                          "relationType": "IsVersionOf",
                                          "relatedIdentifierType": "DOI"}]
-    rows = list(csv.DictReader((bag / "data" / "members.csv").open()))
+    rows = list(csv.DictReader((bag / "data" / "members.csv").open(encoding="utf-8", newline="")))
     assert sorted(int(r["bytes"]) for r in rows) == [77, 300]
 
 
@@ -102,5 +102,5 @@ def test_a_tampered_bag_fails_the_check(packaged) -> None:
     _, bag, _ = packaged
     target = bag / "data" / "members.csv"
     target.chmod(0o644)
-    target.write_text(target.read_text() + "extra\n")
+    target.write_text(target.read_text(encoding="utf-8") + "extra\n", encoding="utf-8")
     assert validate_bag(bag)

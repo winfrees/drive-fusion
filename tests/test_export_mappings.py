@@ -75,11 +75,11 @@ def test_written_with_the_plan_previews(fleet) -> None:  # noqa: F811
     assert summary["command_previews"] == 2 and summary["mapped"] == 2
     coll = curation.collections(fleet.c)[0]
     folder = bundle.path / coll["local_pid"]
-    forward = list(csv.reader((folder / "mapping.csv").open()))[1:]
-    inverse = list(csv.reader((folder / "inverse.csv").open()))[1:]
+    forward = list(csv.reader((folder / "mapping.csv").open(encoding="utf-8", newline="")))[1:]
+    inverse = list(csv.reader((folder / "inverse.csv").open(encoding="utf-8", newline="")))[1:]
     assert {(o, n) for o, n in forward} == {(o, n) for n, o in inverse}
     plan_dir = next(p for p in bundle.path.iterdir() if p.name.startswith("plan-"))
-    sh = (plan_dir / "copy-commands.sh").read_text()
+    sh = (plan_dir / "copy-commands.sh").read_text(encoding="utf-8")
     assert "rsync -a --protect-args" in sh and "<ARCHIVE-2>" in sh
     commands.check("sh", sh.encode())
     commands.check("cmd", (plan_dir / "copy-commands.cmd").read_bytes())

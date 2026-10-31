@@ -1040,6 +1040,14 @@ because no such capability exists behind them.
    "requires: connect ARCHIVE-3, then ARCHIVE-7."
 8. **Exports** — RO-Crate/BagIt bundles, DataCite metadata, per-drive manifests, CSV/HTML
    reports, each timestamped into its own folder recording the standards versions used.
+   **As built (ROADMAP M8.5):** `core/export/reports.py` writes `summary.csv`,
+   `under-protected.csv`, `duplicates.csv`, `durability.csv`, `scorecards.csv`, `plan.csv` and a
+   self-contained `report.html` (no scripts, no links out, every value escaped; tables capped at
+   200 rows, the CSVs complete). **As built (ROADMAP M8.6):** `drivefusion export
+   {manifests,collections,mappings,reports,all} [--to FOLDER]` and `export list`
+   (`core/export/run.py`), and this screen: choose the folder once, then one button per kind
+   or Make all, each run as a background task; past exports listed with the standards versions
+   they used; Open folder. The folder is remembered as the last export's root (D22).
 
 **Threading, because a frozen window is a bug:** a ``sqlite3`` connection belongs to the
 thread that created it, so the GUI keeps **one catalog per thread** — never one shared
@@ -1081,7 +1089,11 @@ Two further rules M4 settled in code:
   mode** keeping the catalog beside the executable so the tool and its catalog can travel on a
   thumb drive to whichever machine the drives are attached to. **As built:** the catalog is
   `~/.drivefusion/catalog.db`, overridable with `--catalog` or `DRIVEFUSION_CATALOG`; there is
-  no portable mode yet. A portable mode is bound by the same rule: a thumb drive carrying the
+  no portable mode yet. **As built (ROADMAP M8.7, D20):** `core/locations.py`. `--catalog`, then
+  `DRIVEFUSION_CATALOG`, then portable mode (a `portable` file beside the executable puts the
+  catalog in `DriveFusion data` beside it), then `~/.drivefusion`; nothing is moved between
+  them, and `status` says which applies. The CLI and GUI now share this default (the GUI had
+  ignored `DRIVEFUSION_CATALOG`). A portable mode is bound by the same rule: a thumb drive carrying the
   catalog can't also be scanned. It must refuse a catalog on a catalogued volume (REVIEW
   F-03). A helper in a portable folder is user-writable, so it is elevated only when it
   matches the build's pinned hash (REVIEW F-07, fixed).
