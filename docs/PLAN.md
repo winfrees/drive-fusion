@@ -933,6 +933,14 @@ Greedy seed (riskiest and largest units first, then hill-climb over add/swap nei
 with CP-SAT via `ortools` when installed, warm-started from the greedy solution so the
 optimizer can only improve on an explainable baseline.
 
+*As built (ROADMAP M7.2–M7.4):* units are confirmed collections plus unfiled subtrees cut
+at max(total / 2000, 1 MiB); a unit's holders are the proven drives holding every item, and
+its footprint is kept per cluster size. Room at a destination is free space less a reserve of
+max(10 % of capacity, 1 GiB); retired drives, working drives and drives of unknown size take
+nothing. The greedy pass adds each copy where it leaves the unit's P(loss) lowest, never
+putting more than target − 1 copies of a unit in one purchase batch or one recorded zone,
+then a swap pass moves added copies to a safer fit.
+
 **The plan document** is a dependency-ordered checklist of `copy` / `organize` / `describe` /
 `verify` / `review-candidate` / `acquire` steps, each with a plain-language rationale and its
 `risk_delta`, plus: a before/after simulation (per-drive free space, bytes to copy, wall-clock
