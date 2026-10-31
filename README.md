@@ -74,7 +74,7 @@ pip install -e ".[gui]"
 drivefusion scope add D:\Research
 drivefusion scope preview 1        # counts what a scan would cover, writes nothing
 drivefusion scan
-drivefusion find "*.psd"
+drivefusion find lake survey       # words, matched as prefixes, in file or folder names; % or --like for substrings
 drivefusion hash                   # the only verb that reads file contents
 drivefusion report                 # duplication, durability and fixity findings
 drivefusion verify                 # re-hash and compare against recorded hashes

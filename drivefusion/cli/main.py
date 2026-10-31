@@ -261,8 +261,11 @@ def build_parser() -> argparse.ArgumentParser:
         "root_id", type=int, nargs="?", help="scope root to scan (default: all)"
     )
 
-    find = subparsers.add_parser("find", help="search the catalog by filename")
-    find.add_argument("pattern", help="LIKE pattern; %% matches any sequence")
+    find = subparsers.add_parser("find", help="search the catalog by file and folder name")
+    find.add_argument("pattern", help="words, each matched as a prefix (lake surv); "
+                                      "a pattern with %% is a LIKE pattern instead")
+    find.add_argument("--like", action="store_true",
+                      help="match the pattern anywhere in the name (slower: scans every file)")
     find.add_argument("--limit", type=int, default=50)
     find.add_argument(
         "--include-vanished", action="store_true",
@@ -541,15 +544,15 @@ def _bound_root_ids(catalog, volume_id: int | None, verb: str):
 
 
 def cmd_find(args) -> int:
-    pattern = args.pattern if "%" in args.pattern else f"%{args.pattern}%"
     with Catalog(args.catalog) as catalog:
-        rows = list(
-            catalog.find(
-                pattern,
-                limit=args.limit,
-                include_vanished=args.include_vanished,
-            )
-        )
+        if args.like or "%" in args.pattern:
+            pattern = args.pattern if "%" in args.pattern else f"%{args.pattern}%"
+            found = catalog.find(pattern, limit=args.limit,
+                                 include_vanished=args.include_vanished)
+        else:
+            found = catalog.search(args.pattern, limit=args.limit,
+                                   include_vanished=args.include_vanished)
+        rows = list(found)
         if not rows:
             print("no matches")
             return 1

@@ -194,6 +194,6 @@ def test_v10_rebuilds_the_version_tables(tmp_path: Path) -> None:
         catalog.conn.execute("CREATE TABLE version_member (version_set_id INTEGER, "
                              "content_id INTEGER NOT NULL, is_preferred INTEGER)")
     with Catalog(db) as catalog:
-        assert schema.current_version(catalog.conn) == 10
+        assert schema.current_version(catalog.conn) == schema.SCHEMA_VERSION
         columns = {r[1] for r in catalog.conn.execute("PRAGMA table_info(version_member)")}
         assert {"file_id", "content_id"} <= columns
