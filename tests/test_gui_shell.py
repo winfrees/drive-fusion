@@ -125,11 +125,11 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
 
     from drivefusion.gui.main_window import PLANNED
 
-    assert window.stack.count() == 7
-    assert window.nav.count() == 7 + len(PLANNED)
+    assert window.stack.count() == 8
+    assert window.nav.count() == 8 + len(PLANNED)
 
     for offset, (name, milestone) in enumerate(PLANNED):
-        item = window.nav.item(7 + offset)
+        item = window.nav.item(8 + offset)
         assert name in item.text()
         assert milestone in item.text()
         assert item.flags() == Qt.NoItemFlags, "a pending screen must not be clickable"
@@ -897,3 +897,32 @@ def test_the_duplicates_screen_reports_duplicates_and_version_sets(window) -> No
     starred = [found.child(i).text(0) for i in range(2) if found.child(i).text(0).startswith("★")]
     assert len(starred) == 1 and "most recently modified" in found.toolTip(0)
     assert "never deletes" in screen.findChildren(type(screen.versions_note))[0].text()
+
+
+# -- Plan (ROADMAP M7.7) -------------------------------------------------------------
+
+def test_the_plan_screen_shows_the_plan_by_drive(window) -> None:
+    from drivefusion.core.planner import document
+    from tests.test_planner_units import Fleet
+
+    catalog = window.session.catalog()
+    f = Fleet(catalog)
+    f.drive("A", purchase_date="2019-01-01", nickname="ARCHIVE-1")
+    f.drive("B", purchase_date="2024-01-01", nickname="ARCHIVE-2")
+    f.file("A", f.mkdir("A", "Photos"), 5 << 20)
+    screen = window.plan
+    screen.refresh()
+    assert "No plan yet" in screen.requires.text()
+
+    document.save(catalog, document.make(catalog, use_cpsat=False))
+    screen.refresh()
+    assert screen.requires.text().startswith("Requires: connect ARCHIVE-2")
+    groups = {screen.steps.topLevelItem(i).text(0): screen.steps.topLevelItem(i)
+              for i in range(screen.steps.topLevelItemCount())}
+    archive = groups["ARCHIVE-2"]
+    kinds = [archive.child(i).data(0, 0x0100) for i in range(archive.childCount())]
+    assert "copy" in kinds and "verify" in kinds
+    copy = next(archive.child(i) for i in range(archive.childCount())
+                if archive.child(i).data(0, 0x0100) == "copy")
+    assert copy.text(2).startswith("−") and copy.text(3)
+    assert "deletes nothing" in screen.findChildren(type(screen.requires))[0].text()
