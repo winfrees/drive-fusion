@@ -188,6 +188,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "payload file in the SHA-256 manifest with a matching checksum, the Payload-"
                 "Oxum correct, the tag files in the tag manifest) whose RO-Crate lists exactly "
                 "the collection's live member files, with their sizes."),
+    Requirement("R-EXP-04", "§3.2, §3.3, §10",
+                "Each collection's mapping covers exactly its live members, one to one, and its "
+                "inverse restores every path; the plan's command previews hold one copy-only "
+                "command per copy step and nothing a denylist would refuse."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "

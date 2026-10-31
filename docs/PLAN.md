@@ -133,7 +133,7 @@ volume is opened **read-only and nothing else**.
 | **Export-path assertion** | `core/export/` is the only writer of user-facing files. Every write routes through one function asserting the target resolves inside the chosen export root and does not already exist. It has no delete function. **As built (ROADMAP M8.1):** `core/export/writer.py`. Each export is a new `YYYYMMDDTHHMMSSZ-<kind>` folder; `Bundle.write` refuses absolute paths, `..`, drive names and links, and creates each file exclusively (`O_EXCL`, `O_NOFOLLOW` where the OS has it); `close` writes `_EXPORT.json` listing every file with its SHA-256 and records the export (schema v13 `export`, audited `export.write`). |
 | **No hydration of cloud placeholders** | OneDrive-style dehydrated files are detected by attribute and **never opened** (§6.7). Reading one would trigger a download — a state change, and potentially gigabytes of it. |
 | **No-touch regression test** | The suite builds a fixture tree, records a Merkle hash of every path, size, timestamp, and byte, runs a **full** scan → analysis → plan → export cycle, and re-hashes. The assertion is byte-and-metadata identity; access times are asserted on POSIX where `O_NOATIME` is permitted, and not on Windows. It covers every path the cycle calls. The elevated helper and the USN delta need a real NTFS volume handle and are **not** exercised. **Runtime guard:** the cycle runs under a `sys.addaudithook` guard (`tests/fixtures/audit_guard.py`) that refuses, and records, any write-mode open, remove, rename, link, `chmod`, `utime`, `truncate`, `mkdir` or `sqlite3.connect` under the tree, and any process launch at all, on every thread, at the moment it's attempted and whatever API made it. Win32 calls made directly through `ctypes` raise no audit event, so the snapshot and the lint remain the defence there. |
-| **Denylist on generated text** | Plan exports may include *copy-only* command previews (`robocopy` without `/MIR` or `/PURGE`, `rsync` without `--delete`) for you to review and run yourself. A linter rejects any generated string containing `del`, `rm`, `rmdir`, `erase`, `format`, `diskpart`, `unlink`, `/MIR`, `/PURGE`, `--delete`. The tool will not so much as *print* a destructive command. |
+| **Denylist on generated text** | Plan exports may include *copy-only* command previews (`robocopy` without `/MIR` or `/PURGE`, `rsync` without `--delete`) for you to review and run yourself. A linter rejects any generated string containing `del`, `rm`, `rmdir`, `erase`, `format`, `diskpart`, `unlink`, `/MIR`, `/PURGE`, `--delete`. The tool will not so much as *print* a destructive command. **As built (ROADMAP M8.4):** `core/export/commands.py`. The check runs on every command preview before it is written: each line is a comment or starts with `robocopy`/`rsync`; every path is quoted, and a path holding a quote is refused, so none can end its quoting; every unquoted token must be an allowed option and none may be on the denylist (which also covers `/MOVE`, `--remove-source-files`, `mv`, `rd`, `shred`, `mkfs`, `dd`). It applies to the previews, not to manifests or mappings, whose file names are the user's own and may be any word. |
 
 ```mermaid
 flowchart TB
@@ -983,7 +983,10 @@ and archive as provenance.
 ## 10. Findability — the "traceable order" requirement
 
 1. **Naming templates** per collection, rendered as a reviewable old → new mapping table with
-   its inverse, which you execute yourself.
+   its inverse, which you execute yourself. **As built (ROADMAP M8.4):** `core/export/mappings.py`;
+   fields `{collection}`, `{pid}`, `{yyyy}`, `{mm}`, `{dd}`, `{name}`, `{stem}`, `{ext}`, `{path}`,
+   default `{collection}/{yyyy}/{name}`; clashes get ` (2)`, ` (3)`…, so the mapping stays one to
+   one and `inverse.csv` restores every path.
 2. **Per-drive manifest** generated into the export bundle as `_DRIVE-FUSION.json` (machine)
    and `_CATALOG.md` (human): drive identity, contents by collection, counts, sizes, checksums,
    and where the sibling copies live. Copy it onto the drive and a shelved drive becomes

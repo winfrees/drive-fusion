@@ -114,7 +114,8 @@ def export_tree(root: Path) -> dict:
                 except ValueError:
                     out[rel]["json"] = None
             elif path.name in ("bagit.txt", "bag-info.txt", "manifest-sha256.txt",
-                               "tagmanifest-sha256.txt"):
+                               "tagmanifest-sha256.txt", "mapping.csv", "inverse.csv",
+                               "copy-commands.cmd", "copy-commands.sh"):
                 out[rel]["text"] = data.decode("utf-8", errors="replace")
     return out
 
