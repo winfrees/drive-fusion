@@ -827,6 +827,32 @@ class Evaluator:
                        f"bytes; truly {files}, {size:,} under {coll['folders']}")
         r.finish("no collection was confirmed (nothing was proposed)")
 
+        r = self.new("VV-COL-06", "Coverage counts every distinct byte once, filed or not",
+                     ["R-COL-06"], "rescan")
+        cov = raw.get("coverage")
+        if cov is None:
+            r.finish("this version reports no coverage (before M6.4)")
+            return
+        prefixes = [(d, f"{p}/" if p else "") for c in found for d, p in c["folders"]]
+
+        def filed(key) -> bool:
+            return any(key[0] == d and key[1].startswith(p) for d, p in prefixes)
+
+        want = sum(g["size"] for g in exp["groups"].values()
+                   if any(filed(k) for k in g["paths"]))
+        want += sum(size for k, size in exp["singles"].items() if filed(k))
+        total = exp["summary"]["unique_bytes"]
+        r.checked = 3
+        if cov["total_bytes"] != total:
+            r.fail(f"coverage is over {cov['total_bytes']:,} bytes; all distinct bytes are "
+                   f"{total:,}")
+        if cov["filed_bytes"] != want:
+            r.fail(f"{cov['filed_bytes']:,} bytes reported in collections; {want:,} truly have "
+                   "a copy in one")
+        if cov["filed_bytes"] + cov["unfiled_bytes"] != cov["total_bytes"]:
+            r.fail("filed plus unfiled is not the whole")
+        r.finish()
+
     def deferred(self) -> None:
         for req in BY_ID.values():
             if req.status != "planned":

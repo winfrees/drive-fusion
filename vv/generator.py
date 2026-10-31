@@ -66,7 +66,8 @@ SCENARIO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "edit-before-verify": ("R-FIX-04",),
     "drive-health": ("R-HL-01", "R-HL-03", "R-HL-04"),
     "batch-copy": ("R-HL-02", "R-HL-03"),
-    "project-series": ("R-COL-01", "R-COL-02", "R-COL-03", "R-COL-04", "R-COL-05"),
+    "project-series": ("R-COL-01", "R-COL-02", "R-COL-03", "R-COL-04", "R-COL-05",
+                       "R-COL-06"),
     "cross-batch-copy": ("R-HL-02", "R-HL-03"),
 }
 

@@ -221,6 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
     accept_all = collections_sub.add_parser(
         "accept-all", help="accept every waiting proposal scoring at least --min-score")
     accept_all.add_argument("--min-score", type=float, required=True)
+    cov = collections_sub.add_parser(
+        "coverage", help="how much is in collections, and what the unfiled rest risks")
+    cov.add_argument("--min-copies", type=int, default=2, metavar="N")
     collections_sub.add_parser("list", help="the confirmed collections")
     show = collections_sub.add_parser("show", help="one collection: metadata, folders, size")
     show.add_argument("collection", metavar="COLLECTION", help="id or local PID")
@@ -697,6 +700,13 @@ def cmd_report(args) -> int:
 
             found = durability.exposure(catalog)
             _print_exposure(catalog, found, top=args.top if args.kind == "durability" else 3)
+            if args.kind == "summary":
+                from drivefusion.core.curate import coverage
+
+                cov = coverage.coverage(catalog, min_copies=args.min_copies, found=found)
+                print(f"\ncollections:         {cov.share:.1%} of distinct bytes curated; "
+                      f"unfiled {_human_bytes(cov.unfiled.bytes)}, expected loss "
+                      f"{_human_bytes(int(cov.unfiled.expected_loss))}/yr")
 
         if args.kind in ("summary", "redundancy"):
             exposed = durability.ranked_under_protected(
@@ -1097,6 +1107,30 @@ def cmd_collections_accept_all(args) -> int:
         return _curation_call(work)
 
 
+def _bucket_line(label: str, bucket) -> str:
+    return (f"  {label:12}{bucket.items:>10,} items  {_human_bytes(bucket.bytes):>10}  "
+            f"expected loss {_human_bytes(int(bucket.expected_loss))}/yr  "
+            f"on too few drives {_human_bytes(bucket.under_protected_bytes)}")
+
+
+def cmd_collections_coverage(args) -> int:
+    from drivefusion.core.curate import coverage
+    from drivefusion.core.store import curation
+
+    with Catalog(args.catalog) as catalog:
+        found = coverage.coverage(catalog, min_copies=args.min_copies)
+        print(f"coverage: {found.share:.1%} of distinct bytes are in confirmed collections")
+        print(_bucket_line("in collections", found.filed))
+        print(_bucket_line("unfiled", found.unfiled))
+        if found.unfiled.bytes:
+            print("  Unfiled is a legitimate state for content you never mean to curate; "
+                  "it is reported, not hidden.")
+        for coll_id, bucket in sorted(found.collections.items(),
+                                      key=lambda kv: -kv[1].expected_loss):
+            print(_bucket_line(curation.collection(catalog, coll_id)["title"][:12], bucket))
+    return 0
+
+
 def cmd_collections_list(args) -> int:
     from drivefusion.core.curate import confirm
     from drivefusion.core.store import curation
@@ -1377,6 +1411,7 @@ DISPATCH = {
     ("collections", "reject"): cmd_collections_reject,
     ("collections", "split"): cmd_collections_split,
     ("collections", "accept-all"): cmd_collections_accept_all,
+    ("collections", "coverage"): cmd_collections_coverage,
     ("collections", "list"): cmd_collections_list,
     ("collections", "show"): cmd_collections_show,
     ("collections", "edit"): cmd_collections_edit,

@@ -333,7 +333,18 @@ class DriveFusionAdapter:
                             **self.discovered.get(d, {})} for d, i in self.roots.items()},
             "health": self._health(),
             "collections": self.collections(),
+            "coverage": self._coverage(min_copies),
         }
+
+    def _coverage(self, min_copies: int) -> dict | None:
+        try:
+            coverage = importlib.import_module("drivefusion.core.curate.coverage")
+        except ImportError:
+            return None
+        found = coverage.coverage(self.catalog, min_copies=min_copies)
+        return {"total_bytes": found.total.bytes, "filed_bytes": found.filed.bytes,
+                "unfiled_bytes": found.unfiled.bytes, "filed_items": found.filed.items,
+                "share": found.share}
 
     def _health(self) -> dict | None:
         """Each drive's recorded health and failure rate, and the durability
