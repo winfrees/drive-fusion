@@ -167,9 +167,10 @@ class Catalog:
             )
 
     def _roots_sharing_catalog_volume(
-        self, roots: Iterable[tuple[str, str | None]]
+        self, roots: Iterable[tuple[str, str | None]], target: Path | None = None
     ) -> list[str]:
-        """Roots on this catalog's volume, unless that volume is the system drive.
+        """Roots on this catalog's volume (or ``target``'s), unless that volume
+        is the system drive.
 
         A catalog whose volume can't be identified (a network share, say) is
         not refused: every scope root is on an identified local volume, so it
@@ -185,7 +186,8 @@ class Catalog:
         from drivefusion.core import discovery
 
         try:
-            mine = discovery.volume_guid_of(str(self.path.resolve().parent))
+            where = target if target is not None else self.path.resolve().parent
+            mine = discovery.volume_guid_of(str(where))
         except (discovery.DiscoveryError, OSError):
             return []
         if mine not in by_guid:
@@ -477,6 +479,31 @@ class Catalog:
                 f"{self.path}, and Drive Fusion writes nothing to a drive it "
                 "catalogues. Only the system drive may hold both. Move the "
                 "catalog to another drive (--catalog or DRIVEFUSION_CATALOG) first."
+            )
+
+    def check_export_root(self, path: str | Path) -> None:
+        """Raise :class:`CatalogLocationError` if exports may not be written
+        under ``path`` (REVIEW F-03, its export half; ROADMAP M8.1).
+
+        The catalog's own rule: never inside an enabled scope root, and never
+        on a drive that holds one, unless that drive is the system drive.
+        """
+        target = Path(path).resolve()
+        roots = self._enabled_root_locations()
+        for root_path, _guid in roots:
+            if path_within(target, root_path):
+                raise CatalogLocationError(
+                    f"refusing to export to {target}: it is inside scope root "
+                    f"{root_path}, and Drive Fusion writes nothing inside a scope "
+                    "root. Choose an export folder outside every scanned folder."
+                )
+        sharing = self._roots_sharing_catalog_volume(roots, target)
+        if sharing:
+            raise CatalogLocationError(
+                f"refusing to export to {target}: it is on the same drive as scope "
+                f"root {sharing[0]}, and Drive Fusion writes nothing to a drive it "
+                "catalogues. Only the system drive may hold both exports and "
+                "scanned folders. Choose an export folder on another drive."
             )
 
     def add_scope_root(

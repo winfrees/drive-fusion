@@ -30,7 +30,7 @@ def _make(catalog, name="Consolidate") -> int:
 
 
 def test_the_schema_is_v12(catalog) -> None:
-    assert schema.current_version(catalog.conn) == 12
+    assert schema.current_version(catalog.conn) == schema.SCHEMA_VERSION
 
 
 def test_a_plan_is_stored_whole_and_audited(catalog) -> None:

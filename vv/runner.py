@@ -8,6 +8,8 @@ The sequence, with the no-touch snapshot taken around every tool phase:
 3. snapshot → **rescan**: scan, hash, plan, record → snapshot
 4. the bench silently corrupts the chosen files (bytes flipped, mtime kept)
 5. snapshot → **verify**: fixity pass, record → snapshot
+6. snapshot → **export**: the tool's exports into ``runs/<run>/exports`` (M8),
+   then the bench lists and hashes every file there itself → snapshot
 
 A phase that raises is recorded with its traceback and the run continues
 where it can, so one crash shows up as ERROR on the tests it affects rather
@@ -88,6 +90,27 @@ def check_pristine(manifest: dict) -> None:
                                  + "\nRebuild it with `python -m vv reset`.")
 
 
+def export_tree(root: Path) -> dict:
+    """Every entry under the export root, as the bench sees it: files with size
+    and SHA-256, links as links. Read by the bench, not the tool."""
+    import hashlib
+
+    out = {}
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            out[rel] = {"link": True}
+        elif path.is_file():
+            data = path.read_bytes()
+            out[rel] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            if path.name == "_EXPORT.json":
+                try:
+                    out[rel]["listing"] = json.loads(data)["files"]
+                except (ValueError, KeyError, TypeError):
+                    out[rel]["listing"] = None
+    return out
+
+
 def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | None = None,
         min_copies: int = 2, log=print) -> Path:
     dataset = dataset.resolve()
@@ -161,6 +184,12 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
             if not observed["errors"]:
                 log("verify: fixity pass ...")
                 tool_phase("verify", adapter.verify)
+            if not observed["errors"]:
+                export_root = run_dir / "exports"
+                export_root.mkdir()
+                log("export: bundles into the run folder ...")
+                tool_phase("export", lambda: adapter.export(str(export_root)))
+                observed["export_tree"] = export_tree(export_root)
     finally:
         adapter.close()
         untouched = not any(observed["no_touch"].values())
