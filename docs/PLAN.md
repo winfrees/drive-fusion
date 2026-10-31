@@ -1089,7 +1089,11 @@ Two further rules M4 settled in code:
   mode** keeping the catalog beside the executable so the tool and its catalog can travel on a
   thumb drive to whichever machine the drives are attached to. **As built:** the catalog is
   `~/.drivefusion/catalog.db`, overridable with `--catalog` or `DRIVEFUSION_CATALOG`; there is
-  no portable mode yet. A portable mode is bound by the same rule: a thumb drive carrying the
+  no portable mode yet. **As built (ROADMAP M8.7, D20):** `core/locations.py`. `--catalog`, then
+  `DRIVEFUSION_CATALOG`, then portable mode (a `portable` file beside the executable puts the
+  catalog in `DriveFusion data` beside it), then `~/.drivefusion`; nothing is moved between
+  them, and `status` says which applies. The CLI and GUI now share this default (the GUI had
+  ignored `DRIVEFUSION_CATALOG`). A portable mode is bound by the same rule: a thumb drive carrying the
   catalog can't also be scanned. It must refuse a catalog on a catalogued volume (REVIEW
   F-03). A helper in a portable folder is user-writable, so it is elevated only when it
   matches the build's pinned hash (REVIEW F-07, fixed).

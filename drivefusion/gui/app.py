@@ -10,7 +10,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-DEFAULT_CATALOG = Path.home() / ".drivefusion" / "catalog.db"
+from drivefusion.core import locations
+
+DEFAULT_CATALOG = locations.default_catalog()
 
 
 def main(argv: list[str] | None = None, catalog: Path | None = None) -> int:

@@ -27,6 +27,7 @@ from drivefusion.core.analysis import (
     under_protected,
 )
 from drivefusion.core.enum.backend import describe_age, method_summary, plan_enumeration
+from drivefusion.core import locations
 from drivefusion.core.errors import CatalogLocationError
 from drivefusion.core.identity import HASH_ALGO, hash_pass, verify_pass
 from drivefusion.core.scan import preview_root, scan_root
@@ -40,9 +41,7 @@ from drivefusion.core.store.catalog import Catalog
 
 BANNER = "Drive Fusion — read-only cataloging and consolidation planning"
 
-DEFAULT_CATALOG = Path(
-    os.environ.get("DRIVEFUSION_CATALOG", Path.home() / ".drivefusion" / "catalog.db")
-)
+DEFAULT_CATALOG = locations.default_catalog()
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
@@ -858,7 +857,7 @@ def cmd_gui(args) -> int:
 def cmd_status(args) -> int:
     with Catalog(args.catalog) as catalog:
         counts = catalog.counts()
-        print(f"catalog: {args.catalog}")
+        print(f"catalog: {args.catalog} ({locations.describe(Path(args.catalog))})")
         size = args.catalog.stat().st_size if args.catalog.exists() else 0
         print(f"  size:        {_human_bytes(size)}")
         print(f"  volumes:     {counts['volumes']:,}")

@@ -100,7 +100,10 @@ drivefusion gui                    # the desktop window
 ```
 
 The catalog lives at `~/.drivefusion/catalog.db` unless you pass `--catalog PATH` or set
-`DRIVEFUSION_CATALOG`.
+`DRIVEFUSION_CATALOG`. **Portable mode:** put an empty file named `portable` beside
+`DriveFusion.exe`, and the catalog lives in a `DriveFusion data` folder beside it instead, so
+the program and its catalog can travel together. The drive carrying them can't also be
+scanned. `drivefusion status` says which applies.
 
 There are deliberately no `apply`, `move`, `dedupe` or `delete` verbs, and the GUI has no such
 controls. A test walks the entire widget tree on every CI run to keep it that way.
