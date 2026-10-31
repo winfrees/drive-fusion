@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 #: UPDATE...FROM, upsert with RETURNING, and strict typing all need this.
 MIN_SQLITE = (3, 35, 0)
@@ -402,7 +402,83 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # report that `versions find` rebuilds, so they are dropped and the DDL
     # recreates them.
     10: ("DROP TABLE IF EXISTS version_member", "DROP TABLE IF EXISTS version_set"),
+    # v11 adds the name search index (ROADMAP M6.8); ensure_search_index()
+    # creates and fills it, after the DDL, where SQLite has FTS5.
+    11: (),
 }
+
+
+#: Full-text indexes over file and folder names (PLAN §11, ROADMAP M6.8), kept
+#: current by triggers. External content: the names are stored once, in
+#: ``file`` and ``dir``; the index holds only the tokens.
+SEARCH_DDL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS file_name_fts USING fts5(
+    name, content='file', content_rowid='id', tokenize='unicode61 remove_diacritics 2',
+    detail='none', columnsize=0);
+CREATE VIRTUAL TABLE IF NOT EXISTS dir_name_fts USING fts5(
+    name, content='dir', content_rowid='id', tokenize='unicode61 remove_diacritics 2',
+    detail='none', columnsize=0);
+CREATE TRIGGER IF NOT EXISTS file_name_fts_insert AFTER INSERT ON file BEGIN
+    INSERT INTO file_name_fts (rowid, name) VALUES (new.id, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS file_name_fts_delete AFTER DELETE ON file BEGIN
+    INSERT INTO file_name_fts (file_name_fts, rowid, name) VALUES ('delete', old.id, old.name);
+END;
+CREATE TRIGGER IF NOT EXISTS file_name_fts_rename AFTER UPDATE OF name ON file BEGIN
+    INSERT INTO file_name_fts (file_name_fts, rowid, name) VALUES ('delete', old.id, old.name);
+    INSERT INTO file_name_fts (rowid, name) VALUES (new.id, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS dir_name_fts_insert AFTER INSERT ON dir BEGIN
+    INSERT INTO dir_name_fts (rowid, name) VALUES (new.id, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS dir_name_fts_delete AFTER DELETE ON dir BEGIN
+    INSERT INTO dir_name_fts (dir_name_fts, rowid, name) VALUES ('delete', old.id, old.name);
+END;
+CREATE TRIGGER IF NOT EXISTS dir_name_fts_rename AFTER UPDATE OF name ON dir BEGIN
+    INSERT INTO dir_name_fts (dir_name_fts, rowid, name) VALUES ('delete', old.id, old.name);
+    INSERT INTO dir_name_fts (rowid, name) VALUES (new.id, new.name);
+END;
+"""
+
+
+def has_fts5(conn: sqlite3.Connection) -> bool:
+    """Whether this SQLite build has FTS5 (CPython's own builds do)."""
+    try:
+        if conn.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()[0]:
+            return True
+    except sqlite3.Error:
+        pass
+    return _probe_fts5(conn)
+
+
+def _probe_fts5(conn: sqlite3.Connection) -> bool:
+    try:
+        conn.execute("CREATE VIRTUAL TABLE temp._fts5_probe USING fts5(x)")
+        conn.execute("DROP TABLE temp._fts5_probe")
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def search_index_ready(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'file_name_fts'").fetchone() is not None
+
+
+def ensure_search_index(conn: sqlite3.Connection) -> bool:
+    """Create the name index if SQLite has FTS5, filling it from the catalog
+    the first time. Returns whether the index is in place; without it,
+    ``find`` falls back to a LIKE scan."""
+    if search_index_ready(conn):
+        return True
+    if not has_fts5(conn):
+        return False
+    conn.executescript(SEARCH_DDL)
+    conn.execute("INSERT INTO file_name_fts (file_name_fts) VALUES ('rebuild')")
+    conn.execute("INSERT INTO dir_name_fts (dir_name_fts) VALUES ('rebuild')")
+    if conn.in_transaction:
+        conn.commit()
+    return True
 
 
 class SchemaError(RuntimeError):
@@ -522,6 +598,7 @@ def migrate(conn: sqlite3.Connection, path: Path | None = None) -> int:
     # written IF NOT EXISTS, so a crash mid-script leaves a partially created
     # schema that the next run completes rather than a corrupt one.
     conn.executescript(DDL)
+    ensure_search_index(conn)
     conn.execute("BEGIN")
     try:
         conn.execute(

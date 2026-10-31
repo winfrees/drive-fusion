@@ -1188,6 +1188,58 @@ class Catalog:
 
     # -- queries -----------------------------------------------------------
 
+    def search(
+        self,
+        text: str,
+        *,
+        limit: int = 100,
+        include_vanished: bool = False,
+        after_id: int = 0,
+    ) -> Iterator[dict]:
+        """Files whose name, or whose folder's name, holds every word of
+        ``text``, each as a prefix: ``lake surv`` finds ``Lake Survey 2021.csv``
+        and every file in a folder called ``2021-03 Lake Survey``.
+
+        Served by the FTS5 name index (ROADMAP M6.8), so it doesn't scan the
+        file table. Without FTS5, or with no words in ``text``, it falls back
+        to :meth:`find`, a substring match.
+        """
+        import re
+
+        from drivefusion.core.store import schema
+
+        words = re.findall(r"\w+", text)
+        if not words or not schema.search_index_ready(self.conn):
+            yield from self.find(f"%{text}%", limit=limit, include_vanished=include_vanished,
+                                 after_id=after_id)
+            return
+        query = " ".join('"' + w.replace('"', '') + '"*' for w in words)
+        sql = (
+            "SELECT f.id, f.name, f.size_bytes, f.dir_id, f.vanished_at, "
+            "       v.volume_guid, v.label "
+            "FROM file f JOIN volume v ON v.id = f.volume_id "
+            "WHERE (f.id IN (SELECT rowid FROM file_name_fts WHERE file_name_fts MATCH ?) "
+            "    OR f.dir_id IN (SELECT rowid FROM dir_name_fts WHERE dir_name_fts MATCH ?)) "
+            "  AND f.id > ?"
+        )
+        params: list = [query, query, after_id]
+        if not include_vanished:
+            sql += " AND f.vanished_at IS NULL"
+        sql += " ORDER BY f.id LIMIT ?"
+        params.append(limit)
+        for row in self.conn.execute(sql, params):
+            yield self._found(row)
+
+    def _found(self, row) -> dict:
+        return {
+            "id": int(row["id"]),
+            "name": row["name"],
+            "size_bytes": int(row["size_bytes"]),
+            "path": self.dir_path(int(row["dir_id"])),
+            "volume": row["label"] or row["volume_guid"],
+            "vanished_at": row["vanished_at"],
+        }
+
     def find(
         self,
         pattern: str,
@@ -1214,14 +1266,7 @@ class Catalog:
         params.append(limit)
 
         for row in self.conn.execute(sql, params):
-            yield {
-                "id": int(row["id"]),
-                "name": row["name"],
-                "size_bytes": int(row["size_bytes"]),
-                "path": self.dir_path(int(row["dir_id"])),
-                "volume": row["label"] or row["volume_guid"],
-                "vanished_at": row["vanished_at"],
-            }
+            yield self._found(row)
 
     def counts(self) -> dict:
         row = self.conn.execute(
