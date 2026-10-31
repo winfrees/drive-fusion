@@ -846,6 +846,14 @@ sources, which this environment could not reach (D14). Scorecards therefore say 
 *consistent with* a criterion, and certify nothing; `drivefusion standards list` shows each
 file's state, and `confirmed` stays available for a later line-by-line check.
 
+**As built (ROADMAP M8.3, D19):** `core/export/packages.py`. Each confirmed collection is a
+BagIt 1.0 bag named by its `local_pid`: `data/ro-crate-metadata.json` (RO-Crate 1.1, a
+`Dataset` with one `File` per member, `file:` URIs, sizes, dates and the catalog's hash),
+`data/datacite.json` (DataCite 4 properties; publisher and year marked unpublished until
+deposit; relations as `relatedIdentifiers`) and `data/members.csv` (path, bytes, modified,
+hash, holding drives), with `manifest-sha256.txt`, `tagmanifest-sha256.txt` and a
+`bag-info.txt` carrying the Payload-Oxum. The payload is the metadata, not the content.
+
 **As built (ROADMAP M6.7):** `core/fair/scorecard.py` and `drivefusion score`. Results are pass,
 partial, fail, *planned* (capability not built yet) or *judgement* (outside what the tool can
 see); every gap names its remedy. NDSA gives a level per functional area; control, which the tool
