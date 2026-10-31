@@ -199,7 +199,7 @@ class DriveFusionAdapter:
                 "full_hashed": c.full_hashed, "unreadable": c.unreadable,
                 "summary": c.summary()}
 
-    def propose(self) -> dict | None:
+    def propose(self, manifest: dict | None = None) -> dict | None:
         """Run collection inference (M6.2) and read back what it proposed, and
         what collections and rules exist after it. None before M6.2."""
         try:
@@ -227,7 +227,37 @@ class DriveFusionAdapter:
         curation = importlib.import_module("drivefusion.core.store.curation")
         for row in curation.candidates(self.catalog):
             confirm.accept(self.catalog, row["id"])
+        # And describe the planted ones as a person would (M6.10).
+        plans = {(d["drive"], d["folder"]): d["fields"]
+                 for sc in (manifest or {}).get("scenarios", []) for d in sc.get("describe", [])}
+        for row in curation.collections(self.catalog):
+            for rule in curation.rules(self.catalog, row["id"]):
+                where = self._locate(self.catalog.dir_path(rule["dir_id"], os.sep))
+                if where in plans:
+                    curation.edit_collection(self.catalog, row["id"], plans[where])
         return found
+
+    def scorecards(self) -> list[dict] | None:
+        """Every collection's FAIR and NDSA results (M6.7). None before then."""
+        try:
+            scorecard = importlib.import_module("drivefusion.core.fair.scorecard")
+        except ImportError:
+            return None
+        curation = importlib.import_module("drivefusion.core.store.curation")
+        out = []
+        for row in curation.collections(self.catalog):
+            folders = [list(self._locate(self.catalog.dir_path(r["dir_id"], os.sep)))
+                       for r in curation.rules(self.catalog, row["id"])]
+            cards = {}
+            for rubric_id in ("fair", "ndsa"):
+                card = scorecard.score(self.catalog, row["id"], rubric_id)
+                cards[rubric_id] = {
+                    "rubric": card.rubric, "confirmed": card.rubric_confirmed,
+                    "levels": card.levels,
+                    "results": {r.criterion: [r.status, bool(r.remedy)] for r in card.results},
+                    "order": [r.criterion for r in card.results]}
+            out.append({"title": row["title"], "folders": folders, **cards})
+        return out
 
     def versions(self) -> list[dict] | None:
         """Run version-set detection (M6.5) and read back each set's member
@@ -355,6 +385,7 @@ class DriveFusionAdapter:
             "health": self._health(),
             "collections": self.collections(),
             "coverage": self._coverage(min_copies),
+            "scorecards": self.scorecards(),
         }
 
     def _coverage(self, min_copies: int) -> dict | None:
