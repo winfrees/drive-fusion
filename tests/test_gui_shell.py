@@ -125,11 +125,11 @@ def test_unbuilt_screens_are_shown_as_pending_not_broken(window) -> None:
 
     from drivefusion.gui.main_window import PLANNED
 
-    assert window.stack.count() == 5
-    assert window.nav.count() == 5 + len(PLANNED)
+    assert window.stack.count() == 7
+    assert window.nav.count() == 7 + len(PLANNED)
 
     for offset, (name, milestone) in enumerate(PLANNED):
-        item = window.nav.item(5 + offset)
+        item = window.nav.item(7 + offset)
         assert name in item.text()
         assert milestone in item.text()
         assert item.flags() == Qt.NoItemFlags, "a pending screen must not be clickable"
@@ -776,3 +776,124 @@ def test_restart_from_source_explains_instead(monkeypatch) -> None:
     monkeypatch.delattr("sys.frozen", raising=False)
     with pytest.raises(elevation.ElevationError, match="Run as administrator"):
         elevation.restart_elevated()
+
+
+# -- Collections, and Duplicates & Versions (ROADMAP M6.9) ------------------------------
+
+def _queue_one(window) -> tuple[int, int]:
+    from drivefusion.core.store import curation
+
+    catalog = window.session.catalog()
+    sub = catalog.conn.execute("SELECT id FROM dir WHERE name = 'sub'").fetchone()["id"]
+    cid = curation.propose(catalog, sub, 0.9, {
+        "path": "/media/sub", "why": ["one file type"], "files": 1, "bytes": 300,
+        "date_span": ["2021-03", "2021-03"], "types": [["bin", 1]], "samples": ["c.bin"]})
+    window.collections.refresh()
+    window.collections.queue.setCurrentItem(window.collections.queue.topLevelItem(0))
+    return cid, sub
+
+
+def test_the_collections_screen_shows_coverage_and_the_queue_with_evidence(window) -> None:
+    screen = window.collections
+    assert screen.coverage.text().startswith("<b>Coverage: 0.0%</b>")
+    assert screen.queue.topLevelItemCount() == 0 and not screen.accept_button.isEnabled()
+    _queue_one(window)
+    item = screen.queue.topLevelItem(0)
+    assert (item.text(0), item.text(1), item.text(5)) == ("/media/sub", "0.90", "one file type")
+    assert "c.bin" in screen.evidence.text() and screen.accept_button.isEnabled()
+
+
+def test_accepting_from_the_queue_makes_a_collection_and_describing_it_is_audited(
+        window, monkeypatch) -> None:
+    from drivefusion.core.store import audit, curation
+    from drivefusion.gui.screens import collections as screen_mod
+
+    _queue_one(window)
+
+    class Accept:
+        def __init__(self, title, existing, parent=None):
+            self.title = title
+
+        def exec(self):
+            return screen_mod.QDialog.Accepted
+
+        def values(self):
+            return "Sub data", None
+
+    monkeypatch.setattr(screen_mod, "AcceptDialog", Accept)
+    window.collections.accept_selected()
+    catalog = window.session.catalog()
+    [row] = curation.collections(catalog)
+    assert row["title"] == "Sub data" and window.collections.queue.topLevelItemCount() == 0
+    coll = window.collections.collections.topLevelItem(0)
+    assert coll.text(0) == "Sub data" and coll.text(3) == "1/7"
+
+    class Describe:
+        def __init__(self, row, parent=None):
+            pass
+
+        def exec(self):
+            return screen_mod.QDialog.Accepted
+
+        def changes(self):
+            return {"license": "CC-BY-4.0", "creators_json": '["A. Smith"]'}
+
+    monkeypatch.setattr(screen_mod, "DescribeDialog", Describe)
+    window.collections.collections.setCurrentItem(coll)
+    window.collections.edit_selected()
+    assert curation.collection(catalog, row["id"])["license"] == "CC-BY-4.0"
+    assert audit.entries(catalog.conn, limit=1)[0]["action"] == "collection.edit"
+    assert window.collections.collections.topLevelItem(0).text(3) == "3/7"
+
+
+def test_reject_and_find_proposals_from_the_screen(window) -> None:
+    from drivefusion.core.store import curation
+    from drivefusion.gui.workers import Cancellation
+
+    cid, _ = _queue_one(window)
+    window.collections.reject_selected()
+    assert curation.candidate(window.session.catalog(), cid)["status"] == "rejected"
+    emitted = []
+    window.collections.proposeRequested.disconnect()
+    window.collections.proposeRequested.connect(emitted.append)
+    window.collections.request_proposals()
+    [body] = emitted
+    with Catalog(window.session.path) as catalog:
+        assert isinstance(body(catalog, lambda _p: None, Cancellation()), int)
+
+
+def test_the_scorecard_dialog_lists_every_criterion(window) -> None:
+    from drivefusion.core.fair import rubrics
+    from drivefusion.core.store import curation
+    from drivefusion.gui.screens.collections import ScorecardDialog
+
+    catalog = window.session.catalog()
+    sub = catalog.conn.execute("SELECT id FROM dir WHERE name = 'sub'").fetchone()["id"]
+    coll = curation.create_collection(catalog, "Sub", dir_ids=[sub])
+    dialog = ScorecardDialog(catalog, coll)
+    for rubric_id, tree in dialog.trees.items():
+        assert tree.topLevelItemCount() == len(rubrics.current(rubric_id).criteria)
+    assert tree.topLevelItem(0).text(1).startswith(("✓", "~", "✗", "·", "?"))
+
+
+def test_the_duplicates_screen_reports_duplicates_and_version_sets(window) -> None:
+    from drivefusion.core.analysis import duplicate_groups
+    from drivefusion.core.identity import hash_pass
+    from drivefusion.core.store import curation
+    from drivefusion.core.store.curation import VersionMember
+
+    catalog = window.session.catalog()
+    hash_pass(catalog)
+    files = [r["id"] for r in catalog.conn.execute("SELECT id FROM file ORDER BY id")]
+    curation.replace_version_sets(catalog, [{
+        "label": "a.bin", "confidence": 0.9, "rationale": "most recently modified (b.bin)",
+        "members": [VersionMember(files[0]), VersionMember(files[1], preferred=True)]}],
+        method="name-stem")
+    screen = window.duplicates
+    screen.refresh()
+    assert screen.duplicates.topLevelItemCount() == len(duplicate_groups(catalog))
+    [found] = [screen.versions.topLevelItem(i) for i in range(screen.versions.topLevelItemCount())]
+    assert found.text(0) == "a.bin" and found.childCount() == 2
+    starred = [found.child(i).text(0) for i in range(2) if found.child(i).text(0).startswith("★")]
+    assert len(starred) == 1 and "most recently modified" in found.toolTip(0)
+    assert "never deletes" in screen.findChildren(type(screen.versions_note))[0].text()
