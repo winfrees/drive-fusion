@@ -1004,7 +1004,7 @@ class Evaluator:
             "VV-PLAN-01": ("A plan only adds copies", ["R-PLAN-01"]),
             "VV-PLAN-02": ("No destination is planned over its room", ["R-PLAN-02"]),
             "VV-PLAN-03": ("Every unit meets its target or an acquire covers it", ["R-PLAN-03"]),
-            "VV-PLAN-04": ("Added copies keep batches and zones apart", ["R-PLAN-04"]),
+            "VV-PLAN-04": ("A copy sharing a batch or zone says so", ["R-PLAN-04"]),
         }
         plan = raw.get("plan")
         if plan is None:
@@ -1135,16 +1135,25 @@ class Evaluator:
             before = set.intersection(*(item_devices(k) for k in items)) if items else set()
             after = before | new
             limit = max(1, unit["target"] - 1)
-            for dev in sorted(new):
+            for st in (st for st in copies if st["unit"] == key and st["dst"]):
+                dev = device[st["dst"]]
                 r.checked += 1
                 batch, zone = traits.get(dev, (None, None))
+                crowded = []
                 for label, value, index in (("batch", batch, 0), ("zone", zone, 1)):
-                    if not value:
-                        continue
-                    n = sum(1 for x in after if traits.get(x, (None, None))[index] == value)
-                    if n > limit:
-                        r.fail(f"{_fmt(tuple(unit['folder']))}: the copy on {dev} makes {n} "
-                               f"copies in one {label} ({value}); at most {limit}")
+                    if value and sum(1 for x in after
+                                     if traits.get(x, (None, None))[index] == value) > limit:
+                        crowded.append(label)
+                said = st.get("shares", [])
+                where = _fmt(tuple(unit["folder"]))
+                for label in crowded:
+                    if label not in said:
+                        r.fail(f"{where}: the copy on {st['dst']} puts more than {limit} of its "
+                               f"copies in one {label} and doesn't say so")
+                for label in said:
+                    if label not in crowded:
+                        r.fail(f"{where}: the copy on {st['dst']} says it shares a {label}, but "
+                               "it keeps the copies apart")
         r.finish("no copy step planned")
 
     def deferred(self) -> None:

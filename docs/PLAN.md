@@ -902,7 +902,7 @@ thousand units. Units are what a human can approve, and they preserve locality.
 Binary `x[u][d]` = unit `u` is stored on drive `d`.
 
 ```
-minimize   α · Σ_u size_u · P(loss | drives holding u)      # durability
+minimize   α · Σ_u size_u · P(loss | drives holding u)      # durability, batch and zone included
          + β · Σ bytes copied                               # work
          + γ · Σ drives touched                             # human effort: plugging things in
          + δ · imbalance(free space across drives)           # headroom
@@ -910,11 +910,18 @@ minimize   α · Σ_u size_u · P(loss | drives holding u)      # durability
 
 subject to Σ_u footprint(u, d) · x[u][d] ≤ cap_d − reserve_d  for all d
            Σ_d x[u][d] ≥ k_u                                 copy target for u's NDSA level
-           Σ_{d ∈ batch b} x[u][d] ≤ k_u − 1                 manufacturer/batch diversity
-           Σ_{d ∈ zone z} x[u][d] ≤ k_u − 1                  geographic separation
            x[u][d] = 1                                       every existing copy, pinned
            x[u][d] = 0                                       for excluded drives
 ```
+
+**Batch diversity and zone separation are costs, not constraints (decision D18).** P(loss)
+already treats drives of one purchase batch, and drives in one recorded disaster zone, as
+failing together (§8.2), so the durability term makes a copy on a diverse drive worth more,
+and the planner prefers one wherever it is the safer place. Forbidding the rest would
+leave a fleet bought in one go, or kept in one house, with no second copy planned at all,
+when a second copy from the same batch beats none. So such a copy is allowed, and named:
+a copy that leaves more than k_u − 1 of a unit's copies in one batch or zone says so in its
+step, so the person carrying the plan out knows which copies still share a fate.
 
 **`footprint(u, d)` is deliberately not `size_u`.** A unit's cost on a destination depends on
 that volume's cluster size: with a million small files, a 128 KiB-cluster exFAT target can
@@ -938,9 +945,9 @@ at max(total / 2000, 1 MiB); a unit's holders are the proven drives holding ever
 its footprint is kept per cluster size. Its copies are counted per item, the fewest any item
 has, so a copy onto a drive that already holds some of its items is not counted for them (M7.8). Room at a destination is free space less a reserve of
 max(10 % of capacity, 1 GiB); retired drives, working drives and drives of unknown size take
-nothing. The greedy pass adds each copy where it leaves the unit's P(loss) lowest, never
-putting more than target − 1 copies of a unit in one purchase batch or one recorded zone,
-then a swap pass moves added copies to a safer fit. CP-SAT (M7.5) maximises copies placed, then
+nothing. The greedy pass adds each copy where it leaves the unit's P(loss) lowest, a copy
+sharing a batch or zone named as such (D18), then a swap pass moves added copies to a safer
+fit. CP-SAT (M7.5) maximises copies placed, then
 bytes × fall in P(loss), then fewer drives connected; its plan replaces greedy's only when it
 leaves fewer copies short, or as few with less expected loss.
 The document (M7.6) puts copies by destination drive, each followed by its verify step,

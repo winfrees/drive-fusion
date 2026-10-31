@@ -2,12 +2,11 @@
 
 The same choice as ``greedy.py`` (which unit gets a copy where) as an integer
 program: a boolean per unit and admissible destination, room by footprint per
-destination, no more than ``target - 1`` of a unit's copies in one batch or
-recorded zone (or none more, where existing copies already exceed that), and
-no more copies than a unit's target needs. P(loss) is not linear, so the
-model maximises a surrogate: each copy placed counts first, then the
-unit's bytes × the fall in P(loss) that copy alone would bring, then one
-drive fewer to connect.
+destination, and no more copies than a unit's target needs. P(loss) is not
+linear, so the model maximises a surrogate: each copy placed counts first,
+then the unit's bytes × the fall in P(loss) that copy alone would bring (a
+drive sharing a batch or zone with a copy brings less: that is how D18
+makes them costlier rather than forbidden), then one drive fewer to connect.
 
 The greedy plan is the hint, and the answer is judged on the real numbers:
 CP-SAT's plan is taken only when it leaves fewer copies short, or as few
@@ -17,7 +16,6 @@ and ``solver`` says which plan this is.
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import Callable
 
 from drivefusion.core.planner import greedy
@@ -92,15 +90,6 @@ def _cp(units, destinations, p_of, baseline, time_limit, seed) -> Solution | Non
         if not mine:
             continue
         model.Add(sum(v for _, v in mine) <= need)
-        limit = max(1, u.target - 1)
-        for attr in ("batch_key", "zone"):
-            held = Counter(getattr(by_id[h], attr) for h in u.holders if h in by_id)
-            groups: dict[str, list] = {}
-            for d, v in mine:
-                if getattr(d, attr):
-                    groups.setdefault(getattr(d, attr), []).append(v)
-            for key, vs in groups.items():
-                model.Add(sum(vs) <= max(0, limit - held[key]))
     if not x:
         return None
 
@@ -152,4 +141,5 @@ def _cp(units, destinations, p_of, baseline, time_limit, seed) -> Solution | Non
         if need > 0:
             out.short[u.key] = (need, need * u.bytes)
     out.room_left = room
+    greedy.mark_crowding(units, destinations, out)
     return out

@@ -171,8 +171,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
                 "After the plan every unit has its target number of copies, or the plan says "
                 "by how many it falls short and an acquire step covers those bytes."),
     Requirement("R-PLAN-04", "§9, §8.2",
-                "No added copy puts more than target − 1 of a unit's copies in one purchase "
-                "batch or one recorded disaster zone."),
+                "An added copy that leaves more than target − 1 of a unit's copies in one "
+                "purchase batch or one recorded disaster zone says so in its step, and no "
+                "other copy claims to (D18: allowed, but costlier and named)."),
     Requirement("R-VER-01", "§8.1",
                 "Near-duplicates (versions) are grouped into version sets with a proposed "
                 "preferred member: a planted version chain is exactly one set, and its "
