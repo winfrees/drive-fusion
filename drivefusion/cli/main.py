@@ -45,7 +45,6 @@ DEFAULT_CATALOG = Path(
 
 #: Verbs not yet implemented, and the milestone that lands each.
 PLANNED_VERBS = {
-    "score": ("FAIR and NDSA scorecards", "M6"),
     "plan": ("build a consolidation plan", "M7"),
     "export": ("write reports, manifests, and bundles to an export folder", "M8"),
 }
@@ -241,6 +240,13 @@ def build_parser() -> argparse.ArgumentParser:
     versions_sub = versions.add_subparsers(dest="versions_command", metavar="ACTION")
     versions_sub.add_parser("find", help="find version sets in the catalog, replacing the last run's")
     versions_sub.add_parser("list", help="the version sets found, each with its preferred member")
+
+    score = subparsers.add_parser(
+        "score", help="FAIR and NDSA scorecards for your confirmed collections")
+    score.add_argument("collection", nargs="?", metavar="COLLECTION",
+                       help="id or local PID (default: every collection, in summary)")
+    score.add_argument("--rubric", choices=("fair", "ndsa", "both"), default="both")
+    score.add_argument("--json", action="store_true", help="machine-readable output")
 
     audit_cmd = subparsers.add_parser(
         "audit", help="the catalog's append-only, hash-chained record of what was done"
@@ -1257,6 +1263,55 @@ def cmd_versions_list(args) -> int:
     return 0
 
 
+_MARKS = {"pass": "✓", "partial": "~", "fail": "✗", "planned": "·", "judgement": "?"}
+
+
+def _print_scorecard(card, rubric, *, full: bool) -> None:
+    confirmed = "" if card.rubric_confirmed else " (rubric not yet confirmed against its source)"
+    if card.levels:
+        levels = ", ".join(f"{rubric.groups[g].lower()} "
+                           + (str(lv) if lv is not None else "not assessed")
+                           for g, lv in card.levels.items())
+        print(f"  {card.rubric}{confirmed}: levels reached: {levels}")
+    else:
+        score = "—" if card.score is None else f"{card.score:.0%}"
+        print(f"  {card.rubric}{confirmed}: {score} of the assessed criteria met")
+    if not full:
+        return
+    for r in card.results:
+        print(f"    {_MARKS[r.status]} {r.criterion:<13} {r.status:<10} {r.detail}")
+        if r.remedy:
+            print(f"      {'':13} → {r.remedy}")
+
+
+def cmd_score(args) -> int:
+    from drivefusion.core.curate import coverage
+    from drivefusion.core.fair import rubrics, scorecard
+    from drivefusion.core.store import curation
+
+    chosen = ("fair", "ndsa") if args.rubric == "both" else (args.rubric,)
+    with Catalog(args.catalog) as catalog:
+        rows = ([_collection(catalog, args.collection)] if args.collection
+                else curation.collections(catalog))
+        if not rows:
+            print("no collections to score; confirm some first (`drivefusion collections queue`)")
+            return 0
+        if args.json:
+            print("[" + ",\n".join(scorecard.to_json(scorecard.score(catalog, r["id"], rid))
+                                    for r in rows for rid in chosen) + "]")
+            return 0
+        share = coverage.coverage(catalog).share
+        print(f"scored over the {share:.1%} of distinct bytes that are in confirmed collections;"
+              " the rest is unfiled and not scored")
+        print("  ✓ pass  ~ partial  ✗ fail  · planned (not built yet)  ? your judgement")
+        for row in rows:
+            print(f"\ncollection {row['id']}: {row['title']}")
+            for rid in chosen:
+                card = scorecard.score(catalog, row["id"], rid)
+                _print_scorecard(card, rubrics.current(rid), full=bool(args.collection))
+    return 0
+
+
 def cmd_drives_edit(args) -> int:
     from drivefusion.core.health.metadata import FIELDS, MetadataError
 
@@ -1457,6 +1512,7 @@ DISPATCH = {
     ("drives", "assign"): cmd_drives_assign,
     ("drives", "show"): cmd_drives_show,
     ("drives", "edit"): cmd_drives_edit,
+    ("score", None): cmd_score,
     ("versions", "find"): cmd_versions_find,
     ("versions", "list"): cmd_versions_list,
     ("collections", "propose"): cmd_collections_propose,
