@@ -55,7 +55,7 @@ def test_nothing_is_ever_overwritten(setup) -> None:
     bundle.write("a/b.txt", "first")
     with pytest.raises(ExportError, match="already exists"):
         bundle.write("a/b.txt", "second")
-    assert (bundle.path / "a" / "b.txt").read_text() == "first"
+    assert (bundle.path / "a" / "b.txt").read_text(encoding="utf-8") == "first"
     with pytest.raises(ExportError, match="written when the export closes"):
         bundle.write(writer.MANIFEST, "{}")
 
@@ -84,7 +84,7 @@ def test_closing_lists_every_file_and_records_the_export(setup) -> None:
     bundle.write("one.txt", "hello")
     bundle.write_json("deep/two.json", {"b": 1})
     export_id = bundle.close(standards={"fair": "fair-2016"}, summary={"drives": 1})
-    record = json.loads((bundle.path / writer.MANIFEST).read_text())
+    record = json.loads((bundle.path / writer.MANIFEST).read_text(encoding="utf-8"))
     assert record["kind"] == "manifests" and record["standards"] == {"fair": "fair-2016"}
     assert "consistent with" in record["disclaimer"]
     listed = {f["path"]: f for f in record["files"]}

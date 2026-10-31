@@ -18,13 +18,13 @@ def test_reports_match_the_analysis_and_stand_alone(fleet) -> None:  # noqa: F81
     bundle.close(summary=counts)
     names = {p.name for p in bundle.path.iterdir()}
     assert set(reports.TITLES) | {"report.html", writer.MANIFEST} == names
-    summary = dict(list(csv.reader((bundle.path / "summary.csv").open()))[1:])
+    summary = dict(list(csv.reader((bundle.path / "summary.csv").open(encoding="utf-8", newline="")))[1:])
     for key, value in redundancy_summary(fleet.c).items():
         assert summary[key] == str(value), key
-    under = list(csv.DictReader((bundle.path / "under-protected.csv").open()))
+    under = list(csv.DictReader((bundle.path / "under-protected.csv").open(encoding="utf-8", newline="")))
     assert len(under) == int(summary["under_protected_items"])
     assert counts["plan.csv"] >= 1 and counts["scorecards.csv"] > 30
-    page = (bundle.path / "report.html").read_text()
+    page = (bundle.path / "report.html").read_text(encoding="utf-8")
     assert "<script" not in page.lower()
     assert not re.search(r"""(href|src)\s*=\s*["']?https?:""", page, re.I)
     assert "consistent with" in page and "Under-protected items" in page
