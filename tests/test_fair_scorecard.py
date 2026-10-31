@@ -151,3 +151,14 @@ def test_the_cli_scores_one_collection_in_full_and_all_in_summary(archive, tmp_p
     assert "✗ R1.1" in out and "→ `drivefusion collections edit ID --license" in out
     assert main(["--catalog", path, "score", "1", "--json"]) == 0
     assert '"rubric": "ndsa-2.0"' in capsys.readouterr().out
+
+
+def test_a_collection_on_unverified_drives_only_still_gets_remedies(archive) -> None:
+    """Found by the V&V bench (VV-FAIR-01): with no holding drive named,
+    storage-3b scored 0 of 0 as a fail and named no remedy."""
+    archive.catalog.conn.execute("UPDATE volume SET drive_id = NULL")
+    card = scorecard.ndsa(archive.catalog, archive.coll, today=TODAY)
+    for r in card.results:
+        if r.status not in (scorecard.PASS, scorecard.JUDGEMENT):
+            assert r.remedy, f"{r.criterion}: {r.status} without a remedy"
+    assert "confirm the unverified" in card.result("storage-3b").remedy

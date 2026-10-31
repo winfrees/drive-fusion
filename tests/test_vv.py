@@ -642,3 +642,112 @@ def test_evaluator_catches_copies_scored_wrong(completed_run) -> None:
             card["ndsa"]["results"]["storage-1a"] = ["pass", False]
 
     assert _rejudge(manifest, observed, flatter)[("VV-FAIR-03", "rescan")]["verdict"] == ev.FAIL
+
+
+# -- the planner (ROADMAP M7.8) ----------------------------------------------------------
+
+def _plan(obs):
+    return obs["phases"]["rescan"]["plan"]
+
+
+def test_the_plan_tests_run(completed_run) -> None:
+    manifest, observed, results = completed_run
+    verdicts = _verdicts(results, phase="rescan")
+    for test_id in ("VV-PLAN-01", "VV-PLAN-02", "VV-PLAN-03", "VV-PLAN-04"):
+        assert verdicts[(test_id, "rescan")]["verdict"] in (ev.PASS, ev.NA), \
+            (test_id, verdicts[(test_id, "rescan")])
+    assert verdicts[("VV-PLAN-01", "rescan")]["verdict"] == ev.PASS
+    assert verdicts[("VV-PLAN-03", "rescan")]["checked"] > 0
+    assert _plan(observed)["removal_refused"]
+
+
+def _a_unit_and_another_drive(manifest, observed):
+    """A planned unit, and an identified drive on another device to copy it to."""
+    devices = {d["id"]: d.get("device", d["id"]) for d in manifest["drives"]}
+    unknown = {d["id"] for d in manifest["drives"] if d.get("identity") == "none"}
+    for unit in _plan(observed)["units"]:
+        src = unit["folder"][0]
+        if src in unknown:
+            continue
+        for d in manifest["drives"]:
+            if d.get("identity") != "none" and devices[d["id"]] != devices[src] and unit["bytes"]:
+                return unit, d["id"]
+    pytest.skip("no unit with another identified device to copy to")
+
+
+def test_evaluator_catches_a_removal(completed_run) -> None:
+    manifest, observed, _ = completed_run
+
+    def remove(obs):
+        _plan(obs)["steps"].append({"seq": 99, "kind": "delete", "unit": "", "src": None,
+                                    "dst": None, "bytes": 1, "footprint": 1, "depends_on": []})
+
+    assert _rejudge(manifest, observed, remove)[("VV-PLAN-01", "rescan")]["verdict"] == ev.FAIL
+    accept = lambda o: _plan(o).update(removal_refused=False)  # noqa: E731
+    assert _rejudge(manifest, observed, accept)[("VV-PLAN-01", "rescan")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_an_understated_footprint(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    unit, dst = _a_unit_and_another_drive(manifest, observed)
+
+    def understate(obs):
+        _plan(obs)["steps"].append({"seq": 99, "kind": "copy", "unit": unit["key"],
+                                    "src": unit["folder"], "dst": dst, "bytes": unit["bytes"],
+                                    "footprint": 0, "depends_on": []})
+
+    assert _rejudge(manifest, observed, understate)[("VV-PLAN-02", "rescan")]["verdict"] \
+        == ev.FAIL
+
+
+def test_evaluator_catches_a_shortfall_left_unsaid(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    if not any(u["short"] for u in _plan(observed)["units"]):
+        pytest.skip("every unit met its target in this dataset")
+
+    def hide(obs):
+        plan = _plan(obs)
+        for u in plan["units"]:
+            u["short"] = 0
+        plan["steps"] = [s for s in plan["steps"] if s["kind"] != "acquire"]
+
+    assert _rejudge(manifest, observed, hide)[("VV-PLAN-03", "rescan")]["verdict"] == ev.FAIL
+
+
+def test_evaluator_catches_two_copies_in_one_zone(completed_run) -> None:
+    manifest, observed, _ = completed_run
+    unit, dst = _a_unit_and_another_drive(manifest, observed)
+    one_zone = copy.deepcopy(manifest)
+    for d in one_zone["drives"]:
+        d.setdefault("health", {})["disaster_zone"] = "home"
+
+    def crowd(obs):
+        _plan(obs)["steps"].append({"seq": 99, "kind": "copy", "unit": unit["key"],
+                                    "src": unit["folder"], "dst": dst, "bytes": unit["bytes"],
+                                    "footprint": 1 << 40, "depends_on": []})
+
+    assert _rejudge(one_zone, observed, crowd)[("VV-PLAN-04", "rescan")]["verdict"] == ev.FAIL
+
+
+@pytest.fixture(scope="module")
+def fleet_run(tmp_path_factory):
+    """Five simulated drives of a known size, so the planner has room to place copies."""
+    dataset = tmp_path_factory.mktemp("vv-fleet") / "ds"
+    manifest = _generate(dataset, "--drives", "5", "--drive-size", "4GB")
+    run_dir = runner.run(dataset, log=lambda *_: None)
+    observed = json.loads((run_dir / "observed.json").read_text(encoding="utf-8"))
+    return manifest, observed, ev.evaluate(manifest, observed)
+
+
+def test_the_plan_tests_pass_where_copies_are_planned(fleet_run) -> None:
+    manifest, observed, results = fleet_run
+    copies = [s for s in _plan(observed)["steps"] if s["kind"] == "copy"]
+    if not copies:
+        pytest.skip(f"seed {manifest['seed']}: no room or no diverse drive for any copy")
+    verdicts = _verdicts(results, phase="rescan")
+    for test_id in ("VV-PLAN-01", "VV-PLAN-02", "VV-PLAN-03", "VV-PLAN-04"):
+        r = verdicts[(test_id, "rescan")]
+        assert r["verdict"] == ev.PASS and r["checked"] > 0, (manifest["seed"], test_id, r)
+    failing = [f"{r['id']}: {r['details'][:1]}" for r in results
+               if r["verdict"] not in (ev.PASS, ev.NA, ev.DEFERRED)]
+    assert not failing, f"seed {manifest['seed']}: {failing}"
