@@ -979,8 +979,14 @@ because no such capability exists behind them.
    becomes a collection without an explicit confirmation, and coverage — the share of bytes in
    confirmed collections — is shown at the top, because a scorecard over 12% of the archive
    should not look like a scorecard over all of it.
+   **As built (ROADMAP M6.9):** coverage heads the screen; the queue's acts are Find proposals,
+   Accept (new, or into an existing collection), Reject, Split and Accept all above a score;
+   each confirmed collection shows how much of it is described and its FAIR and NDSA results,
+   with a scorecard dialog listing every criterion and its remedy.
 6. **Duplicates & Versions** — groups with reclaimable bytes, side-by-side compare, proposed
    preferred member with rationale. Output is a report.
+   **As built (ROADMAP M6.9):** a Duplicates tab and a Versions tab; members side by side with
+   size and date, ★ marking the proposed preferred one, the rationale on hover.
 7. **Plan** — proposed steps grouped by drive with rationale and risk delta; simulation panel;
    "requires: connect ARCHIVE-3, then ARCHIVE-7."
 8. **Exports** — RO-Crate/BagIt bundles, DataCite metadata, per-drive manifests, CSV/HTML

@@ -34,8 +34,10 @@ from PySide6.QtWidgets import (
 from drivefusion import __version__
 from drivefusion.gui import elevation
 from drivefusion.gui.screens.browser import BrowserScreen
+from drivefusion.gui.screens.collections import CollectionsScreen
 from drivefusion.gui.screens.dashboard import DashboardScreen
 from drivefusion.gui.screens.drives import DrivesScreen
+from drivefusion.gui.screens.duplicates import DuplicatesScreen
 from drivefusion.gui.screens.scope import ScopeScreen
 from drivefusion.gui.screens.settings import SettingsScreen
 from drivefusion.gui.session import Session
@@ -45,8 +47,6 @@ READ_ONLY_NOTICE = "Read-only — nothing on your drives is ever modified"
 
 #: Screens the plan defines but this milestone does not ship, and their milestone.
 PLANNED = (
-    ("Collections", "M6"),
-    ("Duplicates & Versions", "M7"),
     ("Plan", "M7"),
     ("Exports", "M8"),
 )
@@ -91,6 +91,8 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardScreen(self.session, self.runner)
         self.drives = DrivesScreen(self.session)
         self.browser = BrowserScreen(self.session, self.runner)
+        self.collections = CollectionsScreen(self.session)
+        self.duplicates = DuplicatesScreen(self.session)
         self.settings = SettingsScreen(self.session)
 
         for name, screen in (
@@ -98,6 +100,8 @@ class MainWindow(QMainWindow):
             ("Dashboard", self.dashboard),
             ("Drives", self.drives),
             ("Catalog", self.browser),
+            ("Collections", self.collections),
+            ("Duplicates & Versions", self.duplicates),
             ("Settings", self.settings),
         ):
             self.nav.addItem(QListWidgetItem(name))
@@ -123,6 +127,11 @@ class MainWindow(QMainWindow):
         self.drives.healthRequested.connect(
             lambda body: self.run_task(body, "Reading drive health"))
         self.dashboard.hashRequested.connect(lambda body: self.run_task(body, "Hashing"))
+        self.collections.proposeRequested.connect(
+            lambda body: self.run_task(body, "Finding collection proposals"))
+        self.collections.catalogChanged.connect(self.refresh_all)
+        self.duplicates.versionsRequested.connect(
+            lambda body: self.run_task(body, "Finding version sets"))
         self.settings.importRequested.connect(
             lambda body: self.run_task(body, "Importing failure rates"))
         settings_action = self.menuBar().addMenu("&Tools").addAction("&Settings…")
@@ -142,6 +151,8 @@ class MainWindow(QMainWindow):
         self.dashboard.refresh()
         self.drives.refresh()
         self.browser.refresh()
+        self.collections.refresh()
+        self.duplicates.refresh()
         self.settings.refresh()
 
     # -- background work ----------------------------------------------------
