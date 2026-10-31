@@ -446,6 +446,37 @@ oracle must apply PLAN's counting rules to a hand-checkable dataset. The evaluat
 catch planted defects: a merged identity, a missing file, a wrong headline number, a
 touched tree, missed corruption. And a test that examined nothing must never pass.
 
+## 8a. Suites, campaigns and the dashboard
+
+**Suites** (`vv/suites.py`) are named sets of requirements that run on their own: safety,
+catalog, identity, redundancy, fixity, health, curation, planner, exports
+(`python -m vv suites` lists them). A suite chooses the requirements judged and the phases
+run: every run scans twice; `verify` runs only for fixity or exports, `export` only for
+exports. Phases left out are recorded in `observed.json` as `skipped_phases`, and their
+tests are neither run nor reported. R-RO-01 is judged in every run whatever is chosen.
+
+**A campaign** (`vv/campaign.py`, `python -m vv campaign`) repeats generate → run →
+evaluate over the same drives, simulated or real, a fresh seed each time, cleaning up each
+run's data afterwards. Its folder:
+
+| Path | Holds |
+|---|---|
+| `campaign.json` | What was asked (drives, suites, runs, seeds, phases), the tool and bench versions, the host |
+| `summary.json` | Each run's verdict and counts; each requirement's verdict per run and overall (the worst); each suite's passed, failed and not-judged requirements |
+| `dashboard.html` | The same on one self-contained page: suite cards, a requirement × run matrix linked to each run's report, every discrepancy |
+| `junit.xml` | Every run's tests, one `<testsuite>` per run |
+| `runs/NNN/` | `report.md`, `results.json`, `observed.json`, `junit.xml`, `dataset.json`, `log.txt` |
+
+The summary and dashboard are rebuilt from the files (`python -m vv dashboard FOLDER`), so a
+campaign copied elsewhere stays readable. Real drives are checked for distinct devices
+before anything is written; a run that crashes is ERROR and the campaign carries on.
+
+**The dashboard window** (`python -m vv gui`, `vv/gui.py`) does the same with a form:
+drives (simulated count and size, or a folder per real drive), suites, runs, seed, keep;
+Run and Stop after this run; a live log and a requirement × run grid coloured by verdict;
+Open dashboard, Open folder, Open campaign…. Real-drive testing is described step by step in
+[REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md).
+
 ## 9. Limitations and extending
 
 - **Scale.** Datasets are sized for minutes, not the §13 budgets; performance is

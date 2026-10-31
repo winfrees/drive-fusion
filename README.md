@@ -244,4 +244,5 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 | [docs/PLAN.md](docs/PLAN.md) | The build plan: read-only design, scan scope, Windows enumeration, data model and budgets at 50M files, durability scoring, FAIR/NDSA, planner, milestones |
 | [docs/REVIEW.md](docs/REVIEW.md) | Safety, file-integrity and security review: user needs → requirements → specification traceability, findings with reproductions, recommended order of fixes |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Plan addendum: milestone status, what the finished milestones still owe, and the ordered plan to M5–M8 |
-| [docs/VV.md](docs/VV.md) | Verification & validation: testable requirements traced to the plan, randomized drive datasets (simulated or physical), the oracle, and the V&V tests |
+| [docs/VV.md](docs/VV.md) | Verification & validation: testable requirements traced to the plan, randomized drive datasets (simulated or physical), the oracle, and the V&V tests; suites, campaigns and the dashboard (`python -m vv gui`) |
+| [docs/REAL-DRIVE-TESTING.md](docs/REAL-DRIVE-TESTING.md) | Step by step: testing Drive Fusion on your own drives with generated data, and reading the results |

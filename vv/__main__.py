@@ -288,6 +288,52 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def cmd_suites(args) -> int:
+    from vv.suites import SUITES
+
+    for s in SUITES.values():
+        print(f"{s.name:<11} {s.title}: {', '.join(s.requirements())}")
+        print(f"{'':<11} {s.description}")
+    print("all         every suite (the default)")
+    return 0
+
+
+def cmd_campaign(args) -> int:
+    from vv import campaign
+
+    config = campaign.Config(
+        out=args.out, suites=args.suite or ["all"], iterations=args.iterations,
+        drives=args.drives, drive_paths=args.drive_path, drive_size=args.drive_size,
+        files_per_drive=args.files_per_drive, large_files=args.large_files,
+        first_seed=args.seed, min_copies=args.min_copies, keep=args.keep,
+        drivefusion_src=args.drivefusion_src)
+    try:
+        folder = campaign.run(config)
+    except ValueError as exc:
+        raise fsops.DatasetError(str(exc)) from exc
+    summary = json.loads((folder / "summary.json").read_text(encoding="utf-8"))
+    print(f"campaign verdict: {summary['verdict']}")
+    for name, s in summary["suites"].items():
+        print(f"  {name:<11} {s['passed']}/{s['requirements']} passed"
+              + (f", {s['failed']} failed" if s["failed"] else "")
+              + (f", {s['not_judged']} not judged" if s["not_judged"] else ""))
+    print(f"dashboard: {folder / 'dashboard.html'}")
+    return 0 if summary["verdict"] == "PASS" else 1
+
+
+def cmd_dashboard(args) -> int:
+    from vv import dashboard
+
+    print(dashboard.write(Path(args.campaign)))
+    return 0
+
+
+def cmd_gui(args) -> int:
+    from vv import gui
+
+    return gui.main()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m vv", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -332,6 +378,26 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--drive-path", action="append", default=[], metavar="Dnn=PATH")
     cl = sub.add_parser("clean", help="delete a dataset and its drive folders")
     cl.add_argument("dataset")
+
+    sub.add_parser("suites", help="list the test suites and their requirements")
+    cp = sub.add_parser("campaign", help="repeat generate, run and judge over N drives; one report")
+    cp.add_argument("--out", required=True, help="new or empty folder for the campaign")
+    cp.add_argument("--suite", action="append", default=[], metavar="NAME",
+                    help="a suite to judge (repeatable; default all). See `python -m vv suites`")
+    cp.add_argument("--iterations", type=int, default=3, help="runs, each on a fresh dataset")
+    cp.add_argument("--drives", type=int, default=3, help="simulated drives, if no --drive-path")
+    cp.add_argument("--drive-path", action="append", default=[], metavar="FOLDER",
+                    help="a folder on a real drive, one per physical device (repeatable)")
+    cp.add_argument("--drive-size", default=None, help="simulated drive size, e.g. 4GB")
+    cp.add_argument("--files-per-drive", type=int, default=120)
+    cp.add_argument("--large-files", type=int, default=3)
+    cp.add_argument("--seed", type=int, default=None, help="first run's seed; then +1 each run")
+    cp.add_argument("--min-copies", type=int, default=2)
+    cp.add_argument("--keep", action="store_true", help="keep each run's dataset afterwards")
+    cp.add_argument("--drivefusion-src", metavar="DIR")
+    db = sub.add_parser("dashboard", help="rebuild a campaign's summary.json and dashboard.html")
+    db.add_argument("campaign")
+    sub.add_parser("gui", help="the test dashboard: pick drives and suites, run, read results")
     return p
 
 
@@ -344,7 +410,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "all":
             return cmd_run(args, cmd_generate(args))
         return {"run": cmd_run, "evaluate": cmd_evaluate, "reset": cmd_reset,
-                "clean": cmd_clean}[args.command](args)
+                "clean": cmd_clean, "suites": cmd_suites, "campaign": cmd_campaign,
+                "dashboard": cmd_dashboard, "gui": cmd_gui}[args.command](args)
     except (fsops.DatasetError, OSError) as exc:
         print(f"vv: {exc}", file=sys.stderr)
         return 2
