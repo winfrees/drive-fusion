@@ -954,7 +954,14 @@ def cmd_drives_show(args) -> int:
 
 
 def cmd_standards_list(args) -> int:
+    from drivefusion.core.fair import rubrics
     from drivefusion.core.health import afr
+
+    for rubric_id in rubrics.RUBRICS:
+        r = rubrics.current(rubric_id)
+        state = (f"confirmed against the source {r.retrieved}" if r.retrieval == "confirmed"
+                 else "not yet confirmed against the source")
+        print(f"{r.name}: {r.source} {r.version}, {len(r.criteria)} criteria; {state}")
 
     with Catalog(args.catalog) as catalog:
         imported = {row["name"]: row["imported_at"] for row in catalog.afr_tables()}

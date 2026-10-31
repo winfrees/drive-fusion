@@ -830,6 +830,11 @@ revised standard is a data change, not a code change.
 | **PREMIS** / **PROV-O** | Fixity and provenance events in exports |
 | **NIH DMS Policy** (NOT-OD-21-013) and the **2026 Plan format** (NOT-OD-26-100) | **Optional module, deferred.** With no active plan of record this is not a build driver; the schema keeps the fields (`license`, `local_pid`, `external_pid`, `data_type`) that make a DMS or repository export a small addition later rather than a migration |
 
+**As built (ROADMAP M6.6, D14):** `drivefusion/standards/fair/rubric-fair-2016.json` and
+`drivefusion/standards/ndsa/rubric-ndsa-2.0.json`, written from the published texts; each
+criterion cites its source section, and each file is marked `retrieval: unconfirmed` until
+checked against the source. `drivefusion standards list` shows which.
+
 **FAIR scorecard**, scored per collection with each failing criterion naming the gap and its
 remedy: persistent local identifiers and content hashes as permanent names (**F1**), metadata
 completeness against the collection profile (**F2**), manifests binding PID ↔ checksums ↔ paths

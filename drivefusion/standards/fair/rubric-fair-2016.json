@@ -1,0 +1,35 @@
+{
+  "kind": "rubric",
+  "id": "fair",
+  "source": "FAIR Guiding Principles",
+  "version": "2016",
+  "citation": "Wilkinson, M. D. et al. The FAIR Guiding Principles for scientific data management and stewardship. Scientific Data 3, 160018 (2016). doi:10.1038/sdata.2016.18",
+  "url": "https://doi.org/10.1038/sdata.2016.18",
+  "also": "https://www.go-fair.org/fair-principles/",
+  "retrieved": null,
+  "retrieval": "unconfirmed",
+  "retrieval_note": "Written from the published principles without access to the source (ROADMAP D14). Check each criterion's wording against Box 2 of the paper or go-fair.org, then set 'retrieved' to the date and 'retrieval' to 'confirmed'.",
+  "groups": [
+    {"id": "F", "title": "Findable"},
+    {"id": "A", "title": "Accessible"},
+    {"id": "I", "title": "Interoperable"},
+    {"id": "R", "title": "Reusable"}
+  ],
+  "criteria": [
+    {"id": "F1", "group": "F", "section": "Box 2, F1", "text": "(Meta)data are assigned a globally unique and persistent identifier."},
+    {"id": "F2", "group": "F", "section": "Box 2, F2", "text": "Data are described with rich metadata (defined by R1 below)."},
+    {"id": "F3", "group": "F", "section": "Box 2, F3", "text": "Metadata clearly and explicitly include the identifier of the data they describe."},
+    {"id": "F4", "group": "F", "section": "Box 2, F4", "text": "(Meta)data are registered or indexed in a searchable resource."},
+    {"id": "A1", "group": "A", "section": "Box 2, A1", "text": "(Meta)data are retrievable by their identifier using a standardised communications protocol."},
+    {"id": "A1.1", "group": "A", "section": "Box 2, A1.1", "text": "The protocol is open, free, and universally implementable."},
+    {"id": "A1.2", "group": "A", "section": "Box 2, A1.2", "text": "The protocol allows for an authentication and authorisation procedure, where necessary."},
+    {"id": "A2", "group": "A", "section": "Box 2, A2", "text": "Metadata are accessible, even when the data are no longer available."},
+    {"id": "I1", "group": "I", "section": "Box 2, I1", "text": "(Meta)data use a formal, accessible, shared, and broadly applicable language for knowledge representation."},
+    {"id": "I2", "group": "I", "section": "Box 2, I2", "text": "(Meta)data use vocabularies that follow FAIR principles."},
+    {"id": "I3", "group": "I", "section": "Box 2, I3", "text": "(Meta)data include qualified references to other (meta)data."},
+    {"id": "R1", "group": "R", "section": "Box 2, R1", "text": "(Meta)data are richly described with a plurality of accurate and relevant attributes."},
+    {"id": "R1.1", "group": "R", "section": "Box 2, R1.1", "text": "(Meta)data are released with a clear and accessible data usage license."},
+    {"id": "R1.2", "group": "R", "section": "Box 2, R1.2", "text": "(Meta)data are associated with detailed provenance."},
+    {"id": "R1.3", "group": "R", "section": "Box 2, R1.3", "text": "(Meta)data meet domain-relevant community standards."}
+  ]
+}

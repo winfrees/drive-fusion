@@ -79,6 +79,10 @@ bundled_binaries, bundled_datas = [], []
 # Versioned AFR tables and factors (ROADMAP M5.4), read with importlib.resources.
 bundled_datas.append((os.path.join(ROOT, "drivefusion", "standards", "afr", "*.json"),
                       os.path.join("drivefusion", "standards", "afr")))
+# The FAIR and NDSA rubric files (ROADMAP M6.6).
+for rubric in ("fair", "ndsa"):
+    bundled_datas.append((os.path.join(ROOT, "drivefusion", "standards", rubric, "*.json"),
+                          os.path.join("drivefusion", "standards", rubric)))
 # The pinned Backblaze quarter as a fleet table, when tools/fetch_backblaze.py
 # has verified and converted it (CI always runs it; D13).
 FLEET_AFR = os.path.join(ROOT, "packaging", "vendor", "afr")
@@ -116,6 +120,8 @@ analysis = Analysis(
         "drivefusion_helper_pin",
         "drivefusion.cli.main",
         "drivefusion.standards.afr",       # found by name, through importlib.resources
+        "drivefusion.standards.fair",
+        "drivefusion.standards.ndsa",
         # Reached only through `drivefusion gui`, so PyInstaller cannot see them.
         "drivefusion.gui.app",
         "drivefusion.gui.main_window",
