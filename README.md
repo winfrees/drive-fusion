@@ -192,6 +192,14 @@ They were written from the published texts and their wording reviewed and accept
 scorecard reports how far a collection is *consistent with* their criteria, and certifies
 nothing. `drivefusion standards list` shows how each was checked.
 
+## Builds
+
+Every commit to `main` (each merged PR) is built for Windows once the guardrail tests pass:
+open the **CI** run for that commit under Actions, and download **DriveFusion-main-*commit***
+from its Artifacts (kept 90 days). The run's summary gives the version and each
+executable's SHA-256. Builds of other branches and PRs are kept two weeks as
+**DriveFusion-windows-x64**. `.github/workflows/build-windows.yml` is the one build both use.
+
 ## Development
 
 ```bash
