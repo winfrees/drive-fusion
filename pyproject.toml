@@ -25,6 +25,8 @@ include = ["drivefusion*"]
 
 [tool.setuptools.package-data]
 "drivefusion.standards.afr" = ["*.json"]
+"drivefusion.standards.fair" = ["*.json"]
+"drivefusion.standards.ndsa" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

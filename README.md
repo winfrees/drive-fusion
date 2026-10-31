@@ -178,6 +178,11 @@ Failure rates come from [Backblaze Drive Stats](https://www.backblaze.com/cloud-
 credited as their source. The build pins one quarter by SHA-256 (`packaging/backblaze.json`);
 Settings imports a newer one you downloaded. Drive Fusion never downloads it itself.
 
+Scorecards use the FAIR Guiding Principles (Wilkinson et al., *Scientific Data* 2016) and the
+NDSA Levels of Digital Preservation 2.0, shipped as rubric files under `drivefusion/standards/`.
+They were written from the published texts and are marked unconfirmed until checked against
+those sources; `drivefusion standards list` says which.
+
 ## Development
 
 ```bash

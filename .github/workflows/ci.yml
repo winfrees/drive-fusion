@@ -111,6 +111,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "the built app could not load its AFR tables" }
           $tables
           if (-not ($tables -match "^backblaze-")) { throw "the pinned Backblaze table was not bundled" }
+          if (-not ($tables -match "^fair-")) { throw "the FAIR rubric was not bundled" }
+          if (-not ($tables -match "^ndsa-")) { throw "the NDSA rubric was not bundled" }
 
       # The GUI refuses to elevate a helper whose SHA-256 differs from the one
       # pinned at build time (REVIEW F-07), so the pin must be the shipped file's.
