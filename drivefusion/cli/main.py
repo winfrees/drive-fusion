@@ -49,7 +49,7 @@ PLANNED_VERBS = {
 
 
 #: Name of the windowed executable built by packaging/drivefusion.spec.
-WINDOWED_EXECUTABLE_STEM = "drivefusion"
+WINDOWED_EXECUTABLE_STEM = "drivefusion"   # DriveFusion.exe; the console one is drivefusion-cli.exe
 
 
 def build_note() -> str:
@@ -67,14 +67,14 @@ def wants_window(argv0: str, *, frozen: bool, has_command: bool) -> bool:
     """True when this invocation should open the GUI instead of printing help.
 
     The frozen build ships two front ends from one entry point: a windowed
-    ``DriveFusion.exe`` and a console ``drivefusion.exe``. Double-clicking the
+    ``DriveFusion.exe`` and a console ``drivefusion-cli.exe``. Double-clicking the
     windowed one passes no arguments, and printing help at a process with no
     console writes to nowhere at all — the user sees the program start and vanish.
     So that one case opens the window.
 
-    Distinguished by the executable's name, capitalised in the windowed build,
-    and only ever when frozen: from a source checkout ``python -m drivefusion``
-    should keep printing help.
+    Distinguished by the executable's name, and only ever when frozen: from a
+    source checkout ``python -m drivefusion`` should keep printing help. The
+    names differ by more than case, since Windows compares names without it.
 
     The basename is taken separator-agnostically rather than with ``pathlib``,
     which on POSIX does not split a Windows path at all and would hand back the
@@ -85,9 +85,9 @@ def wants_window(argv0: str, *, frozen: bool, has_command: bool) -> bool:
         return False
     basename = argv0.replace("\\", "/").rsplit("/", 1)[-1]
     stem = basename[:-4] if basename.lower().endswith(".exe") else basename
-    # Case-sensitive on purpose: "DriveFusion" is the window, "drivefusion" the
-    # console tool, and on Windows only the spelling tells them apart.
-    return stem != WINDOWED_EXECUTABLE_STEM and stem.lower() == WINDOWED_EXECUTABLE_STEM
+    # Case-insensitive, as Windows is: a shortcut or a typed name may spell it
+    # either way. Anything else, drivefusion-cli above all, is the console tool.
+    return stem.lower() == WINDOWED_EXECUTABLE_STEM
 
 
 def _human_bytes(value: int) -> str:
