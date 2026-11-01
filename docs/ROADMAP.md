@@ -81,6 +81,13 @@ works end to end: plan (M7), then manifests, packages, mappings and copy-only co
   crash at interpreter exit from the V&V window was fixed (#57).
 * **Documents.** Every document ends with the abbreviations it uses, generated and checked by a
   test (`tools/doc_abbreviations.py`).
+* **The windowed program was missing from every build until 2026-11-01.** The console program
+  was named `drivefusion.exe` beside the windowed `DriveFusion.exe`; Windows treats the two
+  names as one, so the console build overwrote the window, and the build's checks, which
+  looked for each by name, still passed. Found by the first release's checksum step. The
+  console program is now `drivefusion-cli.exe`, and `tools/check_executables.py` fails the
+  build unless each program is there by its exact name and is windowed or console as it should
+  be.
 
 ---
 

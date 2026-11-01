@@ -206,8 +206,12 @@ def test_the_windowed_build_opens_a_window_instead_of_printing_help() -> None:
     assert wants_window("C:\\Program Files\\DriveFusion\\DriveFusion.exe",
                         frozen=True, has_command=False)
 
+    # However Windows hands over the name: it compares names without case.
+    assert wants_window("C:\\Program Files\\DriveFusion\\drivefusion.EXE",
+                        frozen=True, has_command=False)
+
     # The console build: keep printing help.
-    assert not wants_window("C:\\Program Files\\DriveFusion\\drivefusion.exe",
+    assert not wants_window("C:\\Program Files\\DriveFusion\\drivefusion-cli.exe",
                             frozen=True, has_command=False)
 
     # A subcommand was given, so it is a CLI run whichever binary started it.

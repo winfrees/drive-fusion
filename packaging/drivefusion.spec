@@ -117,7 +117,10 @@ print(f"pinned smartctl.exe: {SMARTCTL_SHA256 or 'not bundled'}")
 # Two front ends, one analysis. On Windows a GUI built with console=True flashes
 # a console behind the window, and a CLI built with console=False has nowhere to
 # print — so the same code ships as a windowed DriveFusion.exe and a console
-# drivefusion.exe rather than compromising on one of them.
+# drivefusion-cli.exe rather than compromising on one of them. The names must
+# differ by more than case: Windows treats DriveFusion.exe and drivefusion.exe as
+# one file, and the second build would overwrite the first
+# (tools/check_executables.py checks the result).
 analysis = Analysis(
     [os.path.join(ROOT, "drivefusion", "__main__.py")],
     pathex=[ROOT, PIN_DIR],
@@ -188,7 +191,7 @@ cli_exe = EXE(
     analysis.scripts,
     [],
     exclude_binaries=True,
-    name="drivefusion",
+    name="drivefusion-cli",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

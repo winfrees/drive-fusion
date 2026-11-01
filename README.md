@@ -247,7 +247,8 @@ pyinstaller packaging/drivefusion.spec --noconfirm --clean
   the glossary doesn't define, or when an appendix is out of date: add the term there and run
   the script with `--write`.
 * CI runs the lint and tests on Windows and Linux, then builds and smoke-tests three Windows
-  executables: windowed `DriveFusion.exe`, console `drivefusion.exe`, and `dfscan-helper.exe`.
+  executables: windowed `DriveFusion.exe`, console `drivefusion-cli.exe`, and `dfscan-helper.exe`.
+  A check reads each one's header, so a missing or swapped program fails the build.
 
 ### V&V tests
 

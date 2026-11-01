@@ -139,7 +139,7 @@ jobs:
           zip -qr "$NAME.zip" DriveFusion
           {
             sha256sum "$NAME.zip"
-            (cd DriveFusion && sha256sum DriveFusion.exe drivefusion.exe dfscan-helper.exe)
+            (cd DriveFusion && sha256sum DriveFusion.exe drivefusion-cli.exe dfscan-helper.exe)
           } > SHA256SUMS.txt
           cat SHA256SUMS.txt
 

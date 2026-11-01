@@ -82,7 +82,7 @@ class ElevationState:
 def helper_path() -> Path:
     """Where the helper must live: beside this executable, nowhere else.
 
-    Frozen builds put ``dfscan-helper.exe`` next to ``drivefusion.exe``. From a
+    Frozen builds put ``dfscan-helper.exe`` next to ``DriveFusion.exe`` and ``drivefusion-cli.exe``. From a
     source checkout there is no frozen helper, and the returned path simply will
     not exist — which is reported rather than worked around by searching.
     """

@@ -86,20 +86,20 @@ jobs:
         run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
 
       - name: Sign the main executables, when configured
-        run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion.exe
+        run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion-cli.exe
 
       - name: Verify the built executables run
         run: |
-          dist\DriveFusion\drivefusion.exe --version
-          dist\DriveFusion\drivefusion.exe --help
+          dist\DriveFusion\drivefusion-cli.exe --version
+          dist\DriveFusion\drivefusion-cli.exe --help
           dist\DriveFusion\dfscan-helper.exe --help
-          if (-not (Test-Path dist\DriveFusion\DriveFusion.exe)) {
-            throw "the windowed executable was not built"
-          }
-          dist\DriveFusion\drivefusion.exe report --help
+          # Each program by its exact name, and windowed or console as it should be.
+          python tools/check_executables.py dist\DriveFusion
+          if ($LASTEXITCODE -ne 0) { throw "an executable is missing or of the wrong kind" }
+          dist\DriveFusion\drivefusion-cli.exe report --help
           # The failure-rate tables are package data: prove the build found them.
           $env:DRIVEFUSION_CATALOG = "$env:RUNNER_TEMP\ci-catalog\catalog.db"
-          $tables = dist\DriveFusion\drivefusion.exe standards list
+          $tables = dist\DriveFusion\drivefusion-cli.exe standards list
           if ($LASTEXITCODE -ne 0) { throw "the built app could not load its AFR tables" }
           $tables
           if (-not ($tables -match "^backblaze-")) { throw "the pinned Backblaze table was not bundled" }
@@ -114,7 +114,7 @@ jobs:
       - name: Build summary
         if: ${{ inputs.summary }}
         run: |
-          $version = (dist\DriveFusion\drivefusion.exe --version)
+          $version = (dist\DriveFusion\drivefusion-cli.exe --version)
           $lines = @(
             "## Drive Fusion build: $version",
             "",
@@ -123,7 +123,7 @@ jobs:
             "| File | SHA-256 |",
             "|---|---|"
           )
-          foreach ($f in "DriveFusion.exe", "drivefusion.exe", "dfscan-helper.exe") {
+          foreach ($f in "DriveFusion.exe", "drivefusion-cli.exe", "dfscan-helper.exe") {
             $h = (Get-FileHash "dist\DriveFusion\$f" -Algorithm SHA256).Hash.ToLower()
             $lines += "| $f | ``$h`` |"
           }

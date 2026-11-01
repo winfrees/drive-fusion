@@ -380,7 +380,7 @@ diff ds/runs/*/results.json                                       # or compare r
 [`vv/adapter.py`](../vv/adapter.py) is the only module that knows how Drive Fusion is
 invoked and how its catalog is laid out. When a later version changes its API or schema,
 the adapter changes, and datasets, oracle and evaluator stay as they are. A different
-front end (the frozen `drivefusion.exe`, say) can be judged by any adapter that writes the
+front end (the frozen `drivefusion-cli.exe`, say) can be judged by any adapter that writes the
 same `observed.json`, then `python -m vv evaluate ds --observed that.json`.
 
 `observed.json` (schema `drivefusion-vv-observed/1`) holds, per phase: `files` as

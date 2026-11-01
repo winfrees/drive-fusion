@@ -8,7 +8,7 @@ it says hold each — and never the tool's internal ids.
 
 When a future version changes its API or schema, this adapter changes and the
 oracle, the evaluator, and every dataset stay as they are. Another front end
-(the frozen ``drivefusion.exe``, say) can be measured the same way by writing a
+(the frozen ``drivefusion-cli.exe``, say) can be measured the same way by writing a
 different adapter that emits the same ``observed.json`` shape.
 
 Drive registration has two modes:

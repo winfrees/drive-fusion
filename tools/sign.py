@@ -10,7 +10,7 @@ The helper is signed from packaging/drivefusion.spec *before* its SHA-256 is
 pinned (REVIEW F-07), so the pin is the signed file's; the two main
 executables are signed after the build, which pins nothing of theirs.
 
-    python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion.exe
+    python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion-cli.exe
 """
 
 from __future__ import annotations
