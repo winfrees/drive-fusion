@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push cancels an older run of the same branch, except on main: there
+# each run publishes a release, so runs queue instead of being cut off mid-way.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # The read-only guarantee is a required status check, not a convention.
@@ -76,16 +78,90 @@ jobs:
       retention-days: 14
     secrets: inherit
 
-  # After each commit to main (a merged PR): the same build, only once the
-  # guardrails pass, named for its commit and kept 90 days, with its file
-  # hashes in the run summary. Download it from the run's Artifacts.
-  main-build:
-    name: Main build
+  # After each commit to main (a merged PR), once the guardrails pass: the next
+  # version, the same Windows build stamped with it, and a GitHub pre-release.
+  version:
+    name: Release version
     needs: guardrails
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # every tag, to find the newest release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Next version
+        id: next
+        run: |
+          version=$(python tools/release_version.py next)
+          echo "Releasing v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  main-build:
+    name: Main build
+    needs: version
     uses: ./.github/workflows/build-windows.yml
     with:
-      artifact-name: DriveFusion-main-${{ github.sha }}
+      artifact-name: DriveFusion-v${{ needs.version.outputs.version }}-windows-x64
       retention-days: 90
       summary: true
+      version: ${{ needs.version.outputs.version }}
     secrets: inherit
+
+  # Every release is a pre-release until the builds are signed (ROADMAP D21)
+  # and a release candidate has passed a physical-drive V&V run (PLAN §14,
+  # docs/REAL-DRIVE-TESTING.md).
+  release:
+    name: Publish the pre-release
+    needs: [version, main-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: v${{ needs.version.outputs.version }}
+      NAME: DriveFusion-v${{ needs.version.outputs.version }}-windows-x64
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: DriveFusion
+
+      - name: Package
+        run: |
+          zip -qr "$NAME.zip" DriveFusion
+          {
+            sha256sum "$NAME.zip"
+            (cd DriveFusion && sha256sum DriveFusion.exe drivefusion.exe dfscan-helper.exe)
+          } > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Notes
+        run: |
+          cat > notes.md <<EOF
+          **Pre-release.** The executables are not code-signed yet (ROADMAP D21), so Windows
+          SmartScreen will warn before the first run: choose *More info*, then *Run anyway*.
+
+          Download \`$NAME.zip\`, check it against \`SHA256SUMS.txt\`
+          (\`Get-FileHash $NAME.zip\` in PowerShell), unzip it anywhere and run \`DriveFusion.exe\`.
+          Built from \`$GITHUB_SHA\`.
+          EOF
+
+      # The tag is made here, on the commit that was built. A re-run of a
+      # commit already released replaces its files instead.
+      - name: Publish
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$NAME.zip" SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" "$NAME.zip" SHA256SUMS.txt \
+              --target "$GITHUB_SHA" --prerelease --title "Drive Fusion $TAG" \
+              --notes-file notes.md --generate-notes
+          fi

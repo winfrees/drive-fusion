@@ -6,7 +6,7 @@
 | **Focus** | (1) safety of user data on catalogued media, (2) correctness of the file and redundancy facts the tool reports, (3) security of the privileged and packaging surface |
 | **Method** | Every source module read in full; lint and full test suite run on Linux (291 passed, 5 Windows-only skipped) and checked against the latest Windows CI log (293 passed, 3 skipped); every finding below reproduced with [`tools/review_repro.py`](../tools/review_repro.py) or shown directly in code. Each claim was checked three times: against the code, against a running reproduction, and against the test that would be expected to catch it |
 | **Date** | 2026-10-27 |
-| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed. Re-checked at `ce03f64` the same day: R5–R12 still `FOUND`, so F-05 … F-16 stayed open. [ROADMAP.md](ROADMAP.md) Track A schedules them. 2026-10-28, Track A item A2: F-08, F-10, F-14 and F-16 fixed, each with regression tests; R8 (all seven probes), R9, R10 and the new R13 (F-16) now print `NOT FOUND` / `caught` |
+| **Status update** | 2026-10-28: F-01 to F-04 fixed, each with regression tests in `tests/`; R1–R4 now print `NOT FOUND`. Status columns below record it. The narrative in §1 and §2.3 describes the code as reviewed. Re-checked at `ce03f64` the same day: R5–R12 still `FOUND`, so F-05 … F-16 stayed open. [ROADMAP.md](ROADMAP.md) Track A schedules them. 2026-10-28, Track A item A2: F-08, F-10, F-14 and F-16 fixed, each with regression tests; R8 (all seven probes), R9, R10 and the new R13 (F-16) now print `NOT FOUND` / `caught`. 2026-10-28, A1: F-05 fixed (R6). 2026-10-28, A3: F-06, F-11, F-12, F-13 and F-15 fixed (R5, R7, R11, R12). 2026-10-29, B1: F-07 fixed. **2026-11-01: every finding is fixed** and every probe prints `NOT FOUND` or `caught`, re-checked at `main` `85f1616`. The traceability table (§2.2) is current to that commit; the narrative in §1 and §2.3 still describes the code as reviewed |
 
 ---
 
@@ -136,7 +136,7 @@ implemented as a library with no user-facing entry point.
 | SR-02 | UN-1 | User files are opened read-only, without blocking other processes. | `CreateFileW(GENERIC_READ, FILE_SHARE_READ\|WRITE\|DELETE, OPEN_EXISTING)`; `ReadOnlyBinaryFile` raises `ReadOnlyViolation` on `write`/`truncate`. `open_read` refuses links (`O_NOFOLLOW` on POSIX) and checks the opened handle's identity and attributes against the path's ([F-16](#f-16)). | `test_handles_refuse_to_write`; `test_no_touch.py`; `test_fsio.py` | **Met** |
 | SR-03 | UN-1 | Volume, directory and device handles cannot write. | `winio.open_volume` / `open_directory`: `GENERIC_READ`, `OPEN_EXISTING`; discovery opens with zero access; DF006 rejects write-access names in raw-handle modules. | Code review; DF006; `test_win32_signatures.py` | **Met**. DF006 matches names only, not numeric literals or creation dispositions. Handle signatures declared ([F-14](#f-14)) |
 | SR-04 | UN-1 | The tool writes nothing inside a scope root or on a catalogued volume. | `Catalog()` refuses to open a catalog inside any enabled scope root, checking with an `immutable=1` read before connecting so no `-wal`/`-shm` is created; `Catalog.add_scope_root` (and `scope add` / the GUI before they record anything) refuses a root that contains the catalog (`CatalogLocationError`). Since 2026-10-28 the same checks refuse a catalog on any volume that holds an enabled root, and a root on the catalog's volume, unless that volume is the system drive. The export root follows the same rule (`Catalog.check_export_root`, ROADMAP M8.1). | `test_store.py` (`test_a_root_containing_the_catalog_is_refused`, `test_a_catalog_inside_a_scope_root_is_not_opened`, `test_a_root_on_the_catalogs_data_drive_is_refused`, `test_a_catalog_moved_onto_a_scanned_data_drive_is_not_opened`, and the system-drive cases), `test_cli.py`, `test_gui_shell.py`; R3, `test_export_writer.py` | **Met** for the catalog and the export root ([F-03](#f-03)) |
-| SR-05 | UN-1 | An end-to-end regression shows media unchanged after every stage. | `test_no_touch.py` snapshots a fixture tree, runs scan ×2, hash, verify, reports and browse, then re-snapshots. | Linux + Windows CI; the cycle runs under the audit-hook guard | **Partial**: access times asserted only on POSIX with `O_NOATIME`; helper, USN and delta paths not exercised |
+| SR-05 | UN-1 | An end-to-end regression shows media unchanged after every stage. | `test_no_touch.py` snapshots a fixture tree, runs scan ×2, hash, verify, reports and browse, then re-snapshots. Planning and export run inside the V&V bench's no-touch snapshot (VV-RO-01), not yet in this test. | Linux + Windows CI; the cycle runs under the audit-hook guard | **Partial**: access times asserted only on POSIX with `O_NOATIME`; helper, USN and delta paths not exercised; planning and export asserted by the bench only (ROADMAP §3.4) |
 | SR-06 | UN-8 | Cloud placeholders are never opened, and are catalogued by metadata. | `open_read` refuses `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` (`fsio.py:368`); scanner marks `skipped-dehydrated`; hash candidates require `read_state='ok'`. | `test_cloud_placeholders_are_never_opened`, `test_dehydrated_files_are_catalogued_but_not_opened`, `test_hashing_refuses_cloud_placeholders`, `test_reparse_files_are_catalogued_unless_they_are_links` | **Met** ([F-11](#f-11)) |
 | SR-07 | UN-8 | No outbound network connections. | No network modules imported anywhere in `drivefusion/`. | Inspection only (no lint rule) | **Met**, not enforced |
 | SR-08 | UN-5 | Only explicitly added roots are scanned; nested roots refused; links not traversed; OS churn excluded. | `scope/registry.py` (`validate_new_root`, `ExclusionSet`); walker refuses to descend reparse points. | `test_scope.py`, `test_enum_batchwalk.py` | **Met** |
@@ -147,7 +147,7 @@ implemented as a library with no user-facing entry point.
 | SR-13 | UN-4 | Fixity separates corruption (bytes changed, metadata unchanged) from modification. | `verify_pass` compares mtime first: changed → `modified`, not hashed, not an incident; unchanged → re-hash and compare. | `test_identity.py`; V&V R-FIX-04 | **Met** ([F-06](#f-06)) |
 | SR-14 | UN-6 | The main application runs as invoker and never silently elevates. | `drivefusion.manifest`: `requestedExecutionLevel="asInvoker"` for all three executables. | CI build smoke test | **Met** |
 | SR-15 | UN-6 | Before anything is elevated, the binary is proven to be the genuine helper and its arguments can't be reinterpreted. | The build pins the helper's SHA-256 in a module packed inside the main executables; `elevation.request` hashes the helper through a handle that denies write and delete sharing, held until `ShellExecuteW` returns, and refuses a mismatch; an unpinned build refuses a helper in a user-writable folder; parameters via `subprocess.list2cmdline`. CI checks the pin against the shipped helper. | `test_elevation.py` (incl. a Windows-only lock test); CI build step | **Met** ([F-07](#f-07)). Authenticode waits for a signing certificate |
-| SR-16 | UN-6 | Elevation is offered per scan, and consent is recorded. | `elevation.request` exists; **no GUI or CLI code calls it**; `scan.elevated` is always written as 0. | n/a | **Unwired** ([F-09](#f-09)) |
+| SR-16 | UN-6 | Elevation is offered per scan, and consent is recorded. | `elevation.request` exists and is hardened (F-07); **no GUI or CLI code calls it**; `scan.elevated` is always written as 0. The only elevation a screen offers is `restart_elevated`, for the SMART read, which is shelved (ROADMAP D11). Wiring waits on ROADMAP B2–B3. | n/a | **Unwired** ([F-09](#f-09)) |
 | SR-17 | UN-2 | An NTFS rescan reads only what changed (USN delta). | `core/enum/delta.apply_delta`, journal validity logic, helper protocol, all unit-tested; **not called by `cmd_scan` or the GUI**; `decide()` returns `walk` whenever not elevated. | `test_enum_delta.py`, `test_enum_journal.py`, `test_enum_helper.py` | **Unwired** |
 | SR-18 | UN-7 | A schema migration first takes a consistent backup of the catalog. | `schema.backup_catalog` snapshots through `Connection.backup()` on the open connection, to a temporary name renamed when complete. | `test_store.py` (`test_backup_includes_transactions_still_in_the_wal`); R10 | **Met** ([F-10](#f-10)) |
 | SR-19 | UN-7 | A failed or cancelled scan leaves the previous catalog state. | Staging + one-transaction merge; rollback on exception. | `test_scanner.py`, `test_store.py` | **Met**. Staged rows of a cancelled scan are left behind in `stage_file` |
@@ -158,7 +158,7 @@ implemented as a library with no user-facing entry point.
 | SR-24 | UN-1 | The UI offers no destructive control. | Widget-tree test bans destructive verbs on every control. | `test_no_control_offers_a_destructive_action` | **Met** |
 | SR-25 | UN-11 | First-run disclaimer, acknowledged and recorded. | `core/disclaimer.py`; CLI gate on every command that reads a drive (prompt, `--accept-disclaimer`, env); GUI dialog before the window and on each reading action; acceptance audited with the text's SHA-256. | `test_cli.py`, `test_gui_shell.py` | **Met** |
 | SR-26 | UN-7, UN-11 | Append-only, hash-chained audit log. | `core/store/audit.py`: SHA-256 chain over every entry; schema-v6 triggers refuse UPDATE/DELETE; appends under `BEGIN IMMEDIATE`; `drivefusion audit verify`. Truncation of the newest entries is not detectable by the chain alone; the head hash is printed for that. | `test_audit.py` (tamper, deletion, recomputed hash, concurrent writers) | **Met** |
-| SR-27 | UN-1 | Exports go only to a new, timestamped folder inside a chosen root. | `core/export/` is a docstring. | n/a | **Planned** (M8) |
+| SR-27 | UN-1 | Exports go only to a new, timestamped folder inside a chosen root. | `core/export/writer.py` (ROADMAP M8.1): each export opens a new `YYYYMMDDTHHMMSSZ-<kind>` folder under an existing root; files are created exclusively, never over an existing file or through a link, and a path outside the folder is refused. The root may not be inside a scope root, nor on a scanned drive other than the system drive. | `test_export_writer.py`; V&V VV-EXP-01 and VV-RO-01 across the export phase | **Met** |
 | SR-28 | UN-6 | The elevated helper has a minimal, read-only surface. | `helper/__main__.py`: argparse, `query`/`enum`/`delta` modes, `GENERIC_READ` volume handle, frames to stdout. | `test_enum_helper.py` (stand-in child) | **Met** for the code; no real-volume test |
 
 ```mermaid
@@ -740,7 +740,7 @@ UAC prompt and the delta rescan.*
 
 ```bash
 pip install -e ".[dev]"
-python tools/review_repro.py     # prints R1–R12 with FOUND / NOT FOUND
+python tools/review_repro.py     # prints R1–R13 with FOUND / NOT FOUND
 ```
 
 The script runs in temporary directories only. As each defect is fixed, its line should flip
@@ -774,6 +774,7 @@ R7, R11 and R12: every reproduction is now `NOT FOUND`.
 | POSIX | Portable Operating System Interface: the Unix system-call standard |
 | SHA-256 | Secure Hash Algorithm 2 with a 256-bit digest: the content hash Drive Fusion uses |
 | SID | Security identifier: Windows' ID for a user or group |
+| SMART | Self-Monitoring, Analysis and Reporting Technology: a drive's own health counters |
 | SQL | Structured Query Language |
 | UAC | User Account Control: Windows' prompt before a program runs as administrator |
 | UI | User interface |
@@ -787,6 +788,7 @@ R7, R11 and R12: every reproduction is now `NOT FOUND`.
 | Identifier | Meaning |
 |---|---|
 | R-…-nn | A testable requirement (docs/VV.md §3). Families: CAT catalog, COL collections, EXP exports, FAIR FAIR and NDSA scorecards, FIX fixity, HL drive health, ID content identity, INC incremental rescans, PLAN planner, RED redundancy, RO read-only, SC scope, VER versions |
+| VV-…-nn | A V&V test of the requirement with the same family and number |
 | SR-nn | A system requirement in docs/REVIEW.md §2.2 |
 | UN-n | A user need in docs/REVIEW.md §2.1 |
 | DFnnn | A rule of the read-only lint, tools/ro_lint.py |

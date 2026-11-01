@@ -179,8 +179,8 @@ derivation is marked so a reviewer can dispute the reading rather than the code.
 | R-PLAN-03 | §9 | After the plan every unit has its target number of copies, or the plan says how many it falls short and an acquire step covers those bytes |
 | R-PLAN-04 | §9, §8.2 | An added copy that leaves more than target − 1 of a unit's copies in one purchase batch or recorded disaster zone says so in its step, and no other copy claims to (D18: allowed, costlier, named) |
 
-Requirements for exports arrive with each M8 item; the ones not yet built are not listed. Each new milestone should add its requirements and tests here
-(§9).
+Every milestone's requirements are live: none is `planned` or DEFERRED as of M8. A new
+milestone adds its requirements and tests here (§9).
 
 ## 4. Dataset design
 
