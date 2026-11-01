@@ -293,7 +293,25 @@ class Window(QMainWindow):
         self.worker.run_finished.connect(lambda out: self.show_campaign(Path(out), final=False))
         self.worker.done.connect(self._done)
         self.worker.done.connect(self.thread.quit)
+        # Qt, not Python's garbage collector, ends both objects' lives, once the
+        # thread has stopped: a QObject left to be collected at interpreter exit,
+        # after its thread is gone, can crash the process on the way out.
+        self.thread.finished.connect(self._thread_finished)
+        self.thread.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
         self.thread.start()
+
+    def _thread_finished(self) -> None:
+        self.thread = None
+        self.worker = None
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Closing mid-campaign stops after the current run and waits for it."""
+        if self.busy():
+            self.request_stop()
+            self.thread.quit()
+            self.thread.wait()
+        super().closeEvent(event)
 
     def request_stop(self) -> None:
         if self.worker is not None:

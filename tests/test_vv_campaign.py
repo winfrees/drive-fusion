@@ -106,7 +106,7 @@ def test_the_cli_runs_a_campaign_and_lists_suites(tmp_path: Path, capsys) -> Non
 def test_the_window_runs_a_campaign_and_shows_the_grid(tmp_path: Path) -> None:
     import time
 
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QEvent
 
     from vv import gui
 
@@ -123,7 +123,9 @@ def test_the_window_runs_a_campaign_and_shows_the_grid(tmp_path: Path) -> None:
         QCoreApplication.processEvents()
         time.sleep(0.02)
     QCoreApplication.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert not window.busy()
+    assert window.thread is None and window.worker is None   # released by Qt, not left to GC
     assert window.verdict.text().startswith("PASS"), window.verdict.text()
     rows = [window.grid.verticalHeaderItem(i).text() for i in range(window.grid.rowCount())]
     assert "R-PLAN-01" in rows and window.grid.columnCount() == 3
@@ -131,6 +133,8 @@ def test_the_window_runs_a_campaign_and_shows_the_grid(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="real drive"):
         window.config()
     window.close()
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_two_folders_on_one_device_are_refused_before_anything_is_written(tmp_path: Path) -> None:
