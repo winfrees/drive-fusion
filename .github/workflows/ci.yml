@@ -65,88 +65,27 @@ jobs:
         run: |
           python -c "import sys; sys.path.insert(0, '.'); from tests.conftest import _qt_unavailable; r = _qt_unavailable(); sys.exit(0) if r is None else sys.exit('GUI tests would skip: ' + r)"
 
+  # Every push and PR: the Windows build, kept two weeks.
   build:
     name: Windows executable
     needs: guardrails
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      artifact-name: DriveFusion-windows-x64
+      retention-days: 14
+    secrets: inherit
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          architecture: x64
-
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,gui]"
-
-      # smartctl (ROADMAP M5.3) is shelved, so it is not fetched or bundled.
-      # To bring it back, run `python tools/fetch_smartctl.py` here and set
-      # drivefusion.core.health.smart.ENABLED.
-
-      # The fleet AFR table (ROADMAP M5.4, D13): the pinned Backblaze quarter,
-      # refused unless its SHA-256 matches packaging/backblaze.json. The ZIP is
-      # cached so it is downloaded once per pin, not once per build.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            packaging/vendor/backblaze
-            packaging/vendor/afr
-          key: backblaze-${{ hashFiles('packaging/backblaze.json', 'drivefusion/core/health/backblaze.py') }}
-
-      - name: Fetch the pinned Backblaze Drive Stats
-        run: python tools/fetch_backblaze.py
-
-      # Authenticode (ROADMAP M8.8, D21): only with a certificate supplied as the
-      # SIGNING_CERT_BASE64 / SIGNING_CERT_PASSWORD secrets. Without one the
-      # build is unsigned and says so; the spec signs the helper before pinning.
-      - name: Code-signing certificate, when configured
-        env:
-          SIGNING_CERT_BASE64: ${{ secrets.SIGNING_CERT_BASE64 }}
-          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
-        run: |
-          if ($env:SIGNING_CERT_BASE64) {
-            $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
-            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
-            "DRIVEFUSION_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
-            "DRIVEFUSION_SIGN_PASSWORD=$env:SIGNING_CERT_PASSWORD" >> $env:GITHUB_ENV
-          } else {
-            Write-Output "::warning::No code-signing certificate is configured; this build is unsigned (ROADMAP D21)."
-          }
-
-      - name: Build one-folder executable
-        run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
-
-      - name: Sign the main executables, when configured
-        run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion.exe
-
-      - name: Verify the built executables run
-        run: |
-          dist\DriveFusion\drivefusion.exe --version
-          dist\DriveFusion\drivefusion.exe --help
-          dist\DriveFusion\dfscan-helper.exe --help
-          if (-not (Test-Path dist\DriveFusion\DriveFusion.exe)) {
-            throw "the windowed executable was not built"
-          }
-          dist\DriveFusion\drivefusion.exe report --help
-          # The failure-rate tables are package data: prove the build found them.
-          $env:DRIVEFUSION_CATALOG = "$env:RUNNER_TEMP\ci-catalog\catalog.db"
-          $tables = dist\DriveFusion\drivefusion.exe standards list
-          if ($LASTEXITCODE -ne 0) { throw "the built app could not load its AFR tables" }
-          $tables
-          if (-not ($tables -match "^backblaze-")) { throw "the pinned Backblaze table was not bundled" }
-          if (-not ($tables -match "^fair-")) { throw "the FAIR rubric was not bundled" }
-          if (-not ($tables -match "^ndsa-")) { throw "the NDSA rubric was not bundled" }
-
-      # The GUI refuses to elevate a helper whose SHA-256 differs from the one
-      # pinned at build time (REVIEW F-07), so the pin must be the shipped file's.
-      - name: Verify the pinned hashes match the shipped files
-        run: python tools/verify_pins.py build/drivefusion/helper-pin/drivefusion_helper_pin.py dist/DriveFusion
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: DriveFusion-windows-x64
-          path: dist/DriveFusion/
-          retention-days: 14
+  # After each commit to main (a merged PR): the same build, only once the
+  # guardrails pass, named for its commit and kept 90 days, with its file
+  # hashes in the run summary. Download it from the run's Artifacts.
+  main-build:
+    name: Main build
+    needs: guardrails
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      artifact-name: DriveFusion-main-${{ github.sha }}
+      retention-days: 90
+      summary: true
+    secrets: inherit
