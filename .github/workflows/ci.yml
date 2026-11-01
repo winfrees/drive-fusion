@@ -152,6 +152,10 @@ jobs:
           Download \`$NAME.zip\`, check it against \`SHA256SUMS.txt\`
           (\`Get-FileHash $NAME.zip\` in PowerShell), unzip it anywhere and run \`DriveFusion.exe\`.
           Built from \`$GITHUB_SHA\`.
+
+          Released under the MIT License (\`LICENSE.txt\`). Use is at your own risk, with no warranty
+          and for no particular purpose; see \`DISCLAIMER.md\` in the zip for the full terms,
+          including limitation of liability and indemnification.
           EOF
 
       # The tag is made here, on the commit that was built. A re-run of a

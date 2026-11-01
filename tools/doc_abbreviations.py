@@ -82,6 +82,7 @@ GLOSSARY: dict[str, str] = {
     "MD5": "Message-Digest algorithm 5: an older hash, broken for security uses",
     "MFT": "Master File Table: NTFS's table of every file on a volume",
     "MiB": "Mebibyte: 2²⁰ bytes",
+    "MIT": "Massachusetts Institute of Technology, as in the MIT License Drive Fusion is released under",
     "MOV": "Apple QuickTime movie: a video file format",
     "MPEG": "Moving Picture Experts Group, which sets audio and video standards",
     "MP3": "MPEG-1 Audio Layer 3: an audio format",
@@ -176,7 +177,7 @@ IGNORE = {
     # placeholders in command syntax
     "PATH", "FOLDER", "DRIVE", "VOLUME", "SIZE", "DIR", "CHECKOUT", "CAMPAIGN",
     # document and file names
-    "PLAN", "ROADMAP", "REVIEW", "README", "TESTING", "REAL-DRIVE-TESTING",
+    "PLAN", "ROADMAP", "REVIEW", "README", "TESTING", "REAL-DRIVE-TESTING", "DISCLAIMER", "LICENSE",
     # example drive labels and folder names
     "ARCHIVE", "PRJ",
     # product and format names, not abbreviations
@@ -209,7 +210,14 @@ def prose(text: str) -> str:
     text = _strip_appendix(text)
     for pattern in (_CODE_FENCE, _INLINE_CODE, _LINK_TARGET, _URL, _HTML):
         text = pattern.sub(" ", text)
-    return text
+    return "\n\n".join(p for p in re.split(r"\n\s*\n", text) if not _shouted(p))
+
+
+def _shouted(paragraph: str) -> bool:
+    """A paragraph written in capitals, such as a warranty disclaimer ("PROVIDED AS IS,
+    WITHOUT WARRANTY OF ANY KIND"): its words are emphasis, not abbreviations."""
+    letters = [c for c in paragraph if c.isalpha()]
+    return len(letters) >= 40 and sum(c.isupper() for c in letters) >= 0.8 * len(letters)
 
 
 def _capitals(word: str) -> int:
