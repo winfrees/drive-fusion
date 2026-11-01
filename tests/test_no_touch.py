@@ -15,6 +15,7 @@ import hashlib
 import os
 import shutil
 import sys
+import time
 import tempfile
 from pathlib import Path
 
@@ -296,6 +297,15 @@ def test_reading_does_not_update_access_times(sample_tree: Path) -> None:
     except PermissionError:
         pytest.skip("O_NOATIME not permitted for this user on this filesystem")
 
+    # Under relatime (the usual mount option) the first read of a directory or
+    # symlink after it was created updates its access time, and the snapshot
+    # itself lists every directory and reads every link. Let the creation's
+    # clock tick pass, then take one snapshot to spend that first update, so
+    # only a read by the tool can move an access time. Files are unaffected:
+    # the snapshot reads them with O_NOATIME, so a tool read without it still
+    # shows.
+    time.sleep(0.05)
+    tree_fixture.snapshot(sample_tree)
     before = tree_fixture.snapshot(sample_tree)
     run_full_cycle(sample_tree)
     after = tree_fixture.snapshot(sample_tree)

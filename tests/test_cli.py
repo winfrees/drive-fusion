@@ -247,21 +247,25 @@ def test_scan_hash_and_verify_refuse_a_different_volume_at_the_root(
     assert cli("scan") == 0
     capsys.readouterr()
 
-    _another_volume(monkeypatch)
-    (tree / "c.bin").write_bytes(b"new")   # would be catalogued if scanned
+    # Only the impostor volume is undone afterwards: a bare monkeypatch.undo()
+    # would also undo conftest's temp-drive-is-the-system-drive patch, and on a
+    # machine whose temp folder isn't on the system drive the catalog would
+    # then (rightly) be refused for sharing a drive with the scanned folder.
+    with monkeypatch.context() as impostor:
+        _another_volume(impostor)
+        (tree / "c.bin").write_bytes(b"new")   # would be catalogued if scanned
 
-    assert cli("scan") == 1
-    err = capsys.readouterr().err
-    assert "not scanning" in err and "not the catalogued volume" in err
+        assert cli("scan") == 1
+        err = capsys.readouterr().err
+        assert "not scanning" in err and "not the catalogued volume" in err
 
-    assert cli("hash") == 1
-    err = capsys.readouterr().err
-    assert "skipping files under" in err and "nothing to hash" in err
+        assert cli("hash") == 1
+        err = capsys.readouterr().err
+        assert "skipping files under" in err and "nothing to hash" in err
 
-    assert cli("verify") == 1
-    assert "nothing to verify" in capsys.readouterr().err
+        assert cli("verify") == 1
+        assert "nothing to verify" in capsys.readouterr().err
 
-    monkeypatch.undo()
     assert cli("status") == 0
     status = capsys.readouterr().out
     assert "files:       2" in status, "the refused scan recorded nothing"
