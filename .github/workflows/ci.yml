@@ -139,7 +139,7 @@ jobs:
           zip -qr "$NAME.zip" DriveFusion
           {
             sha256sum "$NAME.zip"
-            (cd DriveFusion && sha256sum DriveFusion.exe drivefusion-cli.exe dfscan-helper.exe)
+            (cd DriveFusion && sha256sum DriveFusion.exe drivefusion-cli.exe dfscan-helper.exe DriveFusion-TestBench.exe drivefusion-vv.exe)
           } > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -151,6 +151,8 @@ jobs:
 
           Download \`$NAME.zip\`, check it against \`SHA256SUMS.txt\`
           (\`Get-FileHash $NAME.zip\` in PowerShell), unzip it anywhere and run \`DriveFusion.exe\`.
+          To test it on your own drives, run \`DriveFusion-TestBench.exe\` from the same folder
+          (docs/REAL-DRIVE-TESTING.md); unlike Drive Fusion, the test bench writes test data.
           Built from \`$GITHUB_SHA\`.
           EOF
 

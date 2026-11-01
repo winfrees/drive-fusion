@@ -86,7 +86,7 @@ jobs:
         run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
 
       - name: Sign the main executables, when configured
-        run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion-cli.exe
+        run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion-cli.exe dist/DriveFusion/DriveFusion-TestBench.exe dist/DriveFusion/drivefusion-vv.exe
 
       - name: Verify the built executables run
         run: |
@@ -106,6 +106,16 @@ jobs:
           if (-not ($tables -match "^fair-")) { throw "the FAIR rubric was not bundled" }
           if (-not ($tables -match "^ndsa-")) { throw "the NDSA rubric was not bundled" }
 
+      # The bundled test bench runs a whole campaign against the bundled Drive
+      # Fusion: two small simulated drives, every suite, one run. A release is
+      # only published if this passes.
+      - name: Run the bundled test bench
+        run: |
+          dist\DriveFusion\drivefusion-vv.exe suites
+          if ($LASTEXITCODE -ne 0) { throw "the bundled test bench did not start" }
+          dist\DriveFusion\drivefusion-vv.exe campaign --out "$env:RUNNER_TEMP\vv-smoke" --drives 2 --iterations 1 --files-per-drive 20 --large-files 1
+          if ($LASTEXITCODE -ne 0) { throw "the bundled test bench campaign did not pass" }
+
       # The GUI refuses to elevate a helper whose SHA-256 differs from the one
       # pinned at build time (REVIEW F-07), so the pin must be the shipped file's.
       - name: Verify the pinned hashes match the shipped files
@@ -123,7 +133,7 @@ jobs:
             "| File | SHA-256 |",
             "|---|---|"
           )
-          foreach ($f in "DriveFusion.exe", "drivefusion-cli.exe", "dfscan-helper.exe") {
+          foreach ($f in "DriveFusion.exe", "drivefusion-cli.exe", "dfscan-helper.exe", "DriveFusion-TestBench.exe", "drivefusion-vv.exe") {
             $h = (Get-FileHash "dist\DriveFusion\$f" -Algorithm SHA256).Hash.ToLower()
             $lines += "| $f | ``$h`` |"
           }
