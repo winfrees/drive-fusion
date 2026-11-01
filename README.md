@@ -200,6 +200,20 @@ from its Artifacts (kept 90 days). The run's summary gives the version and each
 executable's SHA-256. Builds of other branches and PRs are kept two weeks as
 **DriveFusion-windows-x64**. `.github/workflows/build-windows.yml` is the one build both use.
 
+**Releases.** Pushing a version tag on a commit on `main` publishes a GitHub Release
+(`.github/workflows/release.yml`). The tag must name the version in `drivefusion/__init__.py`:
+`v0.1.0`, or `v0.1.0-rc1` for a candidate. To release:
+
+```bash
+git tag v0.1.0 origin/main
+git push origin v0.1.0
+```
+
+The workflow checks the tag and that its commit is on `main`, builds Windows exactly as CI
+does, and attaches `DriveFusion-<tag>-windows-x64.zip` and `SHA256SUMS.txt`, with notes from the
+merged PRs. Every release is marked a **pre-release** until the builds are code-signed (ROADMAP
+D21) and a candidate has passed a physical-drive V&V run (docs/REAL-DRIVE-TESTING.md).
+
 ## Development
 
 ```bash
