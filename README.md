@@ -2,7 +2,7 @@
 
 A Windows desktop and command-line tool that **catalogs the drives you point it at**
 (internal or external, connected or on a shelf), **tells you how many real copies of each
-file exist**, and will produce **reviewable plans** for consolidating that content into a
+file exist**, and produces **reviewable plans** for consolidating that content into a
 traceable, FAIR-aligned order.
 
 > **Drive Fusion never modifies, moves, or deletes your data.** It reads only the folders you
@@ -57,14 +57,20 @@ its catalog.*
 | **M1** Catalog core | done | `scope`, `scan`, `find`, `status`, `volumes` |
 | **M2** Fast enumeration | **library done, not wired** | parallel batch walker is used by every scan. The NTFS change-journal path (`dfscan-helper`, journal logic, incremental delta) is implemented and unit-tested but **not called by `scan` or the GUI**, so every rescan is currently a full walk |
 | **M3** Identity and analysis | done | `hash`, `report`, `verify` |
-| **M4** GUI shell | done, with one gap | `gui`: Scope, Dashboard, Drives and Catalog screens; background scans and hashing with Cancel. The UAC elevation launcher exists but **no screen offers it yet** |
-| M5–M8 | planned | health and risk, curation and FAIR scorecards, the planner, exports. See [PLAN §15](docs/PLAN.md#15-milestones) and the [roadmap](docs/ROADMAP.md) |
+| **M4** GUI shell | done, with one gap | `gui`: Scope, Dashboard, Drives, Catalog, Collections, Duplicates & Versions, Plan, Exports and Settings screens; background work with Cancel. The UAC elevation launcher is hardened, but **no screen offers it for a scan yet** |
+| **M5** Health and risk | done; SMART shelved | `drives edit`/`show`, failure rates from a pinned Backblaze quarter, `report durability` (expected bytes lost a year). SMART reads are built but switched off, so every rate is *estimated* |
+| **M6** Curation and FAIR | done | `collections`, `versions`, `score`: proposed and confirmed collections, coverage, version sets, FAIR and NDSA scorecards (consistency, never certification) |
+| **M7** Planner | done | `plan make`/`show`/`list`: what to copy where, for you to carry out |
+| **M8** Exports and polish | done; signing needs a certificate | `export`: per-drive manifests, RO-Crate/DataCite/BagIt packages, mappings and copy-only previews, HTML/CSV reports; portable mode. Builds are unsigned until a certificate is supplied |
+
+What is still open (the NTFS fast path, the 50M-file benchmark, physical-drive timing, the
+physical V&V gate, signing) is listed in [docs/ROADMAP.md](docs/ROADMAP.md) §2–§5. There are no
+open GitHub issues.
 
 Before Drive Fusion first reads a drive it shows the scope disclaimer below and asks you to
 accept it (`--accept-disclaimer` or `DRIVEFUSION_ACCEPT_DISCLAIMER=1` for scripts). That,
 and every scope change, scan, hash and verify pass and drive confirmation, is recorded in an
 append-only, hash-chained audit log: `drivefusion audit list`, `drivefusion audit verify`.
-Not yet implemented, though described in the plan: portable mode.
 
 ## Quick start
 
@@ -134,8 +140,9 @@ What the layers guarantee today:
 
 * Every handle on user media is opened with read access and `OPEN_EXISTING`. It can't write,
   and it can't create a file.
-* No module outside `core/store/` (the catalog) and `core/export/` (not yet implemented) calls
-  a mutating filesystem function that the lint knows about.
+* No module outside `core/store/` (the catalog) and `core/export/` (exports, each into a new
+  folder under the export root you choose) calls a mutating filesystem function that the lint
+  knows about.
 * On Linux and Windows CI, a fixture tree's bytes and metadata are unchanged after a full
   cycle. Access times are also asserted on POSIX, where `O_NOATIME` is available.
 
@@ -192,27 +199,28 @@ They were written from the published texts and their wording reviewed and accept
 scorecard reports how far a collection is *consistent with* their criteria, and certifies
 nothing. `drivefusion standards list` shows how each was checked.
 
-## Builds
+## Builds and releases
 
-Every commit to `main` (each merged PR) is built for Windows once the guardrail tests pass:
-open the **CI** run for that commit under Actions, and download **DriveFusion-main-*commit***
-from its Artifacts (kept 90 days). The run's summary gives the version and each
-executable's SHA-256. Builds of other branches and PRs are kept two weeks as
+**Every merged PR is released.** Each commit to `main` is built for Windows once the guardrail
+tests pass, and published as a GitHub **pre-release** on the repository's Releases page, with
+`DriveFusion-v<version>-windows-x64.zip`, `SHA256SUMS.txt` and notes listing the merged PRs.
+The CI run's summary also gives the version and each executable's SHA-256, and keeps the build
+as an artifact for 90 days. Builds of other branches and PRs are kept two weeks as
 **DriveFusion-windows-x64**. `.github/workflows/build-windows.yml` is the one build both use.
 
-**Releases.** Pushing a version tag on a commit on `main` publishes a GitHub Release
-(`.github/workflows/release.yml`). The tag must name the version in `drivefusion/__init__.py`:
-`v0.1.0`, or `v0.1.0-rc1` for a candidate. To release:
+**Versions count up by themselves.** Each release is one patch past the newest release tag:
+`v0.1.0`, then `v0.1.1`, `v0.1.2`… (`tools/release_version.py`). The build stamps that version
+into its own copy of the source, so `--version`, the window title and every export name the
+release; nothing is committed back to `main`, and a source checkout reports the base version in
+`drivefusion/__init__.py`. To start a new series, change that base in a PR, for example to
+`0.2.0`: the merge releases `v0.2.0`, and the next ones `v0.2.1`, `v0.2.2`…
 
-```bash
-git tag v0.1.0 origin/main
-git push origin v0.1.0
-```
+Runs on `main` queue rather than cancel each other, so a release is never cut off half
+published. If several PRs merge while one release is building, GitHub keeps only the newest
+waiting run, and that release includes all of them.
 
-The workflow checks the tag and that its commit is on `main`, builds Windows exactly as CI
-does, and attaches `DriveFusion-<tag>-windows-x64.zip` and `SHA256SUMS.txt`, with notes from the
-merged PRs. Every release is marked a **pre-release** until the builds are code-signed (ROADMAP
-D21) and a candidate has passed a physical-drive V&V run (docs/REAL-DRIVE-TESTING.md).
+Every release is a **pre-release** until the builds are code-signed (ROADMAP D21) and a release
+candidate has passed a physical-drive V&V run (docs/REAL-DRIVE-TESTING.md).
 
 ## Development
 
@@ -270,7 +278,7 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 |---|---|
 | [docs/PLAN.md](docs/PLAN.md) | The build plan: read-only design, scan scope, Windows enumeration, data model and budgets at 50M files, durability scoring, FAIR/NDSA, planner, milestones |
 | [docs/REVIEW.md](docs/REVIEW.md) | Safety, file-integrity and security review: user needs → requirements → specification traceability, findings with reproductions, recommended order of fixes |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Plan addendum: milestone status, what the finished milestones still owe, and the ordered plan to M5–M8 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Plan addendum: milestone status (M0–M8), what is still open, decisions, and the order of remaining work |
 | [docs/VV.md](docs/VV.md) | Verification & validation: testable requirements traced to the plan, randomized drive datasets (simulated or physical), the oracle, and the V&V tests; suites, campaigns and the dashboard (`python -m vv gui`) |
 | [docs/REAL-DRIVE-TESTING.md](docs/REAL-DRIVE-TESTING.md) | Step by step: testing Drive Fusion on your own drives with generated data, and reading the results |
 
@@ -282,6 +290,7 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 |---|---|
 | CI | Continuous integration: the automated checks and builds run on GitHub for every push |
 | CLI | Command-line interface: the drivefusion command |
+| CSV | Comma-separated values: a plain-text table format |
 | exFAT | Extended File Allocation Table: a filesystem common on USB sticks and SD cards |
 | FAIR | Findable, Accessible, Interoperable, Reusable: the FAIR Guiding Principles for research data |
 | GB | Gigabyte: 10⁹ bytes |
@@ -290,7 +299,10 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 | GPT | GUID Partition Table: the modern disk partition layout |
 | GUI | Graphical user interface: the Drive Fusion window |
 | GUID | Globally unique identifier, as Windows gives each volume |
+| HTML | Hypertext Markup Language: the format of web pages |
 | ID | Identifier |
+| JSON | JavaScript Object Notation: a plain-text data format |
+| JSON-LD | JSON for Linked Data: JSON with shared vocabularies, as RO-Crate uses |
 | KiB | Kibibyte: 2¹⁰ bytes |
 | MB | Megabyte: 10⁶ bytes |
 | MBR | Master Boot Record: the older disk partition layout |
@@ -300,9 +312,11 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 | PHI | Protected health information |
 | POSIX | Portable Operating System Interface: the Unix system-call standard |
 | PR | Pull request: a proposed change on GitHub |
+| RO-Crate | Research Object Crate: a way to package research data with JSON-LD metadata |
 | RSS | Resident set size: the memory a process is actually using |
 | SD | Secure Digital: a memory card format |
 | SHA-256 | Secure Hash Algorithm 2 with a 256-bit digest: the content hash Drive Fusion uses |
+| SMART | Self-Monitoring, Analysis and Reporting Technology: a drive's own health counters |
 | UAC | User Account Control: Windows' prompt before a program runs as administrator |
 | USB | Universal Serial Bus |
 | V&V | Verification and validation: checking the tool was built right and does the right thing |

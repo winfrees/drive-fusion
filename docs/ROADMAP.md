@@ -2,20 +2,42 @@
 
 | | |
 |---|---|
-| **Date** | 2026-10-28 |
-| **Baseline** | `main` at `ce03f64` (PR #8 merged) |
+| **Date** | 2026-10-28; status brought up to date 2026-11-01 |
+| **Baseline** | `main` at `ce03f64` (PR #8 merged) for the assessment in §1–§3; `main` at `85f1616` (PR #56 merged) for the status in §1, §2 and §3.1 |
 | **Relation to other documents** | Adds to [PLAN.md](PLAN.md); doesn't replace it. PLAN stays the design. This addendum records where the code stands against PLAN §15, what is still owed by milestones marked done, and the order of work to reach M5–M8. It draws on [REVIEW.md](REVIEW.md) (findings F-01 … F-16) and [VV.md](VV.md) (requirements R-*, tests VV-*) |
-| **Status** | Accepted 2026-10-28 with the default answer to every decision in §6. **Track A is complete** (A2, A1, A3, A4; §4) |
+| **Status** | Accepted 2026-10-28 with the default answer to every decision in §6. **Track A and M5–M8 are complete.** Every review finding is fixed (§3.1). Open: Track B items B2–B4 (the elevated NTFS fast path, still unwired), Track C (performance evidence), the physical-drive V&V gate (D5) and code signing (D21) |
 
 ---
 
 ## 1. Evidence gathered for this assessment
 
-Everything below was re-run on 2026-10-28 against `ce03f64`, on Linux (Python 3.13) with the Qt
-runtime libraries installed, so the GUI suite ran rather than skipping.
+### 1.1 Current, 2026-11-01 (`main` at `85f1616`)
 
 | Check | Result |
 |---|---|
+| `python tools/ro_lint.py` | clean, 100 files |
+| `python -m pytest -q` | Linux (Python 3.13, Qt libraries installed): **892 passed, 7 skipped**. Windows CI: **879 passed, 20 skipped** (the skips are POSIX-only tests) |
+| `python tools/review_repro.py` | Every probe, R1–R13, `NOT FOUND` or `caught`: all sixteen findings fixed (§3.1) |
+| `python -m vv campaign` (simulated, 4 GB drives) | **PASS** on 2 runs of 3 drives and 1 run of 5: 50 requirements PASS, 1 N/A (R-CAT-06: unreadable files can't be planted when running as root) |
+| GitHub | No open issues; no open pull requests |
+| Code checks | Schema version 13. Nine GUI screens: the eight of PLAN §11 plus Settings. The elevated helper, `apply_delta` and the USN journal path still have no caller from `scan` or the GUI (B2, B3). `test_no_touch.py` covers scan, hash, verify, reports and browse; planning and export are covered by the V&V bench's VV-RO-01 instead (§3.4) |
+
+### 1.2 Original assessment, 2026-10-28 (`main` at `ce03f64`)
+
+Re-run on 2026-10-28 against `ce03f64`, on Linux (Python 3.13) with the Qt runtime libraries
+installed, so the GUI suite ran rather than skipping. Kept as the record the plan of work in §4
+was made from.
+
+| Check | Result |
+|---|---|
+| `python tools/ro_lint.py` | clean, 54 files |
+| `python -m pytest -q` | **336 passed, 5 skipped** (Windows-only) on most runs. **One run of the first ~20 had 1 failure** that hasn't reproduced in 55 full runs since; see §3.4 |
+| `python tools/review_repro.py` | R1–R4 `NOT FOUND` (F-01 to F-04 fixed). R5–R12 **`FOUND`**: F-05, F-06, F-08 (7 probes), F-10, F-11, F-12, F-13, F-14 were still present |
+| `python -m vv all` (simulated, 3, 6 and 9 drives, fresh seeds) | **PASS** on every run: 37 PASS, 1 N/A (VV-CAT-06, unreadable files can't be planted as root), 1 DEFERRED (VV-VER-01, M6) |
+| GitHub | No open pull requests or issues |
+| Code checks | `apply_delta` and `run_helper` had no caller outside their own modules. `elevation.request` had no caller. Nothing wrote to the `audit` table. `core/export/` was a docstring. Schema was version 4. There was no `standards/` directory |
+
+---|---|
 | `python tools/ro_lint.py` | clean, 54 files |
 | `python -m pytest -q` | **336 passed, 5 skipped** (Windows-only) on most runs. **One run of the first ~20 had 1 failure** that hasn't reproduced in 55 full runs since; see §3.4 |
 | `python tools/review_repro.py` | R1–R4 `NOT FOUND` (F-01 to F-04 fixed). R5–R12 **`FOUND`**: F-05, F-06, F-08 (7 probes), F-10, F-11, F-12, F-13, F-14 are still present |
@@ -33,19 +55,32 @@ deliverable exists but an acceptance criterion or listed item is still owed (§3
 
 | # | Milestone | Status | Notes |
 |---|---|---|---|
-| **M0** | Skeleton and guardrails | **Done, with debt** | Gateway, lint, no-touch test, VHDX harness and the PyInstaller build are all in place. The lint has blind spots (F-08), so the guardrail is weaker than PLAN §3.2 implies |
-| **M1** | Catalog core | **Done, with debt** | Benchmark gate passed at 3M files, decision: one database. The 50M-file run PLAN §7.2 calls for hasn't been done. F-12 (wrong "last scanned") lives here |
-| **M2** | Fast enumeration | **Done, with debt** | The parsers, journal logic, batch walker, helper and delta are tested libraries. **Not wired**: every user scan is a full walk (SR-17). The exFAT retrieval-pointer check (PLAN §6.6, "verification task at M2") has been deferred three times and never done. Direct `$MFT` parsing is deferred, so the NTFS < 5 min budget can't be met |
-| **M3** | Identity and analysis | **Done, with debt** | The VV rescan defect is fixed and every VV identity, redundancy and fixity test passes. F-05 (serial-less volumes overstated copies) was fixed in A1. Still open: F-06 (verify reports an edit as corruption) |
-| **M4** | GUI shell | **Done, with debt** | Four of the eight PLAN §11 screens exist. The elevation launcher has no caller and isn't hardened (F-07, SR-16). Cancel works every 10,000 files, not per directory (F-13) |
+| **M0** | Skeleton and guardrails | **Done** | Gateway, lint, no-touch test, VHDX harness and the PyInstaller build are all in place. The lint's blind spots (F-08) were closed in A2 |
+| **M1** | Catalog core | **Done, with debt** | Benchmark gate passed at 3M files, decision: one database. The 50M-file run PLAN §7.2 calls for hasn't been done (C1). F-12 (wrong "last scanned") was fixed in A3 |
+| **M2** | Fast enumeration | **Done, with debt** | The parsers, journal logic, batch walker, helper and delta are tested libraries. **Not wired**: every user scan is a full walk (SR-17; B2, B3). The exFAT retrieval-pointer check (PLAN §6.6) has never been done (B4). Direct `$MFT` parsing is deferred, so the NTFS < 5 min budget can't be met (D3) |
+| **M3** | Identity and analysis | **Done** | Every VV identity, redundancy and fixity test passes. F-05 was fixed in A1 and F-06 in A3 |
+| **M4** | GUI shell | **Done, with debt** | All eight PLAN §11 screens now exist (the last four arrived with M6–M8), plus Settings. The elevation launcher is hardened (B1, F-07) and cancel is per directory and per file (A3, F-13), but no screen offers elevation for a scan yet (SR-16; B3) |
 | **M5** | Health and risk | **Done 2026-10-30**, SMART shelved (D11) | Drive metadata, a per-drive AFR model over a pinned Backblaze quarter, P(loss) and expected bytes lost a year, per-drive parallel hashing, and VV-HL-01…04. SMART reads are built but switched off, so every rate is `estimated` at best |
 | **M6** | Curation and FAIR | **Done 2026-10-31** | Collections proposed and confirmed, coverage, version sets, FAIR and NDSA scorecards, name search, the Collections and Duplicates & Versions screens, and their V&V. Rubric wording reviewed and accepted; scorecards report consistency with FAIR and NDSA (D14, closed) |
 | **M7** | Planner | **Done 2026-10-31** | Placement units, cluster-aware footprint and room, a greedy solver with CP-SAT over it when `ortools` is installed, the plan document with its simulation, `drivefusion plan` and the Plan screen, and VV-PLAN-01…04. Batch and zone are costs, not limits (D18): a copy sharing either is planned when it is the safest place with room, and named |
 | **M8** | Exports and polish | **Done 2026-10-31**, signing untested | Export writer and root, per-drive manifests, RO-Crate/DataCite/BagIt packages, mappings and copy-only previews, reports, `drivefusion export` and the Exports screen, portable mode, and VV-EXP-01…05. **Open:** Authenticode needs a certificate (D21); every build is unsigned until one is supplied |
 
 **Use cases (PLAN §2).** Use case 1 (catalog) and use case 2 (confirm redundancy, by copy
-count) work from both the CLI and the GUI. Use case 2's *probability* half, P(loss), needs M5.
-Use case 3 (plan the merge) works end to end: plan (M7), then manifests, packages, mappings and copy-only command previews (M8).
+count and by P(loss) since M5) work from both the CLI and the GUI. Use case 3 (plan the merge)
+works end to end: plan (M7), then manifests, packages, mappings and copy-only command previews
+(M8).
+
+**Since M8** (2026-10-31 to 2026-11-01):
+* **Builds and releases.** Every commit to `main` is built for Windows once the guardrails pass,
+  and published as a GitHub pre-release with an incremented version (README, *Builds and releases*). Every
+  build is unsigned until D21 is answered.
+* **V&V campaigns.** The bench runs named suites over N simulated or real drives, repeated on
+  fresh seeds, with a dashboard, a report folder and a window (`python -m vv gui`; VV.md §8a).
+  [REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md) is the procedure for the physical gate (D5).
+* **Test health.** Two tests that depended on the CI runner's `/tmp` were fixed (#52); a Qt
+  crash at interpreter exit from the V&V window was fixed (#57).
+* **Documents.** Every document ends with the abbreviations it uses, generated and checked by a
+  test (`tools/doc_abbreviations.py`).
 
 ---
 
@@ -55,21 +90,23 @@ PLAN §13 says the performance budgets "are the acceptance criteria for M1–M4�
 milestone failure, not a footnote." Taken literally, M1–M4 aren't closed. This section lists
 every open item so each one can be closed, scheduled, or formally waived.
 
-### 3.1 Open review findings (from REVIEW.md, re-confirmed)
+### 3.1 Review findings (from REVIEW.md)
 
-| ID | Sev. | Why it matters for what comes next |
-|---|---|---|
-| F-05 | Med | **Blocks M5.** P(loss) is a product over *drives*. If two partitions of one disk count as two drives, durability is overstated in exactly the unsafe direction REVIEW §2.3 warns about |
-| F-06 | Med | Fixity incidents feed M6's NDSA Integrity score and M7's `verify` steps. A false alarm there costs credibility |
-| F-10 | Med | **Blocks any schema migration.** M5 adds tables (schema v5). The backup taken before that migration has to be consistent |
-| F-11 | Med | Cloud placeholders drop out of the catalog, so they're invisible to every later report |
-| F-08 | Med | M5 introduces the first legitimate `subprocess` call (smartctl). The lint has to learn to tell an allowlisted call from any other one first, or the guardrail gets weaker just when it's needed |
-| F-07 | Med | Has to be fixed before the helper is wired (§4, Track B) |
-| F-12 | Low | Staleness is a headline PLAN §6.4 promise, and M5's "last seen 12 days ago" uses the same field |
-| F-13 | Low | Cancel granularity; it gets worse once hashing runs per drive in parallel (M5) |
-| F-14 | Low | Hides "access denied" from the helper, so it has to be fixed before wiring |
-| F-15 | Low | Coverage wording |
-| F-16 | Low | TOCTOU in `open_read`; check the handle after opening |
+**None open.** All sixteen are fixed, each with its regression test, and every
+`tools/review_repro.py` probe prints `NOT FOUND` or `caught` (§1.1).
+
+| ID | Sev. | Fixed in | Why it mattered for what came next |
+|---|---|---|---|
+| F-01 … F-04 | High | PRs before this addendum | Reports that overstated protection, and the catalog inside a scanned tree |
+| F-05 | Med | A1 | P(loss) is a product over *drives*; two partitions of one disk counted as two drives would overstate durability |
+| F-06 | Med | A3 | Fixity incidents feed the NDSA Integrity score and the planner's `verify` steps |
+| F-07 | Med | B1 | Had to be fixed before the helper is wired |
+| F-08 | Med | A2 | M5 brought the first legitimate `subprocess` call (smartctl), so the lint had to tell an allowlisted call from any other |
+| F-09 | Med | Docs corrected | Documents had described unwired features as done |
+| F-10 | Med | A2 | Every schema migration since (v5 … v13) is backed up first |
+| F-11 | Med | A3 | Cloud placeholders had dropped out of the catalog |
+| F-12, F-13, F-15 | Low | A3 | "Last scanned", cancel granularity, the coverage line |
+| F-14, F-16 | Low | A2 | Win32 signatures; TOCTOU in `open_read` |
 
 ### 3.2 PLAN commitments with no owner yet
 
@@ -77,15 +114,15 @@ These are in PLAN but not attached to any milestone. This addendum assigns them.
 
 | Item | PLAN | Proposed owner |
 |---|---|---|
-| First-run disclaimer, acknowledged and recorded (SR-25) | §1 | Track A (A4) |
-| Append-only, hash-chained audit log (SR-26) | §7.3, §8.3 R1.2 | Track A (A4). Elevation consent (B) and FAIR R1.2 provenance (M6) both need it |
-| Opening roots by volume GUID path, so a root follows its drive to a new letter | §4 | Track B |
-| `AppData\Local\Temp` default exclusion | §4 | Track A (trivial) |
+| First-run disclaimer, acknowledged and recorded (SR-25) | §1 | Track A (A4). **Done** |
+| Append-only, hash-chained audit log (SR-26) | §7.3, §8.3 R1.2 | Track A (A4). Elevation consent (B) and FAIR R1.2 provenance (M6) both need it. **Done** |
+| Opening roots by volume GUID path, so a root follows its drive to a new letter | §4 | Track B (B4). **Open** |
+| `AppData\Local\Temp` default exclusion | §4 | Track A (A3). **Done** |
 | Portable mode and `platformdirs` location | §12 | Portable mode done in M8.7; the default stays `~/.drivefusion` (D20) |
 | Catalog refused anywhere on a catalogued *volume* (not just inside a root); export root check | §3.2, F-03 | Both done: the volume check in Track A, the export root in M8.1 |
-| Dry-run "likely changed?" probe for exFAT, dirty-volume flag | §6.4, §6.7 | Track B |
-| Sparse/compressed allocated size, Server Dedup flag, ADS | §6.7 | M5 or later. They matter for capacity, so the M7 footprint needs at least allocated size |
-| FTS5 filename and directory-path indexes | §7.4 | M6. The Collections screen needs path search |
+| Dry-run "likely changed?" probe for exFAT, dirty-volume flag | §6.4, §6.7 | Track B (B4). **Open**: discovery reads the dirty flag, but nothing reports it, and there is no probe |
+| Sparse/compressed allocated size, Server Dedup flag, ADS | §6.7 | **Open**, unowned. The M7 footprint uses each destination's cluster size and each file's logical size, not allocated size |
+| FTS5 filename and directory-path indexes | §7.4 | M6 (M6.8). **Done** |
 
 ### 3.3 Unmeasured acceptance budgets (PLAN §13)
 
@@ -102,21 +139,27 @@ These are in PLAN but not attached to any milestone. This addendum assigns them.
 
 ### 3.4 Test-suite health
 
-* **One intermittent failure. Root cause found 2026-10-28 (A3).** It recurred during A3 and
-  was caught with seed `244279970315808`. `test_simulated_drives_fit_the_size_they_were_given`
-  summed file sizes per *path*, so a large file hardlinked three times onto the 12 MB drive
-  was counted three times (12.78 MB) although it was stored once (11.52 MB, within the size).
-  The generator was right and the test was wrong. The test now counts each inode once, and
-  the seed is pinned as a regression test. The bench tests already print their seed on
-  failure, which is what made this one catchable (C0).
-* **GUI suite on Linux** skips silently unless `libEGL` and its companions are installed. CI
-  installs them and asserts that Qt starts, so CI is sound. A local developer can still get a
-  misleading green. README's development section should say so.
+* **Intermittent failures: none known.**
+  * *2026-10-28 (A3):* `test_simulated_drives_fit_the_size_they_were_given` summed file sizes
+    per *path*, so a file hardlinked three times was counted three times. Caught with seed
+    `244279970315808`. The test now counts each inode once, and the seed is pinned as a
+    regression test (C0: the bench tests print their seed on failure).
+  * *2026-10-31 (#52):* two tests depended on the CI runner's `/tmp`. One undid the conftest's
+    system-drive patch with a bare `monkeypatch.undo()`. The other measured access times with
+    a snapshot that itself moved them under `relatime`. Both fixed.
+  * *2026-11-01 (#57):* the V&V window left its campaign thread and worker to Python's garbage
+    collector, and Ubuntu CI once crashed in Qt at interpreter exit. Qt now deletes both when
+    the thread finishes.
+* **GUI suite on Linux** skips unless `libEGL` and its companions are installed. CI installs
+  them and asserts that Qt starts; README's development section says so.
+* **The no-touch test doesn't cover planning or export.** `test_no_touch.py` runs scan ×2,
+  hash, verify, reports and browse; its docstring says M7 planning and M8 export would extend
+  it, but they haven't yet. Both are covered by the V&V bench, whose VV-RO-01 snapshot wraps
+  every phase, export included. **Open:** extend `_cycle` with `plan make` and `export all`.
 * PLAN §14 lists tests that don't exist yet: cross-filesystem parity on VHDX images,
-  rename-on-exFAT on a *real* exFAT volume (VV covers it on simulated drives only),
-  journal invalidation against a real journal (the decision logic is unit-tested), a
-  placeholder with both reparse and recall attributes (F-11), and the scale test. The planner
-  and scorecard tests belong to M6 and M7.
+  rename-on-exFAT on a *real* exFAT volume (VV covers it on simulated drives only), journal
+  invalidation against a real journal (the decision logic is unit-tested), and the scale test
+  (C1). The placeholder with both reparse and recall attributes now exists (F-11, R11).
 
 ---
 
@@ -165,24 +208,25 @@ asks for, flips its `review_repro.py` line to `NOT FOUND`, and leaves the V&V be
 
 **Exit criterion for A:** REVIEW status columns updated. R1–R12 all `NOT FOUND`, except R6
 if A1 is waived. VV green on simulated 3/6/10-drive runs **and** one physical run with at
-least one NTFS and one exFAT device (the PLAN §14.1 gate, re-run on the A build).
+least one NTFS and one exFAT device (the PLAN §14.1 gate, re-run on the A build). **State 2026-11-01:**
+all met except the physical run, which waits on D5's first real-drive campaign.
 
 ### Track B — Wire the fast path (finishing M2 and M4)
 
 | Item | Work | Done when |
 |---|---|---|
 | **B1** F-07 elevation hardening · **Done 2026-10-29** | Before `runas`, verify the helper against a SHA-256 pinned at build time (and Authenticode once signing exists). Build parameters with `subprocess.list2cmdline`. Refuse a helper in a user-writable directory unless its hash matches | Tests for a tampered helper, a wrong hash, and arguments with spaces and quotes **Result:** as planned. The pin is a module inside the main executables' archive, not a file beside the helper. The helper is hashed through a handle that denies write and delete sharing, held until it has been launched, so it can't be swapped between check and launch. A CI step checks the pin against the shipped helper. Authenticode waits for a certificate |
-| **B2** Output channel | A named pipe whose ACL admits only the launching user's SID. The helper writes framed records to it instead of stdout when launched elevated. `helper/client` reads from either | A stand-in child test over a real pipe on the Windows runner |
-| **B3** Wire USN into `scan` | `cmd_scan` and the GUI call `journal.decide()` with the real elevation state. `usn-full` and `usn-delta` run through the helper, and `apply_delta` merges. The GUI Scope screen offers "Fast scan (requires administrator)" per NTFS volume, and the consent goes in the audit log (A4). `scan.method` and `scan.elevated` record what ran | SR-16 and SR-17 Met. Windows CI on an elevated NTFS VHDX: delta after a known set of changes equals a full rescan, and the three journal-invalidation cases (deleted, rotated, cursor purged) fall back to a full pass. The VV bench gains a `--method usn` mode for physical NTFS drives (VV.md §9 lists this as a limit today) |
-| **B4** Follow-ons | Open roots through `\\?\Volume{GUID}\` so a root follows its drive to a new letter. Read the dirty-volume flag and report it. Add the exFAT "likely changed?" probe, labelled as a hint. Do the retrieval-pointer check on real exFAT (PLAN §6.6) and record the result in PLAN, either way | PLAN §4 and §6.4 "as built" notes removed. Retrieval-pointer result written into PLAN §6.6 and the exFAT hashing budget re-stated if needed |
+| **B2** Output channel · **Open** | A named pipe whose ACL admits only the launching user's SID. The helper writes framed records to it instead of stdout when launched elevated. `helper/client` reads from either | A stand-in child test over a real pipe on the Windows runner |
+| **B3** Wire USN into `scan` · **Open** | `cmd_scan` and the GUI call `journal.decide()` with the real elevation state. `usn-full` and `usn-delta` run through the helper, and `apply_delta` merges. The GUI Scope screen offers "Fast scan (requires administrator)" per NTFS volume, and the consent goes in the audit log (A4). `scan.method` and `scan.elevated` record what ran | SR-16 and SR-17 Met. Windows CI on an elevated NTFS VHDX: delta after a known set of changes equals a full rescan, and the three journal-invalidation cases (deleted, rotated, cursor purged) fall back to a full pass. The VV bench gains a `--method usn` mode for physical NTFS drives (VV.md §9 lists this as a limit today) |
+| **B4** Follow-ons · **Open** | Open roots through `\\?\Volume{GUID}\` so a root follows its drive to a new letter. Read the dirty-volume flag and report it. Add the exFAT "likely changed?" probe, labelled as a hint. Do the retrieval-pointer check on real exFAT (PLAN §6.6) and record the result in PLAN, either way | PLAN §4 and §6.4 "as built" notes removed. Retrieval-pointer result written into PLAN §6.6 and the exFAT hashing budget re-stated if needed |
 
 ### Track C — Performance evidence
 
 | Item | Work |
 |---|---|
-| **C0** | Seed reporting in `tests/test_vv.py` (§3.4). Optionally a CI job that runs the bench tests over N seeds |
-| **C1** | `tools/benchmark.py --files 50000000`, with the result recorded in PLAN §7.2. A scheduled (nightly or weekly) workflow at a smaller size that fails on a budget regression. GUI latency assertions (first page < 200 ms) against a benchmark catalog |
-| **C2** | Physical runs on the target hardware: exFAT 10M-file walk, NTFS delta (after B3), quick hash on an external HDD. **Needs the user's drives**. Results go into a new PLAN §13 "measured" column |
+| **C0** · **Done 2026-10-28** | Seed reporting in `tests/test_vv.py` (§3.4). Optionally a CI job that runs the bench tests over N seeds |
+| **C1** · **Open** | `tools/benchmark.py --files 50000000`, with the result recorded in PLAN §7.2. A scheduled (nightly or weekly) workflow at a smaller size that fails on a budget regression. GUI latency assertions (first page < 200 ms) against a benchmark catalog |
+| **C2** · **Open** | Physical runs on the target hardware: exFAT 10M-file walk, NTFS delta (after B3), quick hash on an external HDD. **Needs the user's drives**. Results go into a new PLAN §13 "measured" column |
 
 ### M5 — Health and risk
 
@@ -264,14 +308,19 @@ untouched by the export phase.
 
 ## 5. Recommended next step
 
-**Track A, starting with A2 then A1. *(Track A is complete. Next: Track B, or M5, per D1/D2.)*** A2 (consistent backup, lint closure, audit hook) is
-small, low-risk, and protects every later change, including the M5 migration. A1 (drive
-identity) is the one correctness issue that would make M5's headline number wrong. A3 and A4
-can follow in either order, and C0 is a one-line change that can ride along with any of them.
+*Updated 2026-11-01. Track A and M5–M8 are complete.*
 
-Suggested PR granularity: one PR per item (A1, A2, A3, A4), each with its tests, its
-`review_repro.py` flip, and its REVIEW and PLAN status updates, so the V&V bench result can be
-attached to each one.
+1. **The physical-drive V&V gate** (PLAN §14.1, D5): one campaign on at least one NTFS and one
+   exFAT device, following [REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md). It is the release
+   gate for the first non-pre-release, and the exit criterion Track A still owes.
+2. **Code signing** (D21): a certificate, added as the two repository secrets, makes every
+   later build signed with no code change.
+3. **The no-touch cycle over planning and export** (§3.4): small, and it closes the one place
+   a guarantee rests on the bench alone.
+4. **Track B** (B2 → B3 → B4), if the fast NTFS path is still wanted (D2), and **Track C**
+   (C1, then C2 on your drives).
+
+One PR per item, each with its tests and its REVIEW, PLAN and ROADMAP status updates.
 
 ---
 
@@ -283,14 +332,14 @@ attached to each one.
 | D2 | Is Track B (wiring the elevated USN path) still wanted before M7, given the cold-archive assumption (PLAN §17) and that half the fleet is exFAT anyway? | Yes, after A, alongside M5 |
 | D3 | The NTFS full-enumeration budget (< 5 min, 10M files) needs direct `$MFT` parsing. Waive it, defer it to after M8, or schedule it? | Formally waive for now and record that in PLAN §13 |
 | D4 | Do the §13 budgets have to be *measured on physical drives* (C2) before M1–M4 are called closed, or is the 50M synthetic benchmark plus VHDX timing enough? | Synthetic plus VHDX closes M1–M4. C2 is a release gate |
-| D5 | Can you provide physical test drives (≥ 1 NTFS, ≥ 1 exFAT, ideally an external HDD) for the PLAN §14.1 V&V gate and C2? | Simulated-only until you can |
+| D5 | Can you provide physical test drives (≥ 1 NTFS, ≥ 1 exFAT, ideally an external HDD) for the PLAN §14.1 V&V gate and C2? | **Answered 2026-11-01:** yes; you will run the real-drive campaigns ([REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md)). Simulated-only until the first results arrive |
 | D6 | AFR source for M5.4: Backblaze public drive stats (needs a pinned snapshot) or manufacturer-rated AFR/MTBF? | Backblaze snapshot, with the manufacturer rating as a fallback |
 | D7 | F-05: is a user-confirmed "merge these two volumes into one drive" acceptable as the final word when hardware gives no identity? | Yes, recorded in the audit log |
 | D8 | *Raised while doing A2.* The default catalog is `~\.drivefusion\catalog.db`, on `C:`. Refusing a catalog anywhere on a catalogued volume would therefore refuse the out-of-the-box setup for anyone who scopes a folder on `C:` | **Decided 2026-10-28:** the catalog can't be in a folder being scanned, nor on a drive holding one, except the system drive, where it may sit anywhere outside the scanned folders. Scanning the whole system drive therefore leaves nowhere on it for the catalog. No override. **Done** (PLAN §3.2 as-built note, REVIEW F-03) |
 | D9 | *Raised for M5.3.* SMART needs administrator rights on Windows; how should Drive Fusion get them? | **Decided 2026-10-30:** read health only when running as administrator, and warn and confirm in both cases: without admin, the GUI offers "Restart as administrator" and the CLI says how; with admin, both confirm before each read (`--yes` for scripts). **Done** (M5.3) |
 | D10 | *Raised for M5.3.* Bundle smartctl, or use an installed copy? | **Decided 2026-10-30:** bundle a pinned copy, verified before every run. **Done** (M5.3) |
 | D11 | Keep SMART reads in the product for now? | **Decided 2026-10-30:** shelve them. Turned off, not removed. M5.4–M5.5 go ahead without SMART: the duty and SMART factors are neutral, so a failing drive with pending sectors scores like a healthy one of its age and model, and every risk is `estimated`. Base AFR, age, bus, batch and disaster-zone correlation are unaffected |
-| D12 | *Raised for M5.4.* Backblaze's site can't be reached from the build environment, so no fleet snapshot could be pinned (D6) | **Interim:** ship provisional class rates (HDD 1.5 %, SSD 1.0 %, unknown 1.5 %), labelled as such, so every rate is `estimated` at best. To pin a snapshot, download a Drive Stats quarter and run `python tools/import_backblaze.py --version <quarter> <zip>`; the fleet table then outranks the provisional one with no code change |
+| D12 | *Raised for M5.4.* Backblaze's site can't be reached from the build environment, so no fleet snapshot could be pinned (D6) | **Superseded by D13:** the Windows build downloads and pins the 2025Q2 quarter (M5.4). As first written: **Interim:** ship provisional class rates (HDD 1.5 %, SSD 1.0 %, unknown 1.5 %), labelled as such, so every rate is `estimated` at best. To pin a snapshot, download a Drive Stats quarter and run `python tools/import_backblaze.py --version <quarter> <zip>`; the fleet table then outranks the provisional one with no code change |
 | D13 | *Raised for M5.4.* Should importing Backblaze data be part of install, and runnable from a settings menu? | **Decided 2026-10-30:** yes, without breaking the network rule: the build downloads and pins a quarter so every install has it, and Settings imports a ZIP the user downloaded. The app itself never connects |
 | D14 | *Raised for M6.6.* The FAIR and NDSA rubric files are to be pinned from their primary sources (go-fair.org, ndsa.org), which the build environment may not reach, as with smartmontools and Backblaze | **Closed 2026-10-31.** The rubric files were written from the published texts. The project owner reviewed the wording and accepted it as capturing the sources' principal points; both files are marked `retrieval: reviewed`, dated 2026-10-31. A line-by-line check was attempted and blocked: the environment could not reach nature.com, go-fair.org, ndsa.org or osf.io. With that, the tool's language is *consistent with*, never compliance: scorecards say how far a collection is consistent with the criteria, and certify nothing; the first-run disclaimer says the same (so it must be accepted again). `confirmed` remains for a later line-by-line check |
 | D15 | *Raised for M7.5.* CP-SAT (`ortools`, a large optional dependency) or greedy only? | **Default:** greedy is always there and explainable; CP-SAT is used when `ortools` is installed, warm-started from greedy, so it can only improve on it. The Windows build ships without it unless decided otherwise |
@@ -334,13 +383,13 @@ attached to each one.
 | JSON | JavaScript Object Notation: a plain-text data format |
 | JSON-LD | JSON for Linked Data: JSON with shared vocabularies, as RO-Crate uses |
 | KB | Kilobyte: 10³ bytes |
-| MB | Megabyte: 10⁶ bytes |
 | MiB | Mebibyte: 2²⁰ bytes |
 | MTBF | Mean time between failures |
 | NDSA | National Digital Stewardship Alliance, which publishes the Levels of Digital Preservation |
 | NTFS | New Technology File System: Windows' main filesystem |
 | NVMe | Non-Volatile Memory Express: the fast interface most current SSDs use |
 | PID | Persistent identifier, such as a DOI, that keeps pointing at a dataset |
+| POSIX | Portable Operating System Interface: the Unix system-call standard |
 | PR | Pull request: a proposed change on GitHub |
 | RFC | Request for Comments: an Internet standard, such as RFC 8493 (BagIt) |
 | RO-Crate | Research Object Crate: a way to package research data with JSON-LD metadata |

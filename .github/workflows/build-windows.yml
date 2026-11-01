@@ -1,6 +1,6 @@
 # The Windows build, shared by every push and PR (ci.yml: `build`) and by the
-# longer-kept build of each commit to main (ci.yml: `main-build`), so the two
-# can never drift apart.
+# released build of each commit to main (ci.yml: `main-build`), so the two can
+# never drift apart.
 name: Build Windows executable
 
 on:
@@ -16,6 +16,10 @@ on:
         description: Write the build's identity and file hashes to the job summary
         type: boolean
         default: false
+      version:
+        description: Stamp this release version (X.Y.Z) into the build; empty keeps the source's
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -31,6 +35,13 @@ jobs:
         with:
           python-version: "3.11"
           architecture: x64
+
+      # A release build says which release it is: --version, the window title,
+      # every export, the package metadata and the Windows manifest. The stamp is
+      # made in this job's copy of the source only (tools/release_version.py).
+      - name: Stamp the release version
+        if: ${{ inputs.version != '' }}
+        run: python tools/release_version.py stamp "${{ inputs.version }}"
 
       - name: Install
         run: |

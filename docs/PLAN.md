@@ -8,11 +8,11 @@ produces **plans** for consolidating that content into a traceable, FAIR-aligned
 your data.** Its only outputs are a local catalog database and export documents. See §3 —
 this is enforced by construction and tested, not merely promised.
 
-> **How to read this document.** This is the design. Where the code at M4 differs from it,
-> an **As built** note says so in place. [REVIEW.md](REVIEW.md) traces every safety-relevant
-> requirement to its implementation and test, and lists open findings (F-01 … F-16).
-> [ROADMAP.md](ROADMAP.md) (Plan Addendum A, 2026-10-28) records where the code stands against
-> §15, what the milestones marked done still owe, and the order of work for M5–M8.
+> **How to read this document.** This is the design. Where the code differs from it, an
+> **As built** note says so in place. [REVIEW.md](REVIEW.md) traces every safety-relevant
+> requirement to its implementation and test; all of its findings (F-01 … F-16) are fixed.
+> [ROADMAP.md](ROADMAP.md) (Plan Addendum A, 2026-10-28, status updated 2026-11-01) records
+> where the code stands against §15: M0–M8 are done, and it lists what is still open.
 
 ```mermaid
 flowchart LR
@@ -501,10 +501,13 @@ starts, and running reads are waited for.
 Naive schemas fall over here, so the storage design is driven by row-count arithmetic.
 
 > **As built:** the DDL in this section and §7.3 is the *target* model. The live schema is
-> `core/store/schema.py` (version 4). It implements `drive`, `volume`, `scope_root`, `scan`,
+> `core/store/schema.py` (version 13). It implements `drive`, `volume`, `scope_root`, `scan`,
 > `dir`, `dir_rollup` (files/bytes/subtree counts only), `content`, `file`, `stage_file`,
-> `stage_dir`, `fixity_check` and `audit` (unused). The collection, similarity, version,
-> health and plan tables arrive with M5–M7.
+> `stage_dir`, `fixity_check`, `audit` (hash-chained, A4), `drive_health` (M5.1), `afr_table`
+> (M5.4), `collection`, `collection_rule`, `collection_relation`, `collection_candidate`,
+> `version_set`, `version_member` (M6.1), the FTS5 indexes `file_name_fts` and `dir_name_fts`
+> (M6.8), `plan`, `plan_step` (M7.1) and `export` (M8.1). There is no similarity table: version
+> sets are found by name stem (M6.5).
 
 ### 7.1 Path interning is mandatory
 
@@ -1087,9 +1090,7 @@ Two further rules M4 settled in code:
   you choose a fast scan.
 - Catalog, logs, and config in `platformdirs.user_data_dir("DriveFusion")`, with a **portable
   mode** keeping the catalog beside the executable so the tool and its catalog can travel on a
-  thumb drive to whichever machine the drives are attached to. **As built:** the catalog is
-  `~/.drivefusion/catalog.db`, overridable with `--catalog` or `DRIVEFUSION_CATALOG`; there is
-  no portable mode yet. **As built (ROADMAP M8.7, D20):** `core/locations.py`. `--catalog`, then
+  thumb drive to whichever machine the drives are attached to. **As built (ROADMAP M8.7, D20):** `core/locations.py`. `--catalog`, then
   `DRIVEFUSION_CATALOG`, then portable mode (a `portable` file beside the executable puts the
   catalog in `DriveFusion data` beside it), then `~/.drivefusion`; nothing is moved between
   them, and `status` says which applies. The CLI and GUI now share this default (the GUI had
@@ -1247,10 +1248,10 @@ copies. It is fixed in `Catalog.quick_hash_collisions()`, with regression tests 
 | **M2** | Fast enumeration, **both filesystems** | **Done.** USN and directory-info parsers, FRN path reconstruction, journal validity logic, backend selection and staleness, the parallel batch walker, the `dfscan-helper` binary and its framed protocol, and incremental rescan asserted to agree with a full rescan. **As built:** these are libraries with tests; neither the CLI nor the GUI calls the helper or `apply_delta`, so user scans are always full walks. Deferred with reasons: UAC-prompted elevation (→ M4, needs a GUI to host the prompt), retrieval-pointer read ordering (→ M3, where hashing makes it matter), and direct `$MFT` parsing for the sub-5-minute full NTFS pass (§6.3). |
 | **M3** | Identity & analysis | **Done.** Tier 1 quick hash and tier 2 full hash with layout-ordered reads, content identity in the catalog, duplicate groups, copies counted over distinct physical drives, under-protected and reclamation reports, the `fixity_check` table and a `verify` pass covering **both** tiers (§8.1). `hash`/`report`/`verify` CLI verbs; the no-touch cycle extended to cover all of it. Deferred with reasons: retrieval-pointer read ordering (→ M4, measurable only against real fragmented NTFS volumes, and the batch walker's ordering already recovers most of the benefit); per-drive parallel hashing (→ M5, where drive health tells us which devices tolerate concurrent reads). |
 | **M4** | GUI shell | **Done.** PySide6 app: Scope, Dashboard, Drives and Catalog screens; per-thread catalog connections; cancellable background tasks with progress; a keyset-paged file table and lazily-expanded directory tree; asynchronous row counting; the UAC elevation launcher (`gui/elevation.py`, implemented and unit-tested but **not yet offered by any screen**; §6.5); `drivefusion gui`; two front ends from one build (windowed `DriveFusion.exe`, console `drivefusion.exe`). The no-touch cycle now includes the full browse traversal, and the read-only guarantee is asserted over the *widget tree* — no control may carry a destructive verb. Deferred with reasons: editable drive metadata and SMART sparklines (→ M5, where the durability model gives those fields meaning); retrieval-pointer read ordering (→ M5, measurable only against real fragmented NTFS). |
-| **M5** | Health & risk | smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year |
-| **M6** | Curation & FAIR | collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards |
-| **M7** | Planner | policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation |
-| **M8** | Exports & polish | RO-Crate/BagIt/DataCite, per-drive manifests, naming-template mappings, HTML/CSV reports, signed build |
+| **M5** | Health & risk | **Done 2026-10-30.** smartctl integration, AFR tables, purchase/usage metadata, expected bytes lost per year. **As built:** smartctl is built but shelved (ROADMAP D11), so every failure rate is `estimated` at best; the AFR table is a pinned Backblaze quarter (D13) |
+| **M6** | Curation & FAIR | **Done 2026-10-31.** collection **inference and confirmation queue** (§8.4), membership rules, unfiled bucket and coverage reporting, controlled vocabularies, `standards/` rubric files, FAIR + NDSA scorecards. **As built:** scorecards report consistency with FAIR and NDSA, never compliance (ROADMAP D14) |
+| **M7** | Planner | **Done 2026-10-31.** policy engine, placement units from rollups, greedy + CP-SAT, plan documents with simulation. **As built:** batch and zone are costs, not limits (§9, ROADMAP D18) |
+| **M8** | Exports & polish | **Done 2026-10-31.** RO-Crate/BagIt/DataCite, per-drive manifests, naming-template mappings, HTML/CSV reports, signed build. **As built:** signing runs only when a certificate is supplied, so every build so far is unsigned (ROADMAP D21) |
 
 > **Status at 2026-10-28:** M0–M4 are delivered, but each still owes items: open REVIEW
 > findings F-05 … F-16, the unwired USN path (M2), the unhardened elevation launcher (M4), and
