@@ -145,7 +145,10 @@ class Evaluator:
             self.health_tests(phases["baseline"])
             self.curation_tests(phases["baseline"])
             self.version_tests(phases["baseline"])
-        if "verify" in errors or "verify" not in phases:
+        skipped = set(self.observed.get("skipped_phases", []))
+        if "verify" in skipped:
+            pass                        # no chosen suite judges fixity
+        elif "verify" in errors or "verify" not in phases:
             self.phase_error("verify", errors.get("verify", "phase did not run"))
         else:
             self.fixity_tests(phases["verify"])
@@ -1488,5 +1491,10 @@ class Evaluator:
                       "dataset so a later version can be measured against them")
 
 
-def evaluate(manifest: dict, observed: dict) -> list[dict]:
-    return [asdict(r) for r in Evaluator(manifest, observed).run()]
+def evaluate(manifest: dict, observed: dict, suites=None) -> list[dict]:
+    """Every test's result, or with ``suites`` only those judging their
+    requirements (vv/suites.py), phase errors always included."""
+    from vv import suites as suites_mod
+
+    results = [asdict(r) for r in Evaluator(manifest, observed).run()]
+    return suites_mod.select(results, suites)

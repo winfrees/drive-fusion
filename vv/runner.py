@@ -122,7 +122,7 @@ def export_tree(root: Path) -> dict:
 
 
 def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | None = None,
-        min_copies: int = 2, log=print) -> Path:
+        min_copies: int = 2, log=print, phases: set[str] | None = None) -> Path:
     dataset = dataset.resolve()
     manifest = load_manifest(dataset)
     if overrides:
@@ -147,6 +147,8 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
                     "drives": len(manifest["drives"])},
         "min_copies": min_copies, "started_at": _now(),
         "phases": {}, "errors": {}, "no_touch": {}, "snapshot_entries": {},
+        # Phases left out on purpose, because no chosen suite needs them.
+        "skipped_phases": sorted({"verify", "export"} - set(phases)) if phases else [],
     }
     write_state(dataset, "in-use")
     changed = False
@@ -191,10 +193,10 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
             log("corrupting files silently ...")
             fsops.apply_corruptions(manifest)
             fsops.apply_late_edits(manifest)
-            if not observed["errors"]:
+            if not observed["errors"] and "verify" not in observed["skipped_phases"]:
                 log("verify: fixity pass ...")
                 tool_phase("verify", adapter.verify)
-            if not observed["errors"]:
+            if not observed["errors"] and "export" not in observed["skipped_phases"]:
                 export_root = run_dir / "exports"
                 export_root.mkdir()
                 log("export: bundles into the run folder ...")
