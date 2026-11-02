@@ -700,6 +700,40 @@ def test_evaluator_catches_an_understated_footprint(completed_run) -> None:
         == ev.FAIL
 
 
+def _as_physical(manifest, observed, scale_free=1.0):
+    """The same run as if on real drives: no planted sizes, the space measured instead."""
+    real = copy.deepcopy(manifest)
+    real["mode"] = "physical"
+    measured = {}
+    for d in real["drives"]:
+        cap = d.pop("capacity_bytes", None)
+        base = d.pop("baseline_bytes", 0)
+        if cap:
+            measured[d["id"]] = {"capacity_bytes": cap, "free_bytes": int((cap - base) * scale_free),
+                                 "cluster_bytes": d.get("cluster_bytes")}
+    obs = copy.deepcopy(observed)
+    obs["space_measured"] = measured
+    return real, obs
+
+
+def test_plan_room_on_real_drives_is_judged_on_the_measured_space(fleet_run) -> None:
+    """Real drives plant no size: R-PLAN-02 judges the plan against the space the
+    bench measured just before it, not against a size that was never planted."""
+    manifest, observed, results = fleet_run
+    if not any(st["kind"] == "copy" for st in _plan(observed)["steps"]):
+        pytest.skip("no copy was planned in this dataset")
+    key = ("VV-PLAN-02", "rescan")
+    simulated = _verdicts(results, phase="rescan")[key]["verdict"]
+    real, obs = _as_physical(manifest, observed)
+    assert _verdicts(ev.evaluate(real, obs))[key]["verdict"] == simulated == ev.PASS
+    # Without a measurement there is still no known size, and that is a failure.
+    del obs["space_measured"]
+    assert _verdicts(ev.evaluate(real, obs))[key]["verdict"] == ev.FAIL
+    # A drive that has less room than the plan assumed is caught.
+    real, obs = _as_physical(manifest, observed, scale_free=0.0)
+    assert _verdicts(ev.evaluate(real, obs))[key]["verdict"] == ev.FAIL
+
+
 def test_evaluator_catches_a_shortfall_left_unsaid(completed_run) -> None:
     manifest, observed, _ = completed_run
     if not any(u["short"] for u in _plan(observed)["units"]):

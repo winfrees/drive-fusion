@@ -62,6 +62,7 @@ class DriveFusionAdapter:
         self.health_drives: set[int] = set()
         self.smart_argvs: list[list[str]] = []
         self.min_copies = 2
+        self.mode = "simulated"
 
     def close(self) -> None:
         self.catalog.close()
@@ -70,6 +71,7 @@ class DriveFusionAdapter:
 
     def register(self, manifest: dict) -> None:
         cat = self.catalog
+        self.mode = manifest["mode"]
         existing: list[str] = []
         seen_devices: dict[str, str] = {}
         for drive in manifest["drives"]:
@@ -180,6 +182,8 @@ class DriveFusionAdapter:
 
     def scan(self) -> dict:
         out = {}
+        if self.mode == "physical":
+            self._bind()
         for drive, info in self.roots.items():
             result = self.scan_mod.scan_root(
                 self.catalog, root_path=info["root"], root_id=info["root_id"],
@@ -193,6 +197,22 @@ class DriveFusionAdapter:
                           "vanished": result["merged"]["vanished"],
                           "coverage": result["coverage"]}
         return out
+
+    def _bind(self) -> None:
+        """Before a pass over real drives, check each root is on its catalogued
+        volume, as `drivefusion scan` does, which also refreshes the volume's free
+        space. Simulated drives are folders on one disk with planted sizes, so
+        they are never bound."""
+        try:
+            scope = importlib.import_module("drivefusion.core.scope")
+            bind_roots = scope.bind_roots
+        except (ImportError, AttributeError):  # versions before REVIEW F-01
+            return
+        wanted = {info["root_id"] for info in self.roots.values()}
+        binding = bind_roots(self.catalog, [r for r in self.catalog.scope_roots()
+                                            if r.id in wanted])
+        if binding.refused:
+            raise AdapterError("; ".join(binding.refusal_lines()))
 
     def hash(self) -> dict:
         c = self.identity.hash_pass(self.catalog)

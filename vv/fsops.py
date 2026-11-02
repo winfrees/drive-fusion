@@ -103,6 +103,34 @@ def check_free_space(needs: dict[str, int]) -> None:
                 "--files-per-drive, or another disk.")
 
 
+def volume_space(path: str) -> dict:
+    """The size, free space and cluster size of the filesystem holding ``path``,
+    as the operating system reports them: the bench's own measurement, never the
+    tool's (R-PLAN-02 on physical drives). The cluster size is None where it
+    can't be read."""
+    probe = _existing(path)
+    usage = shutil.disk_usage(probe)
+    cluster = None
+    if WINDOWS:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        buffer = ctypes.create_unicode_buffer(1024)
+        kernel32.GetVolumePathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        kernel32.GetVolumePathNameW.restype = wintypes.BOOL
+        kernel32.GetDiskFreeSpaceW.argtypes = [wintypes.LPCWSTR] + [ctypes.POINTER(wintypes.DWORD)] * 4
+        kernel32.GetDiskFreeSpaceW.restype = wintypes.BOOL
+        if kernel32.GetVolumePathNameW(os.path.abspath(probe), buffer, len(buffer)):
+            sectors, sector_bytes, free_clusters, clusters = (wintypes.DWORD() for _ in range(4))
+            if kernel32.GetDiskFreeSpaceW(buffer.value, ctypes.byref(sectors), ctypes.byref(sector_bytes),
+                                          ctypes.byref(free_clusters), ctypes.byref(clusters)):
+                cluster = sectors.value * sector_bytes.value or None
+    else:
+        cluster = os.statvfs(probe).f_bsize or None
+    return {"capacity_bytes": usage.total, "free_bytes": usage.free, "cluster_bytes": cluster}
+
+
 # -- capability probing ---------------------------------------------------
 
 def probe_capabilities(root: str) -> dict:

@@ -178,8 +178,14 @@ def run(dataset: Path, *, src: str | None = None, overrides: dict[str, str] | No
         def rescan() -> dict:
             scan = adapter.scan()
             hashed = adapter.hash()
-            return {**adapter.collect(min_copies), "scan": scan, "hash": hashed,
-                    "plan": adapter.plan()}
+            collected = adapter.collect(min_copies)
+            if manifest["mode"] == "physical":
+                # A real drive's room is the room it has now, which no manifest
+                # knows: the bench measures it through the OS, independently of
+                # the tool, just before the tool plans (R-PLAN-02).
+                observed["space_measured"] = {
+                    d["id"]: fsops.volume_space(d["root"]) for d in manifest["drives"]}
+            return {**collected, "scan": scan, "hash": hashed, "plan": adapter.plan()}
 
         # A baseline that never ran leaves nothing to compare a rescan with,
         # and stopping here keeps the dataset unspent for the next attempt.
