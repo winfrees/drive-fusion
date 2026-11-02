@@ -1086,11 +1086,23 @@ class Evaluator:
 
         r = self.new("VV-PLAN-02", *titles["VV-PLAN-02"], phase)
         used: dict[str, int] = defaultdict(int)
+        # A simulated drive's size is the one it was generated to fit; a real
+        # one's is what the bench measured through the OS just before the plan.
+        measured = self.observed.get("space_measured") or {}
+        space = {}
+        for drive_id, d in drives.items():
+            m = measured.get(drive_id)
+            if d.get("capacity_bytes"):
+                space[drive_id] = {"capacity_bytes": d["capacity_bytes"],
+                                   "free_bytes": d["capacity_bytes"] - d.get("baseline_bytes", 0),
+                                   "cluster_bytes": d.get("cluster_bytes")}
+            elif m and m.get("capacity_bytes"):
+                space[drive_id] = m
         for st in copies:
             dst = drives.get(st["dst"])
             if dst is None or st["unit"] not in units:
                 continue
-            cluster = dst.get("cluster_bytes") or self.DEFAULT_CLUSTER
+            cluster = (space.get(st["dst"]) or {}).get("cluster_bytes") or self.DEFAULT_CLUSTER
             fp = sum(-(-exp["files"][k]["size"] // cluster) * cluster
                      for k in members[st["unit"]] if exp["files"][k]["size"])
             used[st["dst"]] += fp
@@ -1099,11 +1111,11 @@ class Evaluator:
                 r.fail(f"copy step {st['seq']}: footprint {st['footprint']:,} bytes on "
                        f"{st['dst']}, independently {fp:,} at {cluster:,}-byte clusters")
         for drive_id, fp in sorted(used.items()):
-            d = drives[drive_id]
-            if not d.get("capacity_bytes"):
+            d = space.get(drive_id)
+            if d is None:
                 r.fail(f"{drive_id}: planned as a destination with no known size")
                 continue
-            free = d["capacity_bytes"] - d.get("baseline_bytes", 0)
+            free = d["free_bytes"]
             room = free - max(int(d["capacity_bytes"] * self.RESERVE_SHARE), self.RESERVE_FLOOR)
             if fp > room:
                 r.fail(f"{drive_id}: {fp:,} bytes planned onto {room:,} of room "

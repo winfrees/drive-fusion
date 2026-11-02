@@ -119,6 +119,33 @@ def test_a_root_on_its_catalogued_volume_is_bound(tmp_path: Path, monkeypatch) -
     assert len(binding.root_ids) == 1
 
 
+def test_binding_a_root_refreshes_its_volume_space(tmp_path: Path, monkeypatch) -> None:
+    """Free space was recorded only when a root was added, and the planner sizes
+    copies by it: each pass that binds a root now records the space seen today."""
+    from drivefusion.core import discovery
+    from drivefusion.core.discovery import VolumeInfo
+    from drivefusion.core.scope import bind_roots
+
+    catalog, _root = _catalog_with_root(tmp_path, "vol:A")
+    with catalog:
+        catalog.conn.execute("UPDATE volume SET capacity_bytes = 1000, free_bytes = 900, "
+                             "cluster_bytes = 4096")
+        catalog.conn.commit()
+        monkeypatch.setattr(discovery, "identify_volume", lambda path: VolumeInfo(
+            volume_guid="vol:A", capacity_bytes=1000, free_bytes=150, cluster_bytes=None))
+        assert bind_roots(catalog, catalog.scope_roots()).refused == []
+        row = catalog.conn.execute("SELECT capacity_bytes, free_bytes, cluster_bytes FROM volume"
+                                   ).fetchone()
+        # What discovery could read is updated; what it could not stays as it was.
+        assert tuple(row) == (1000, 150, 4096)
+
+        # A refused root (another drive at the path) records nothing of that drive.
+        monkeypatch.setattr(discovery, "identify_volume", lambda path: VolumeInfo(
+            volume_guid="vol:B", capacity_bytes=5, free_bytes=1))
+        assert bind_roots(catalog, catalog.scope_roots()).bound == []
+        assert catalog.conn.execute("SELECT free_bytes FROM volume").fetchone()[0] == 150
+
+
 def test_another_drive_at_the_same_path_is_refused(tmp_path: Path, monkeypatch) -> None:
     """Drive B given drive A's letter must not be read as drive A."""
     from drivefusion.core import discovery
