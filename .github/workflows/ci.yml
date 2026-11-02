@@ -154,6 +154,10 @@ jobs:
           To test it on your own drives, run \`DriveFusion-TestBench.exe\` from the same folder
           (docs/REAL-DRIVE-TESTING.md); unlike Drive Fusion, the test bench writes test data.
           Built from \`$GITHUB_SHA\`.
+
+          Released under the MIT License (\`LICENSE.txt\`). Use is at your own risk, with no warranty
+          and for no particular purpose; see \`DISCLAIMER.md\` in the zip for the full terms,
+          including limitation of liability and indemnification.
           EOF
 
       # The tag is made here, on the commit that was built. A re-run of a

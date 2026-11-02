@@ -85,6 +85,12 @@ jobs:
       - name: Build one-folder executable
         run: pyinstaller packaging/drivefusion.spec --noconfirm --clean
 
+      # The license and the terms of use travel with the program.
+      - name: Add the license and terms of use
+        run: |
+          Copy-Item LICENSE dist\DriveFusion\LICENSE.txt
+          Copy-Item DISCLAIMER.md dist\DriveFusion\DISCLAIMER.md
+
       - name: Sign the main executables, when configured
         run: python tools/sign.py dist/DriveFusion/DriveFusion.exe dist/DriveFusion/drivefusion-cli.exe dist/DriveFusion/DriveFusion-TestBench.exe dist/DriveFusion/drivefusion-vv.exe
 

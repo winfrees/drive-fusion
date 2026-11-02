@@ -289,6 +289,19 @@ mutating filesystem call. `tools/ro_lint.py` enforces it, the test suite asserts
 gates on it. If you find yourself needing to write to a catalogued volume, the answer is that
 the tool doesn't do that. It emits a plan describing what *you* might do.
 
+## License and terms of use
+
+Drive Fusion is released under the [MIT License](LICENSE). Using it also means accepting the
+[Disclaimer and Terms of Use](DISCLAIMER.md):
+
+* you use it at your own risk;
+* it comes with no warranty and for no particular purpose;
+* its results are estimates to verify before acting on them;
+* the authors' liability is limited, and you indemnify them.
+
+Both files ship in every release zip. The first-run disclaimer points to them; changing its
+wording means every catalog must accept it again.
+
 ## Documentation
 
 | Document | Contents |
@@ -323,6 +336,7 @@ the tool doesn't do that. It emits a plan describing what *you* might do.
 | KiB | Kibibyte: 2¹⁰ bytes |
 | MB | Megabyte: 10⁶ bytes |
 | MBR | Master Boot Record: the older disk partition layout |
+| MIT | Massachusetts Institute of Technology, as in the MIT License Drive Fusion is released under |
 | NDSA | National Digital Stewardship Alliance, which publishes the Levels of Digital Preservation |
 | NTFS | New Technology File System: Windows' main filesystem |
 | OS | Operating system |

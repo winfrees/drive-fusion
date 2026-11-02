@@ -24,7 +24,11 @@ TEXT = (
     "Do not add such data to its scan scope. The tool assists with documentation and "
     "preservation planning. Its scorecards report how far your records are consistent with "
     "FAIR and NDSA criteria; they do not establish that any requirement is met. "
-    "Responsibility for meeting institutional, funder, and legal requirements remains with you."
+    "Responsibility for meeting institutional, funder, and legal requirements remains with you. "
+    "Drive Fusion is provided as is, without warranty of any kind, for no particular purpose; "
+    "you use it at your own risk, and should verify its results before acting on them. "
+    "The full terms, including limitation of liability and indemnification, are in "
+    "DISCLAIMER.md, which comes with the program."
 )
 
 ENVIRONMENT_VARIABLE = "DRIVEFUSION_ACCEPT_DISCLAIMER"
