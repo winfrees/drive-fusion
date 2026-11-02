@@ -204,6 +204,20 @@ nothing. `drivefusion standards list` shows how each was checked.
 **Every merged PR is released.** Each commit to `main` is built for Windows once the guardrail
 tests pass, and published as a GitHub **pre-release** on the repository's Releases page, with
 `DriveFusion-v<version>-windows-x64.zip`, `SHA256SUMS.txt` and notes listing the merged PRs.
+The zip holds five programs:
+
+| Program | What it is |
+|---|---|
+| `DriveFusion.exe` | Drive Fusion's window |
+| `drivefusion-cli.exe` | Drive Fusion on the command line (the `drivefusion` commands) |
+| `dfscan-helper.exe` | The elevated NTFS helper, started by Drive Fusion, never by you |
+| `DriveFusion-TestBench.exe` | The V&V test bench's window, for testing this build on your drives ([docs/REAL-DRIVE-TESTING.md](docs/REAL-DRIVE-TESTING.md)) |
+| `drivefusion-vv.exe` | The test bench on the command line (the `python -m vv` commands) |
+
+The test bench tests the Drive Fusion beside it. **Unlike Drive Fusion, it writes**: test data
+only, into a new `DriveFusion-VV` folder it makes on each drive and removes afterwards, refusing
+any folder that already holds something. Every build runs the bundled bench once on simulated
+drives before it is published.
 The CI run's summary also gives the version and each executable's SHA-256, and keeps the build
 as an artifact for 90 days. Builds of other branches and PRs are kept two weeks as
 **DriveFusion-windows-x64**. `.github/workflows/build-windows.yml` is the one build both use.
@@ -247,7 +261,9 @@ pyinstaller packaging/drivefusion.spec --noconfirm --clean
   the glossary doesn't define, or when an appendix is out of date: add the term there and run
   the script with `--write`.
 * CI runs the lint and tests on Windows and Linux, then builds and smoke-tests three Windows
-  executables: windowed `DriveFusion.exe`, console `drivefusion-cli.exe`, and `dfscan-helper.exe`.
+  executables: windowed `DriveFusion.exe`, console `drivefusion-cli.exe`, `dfscan-helper.exe`, and
+  the test bench's `DriveFusion-TestBench.exe` and `drivefusion-vv.exe`, then runs the bundled
+  bench on simulated drives.
   A check reads each one's header, so a missing or swapped program fails the build.
 
 ### V&V tests

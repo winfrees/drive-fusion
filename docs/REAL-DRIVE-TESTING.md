@@ -2,8 +2,13 @@
 
 This is the procedure for running the V&V bench (docs/VV.md) on real, physically separate
 drives, with data the bench generates, and for reading and sending back the results.
-Everything here runs from the **V&V dashboard** (`python -m vv gui`), or the same steps from
-the command line.
+Everything here runs from the **V&V dashboard**, or the same steps from the command line. The
+dashboard comes two ways:
+
+* **From a release, with no Python** (§1a): `DriveFusion-TestBench.exe`, in every release zip
+  beside `DriveFusion.exe`. It tests the Drive Fusion in the same folder, so what you test is
+  exactly what you would run.
+* **From the source code** (§1b): `python -m vv gui`, testing the Drive Fusion in that checkout.
 
 **What happens to your drives.** The bench writes test data, and only test data, into a new
 folder it creates on each drive, `DriveFusion-VV`. Between Drive Fusion's scans it changes
@@ -15,16 +20,23 @@ test folder before and after each of Drive Fusion's phases (VV-RO-01).
 
 ## 1. What you need
 
-- **Windows 10 or 11.** Linux and macOS also work, for the parts that don't need NTFS.
-- **Python 3.11 or newer**, from python.org; tick "Add python.exe to PATH" when installing.
-- **This repository**, downloaded or cloned. Then, in a terminal in its folder:
+- **Windows 10 or 11.** From the source code, Linux and macOS also work, for the parts that
+  don't need NTFS.
+- **The test bench**, one of:
+
+  **1a. A release (recommended).** On the repository's **Releases** page, download
+  `DriveFusion-v<version>-windows-x64.zip` from the newest release, and check it against that
+  release's `SHA256SUMS.txt` (`Get-FileHash <zip>` in PowerShell). Unzip it anywhere, for
+  example `C:\DriveFusion`. Releases are pre-releases and unsigned for now, so Windows SmartScreen
+  warns the first time: choose *More info*, then *Run anyway*. Every release's build has
+  already run the bench once, on simulated drives, before it was published.
+
+  **1b. The source code.** Python 3.11 or newer, from python.org (tick "Add python.exe to
+  PATH"), and this repository, downloaded or cloned. Then, in a terminal in its folder:
 
   ```
   python -m pip install -e ".[gui]"
   ```
-
-  The bench tests Drive Fusion's own code from this folder: the same code the Windows build
-  packages. CI checks separately that the build runs.
 
 - **Drives: at least two separate physical devices, ideally three or more.** Two folders on
   one drive, or two partitions of one disk, count as one copy, and the bench refuses them.
@@ -46,6 +58,8 @@ The results go on the **system drive** (`C:`) by default. Keep them off the driv
 test: Drive Fusion won't keep its catalog on a drive it scans.
 
 ## 2. Running from the dashboard
+
+Double-click **`DriveFusion-TestBench.exe`** in the release folder, or from the source code run:
 
 ```
 python -m vv gui
@@ -85,15 +99,18 @@ earlier campaign back.
 
 ## 3. Running from the command line
 
-The same campaign, without the window:
+The same campaign, without the window, in a terminal in the release folder:
 
 ```
-python -m vv campaign --out C:\vv\real-1 --drive-path E:\ --drive-path F:\ --drive-path G:\ --iterations 5
+.\drivefusion-vv.exe campaign --out C:\vv\real-1 --drive-path E:\ --drive-path F:\ --drive-path G:\ --iterations 5
 ```
 
-Add `--suite fixity --suite exports` (repeatable) to choose suites; `python -m vv suites`
+From the source code, `python -m vv` takes the same commands in place of `drivefusion-vv.exe`.
+
+Add `--suite fixity --suite exports` (repeatable) to choose suites; `drivefusion-vv.exe suites`
 lists them. Add `--keep` to leave each run's data on the drives for inspection, then remove
-it later with `python -m vv clean <dataset>`. The exit status is 0 when everything passes.
+it later with `drivefusion-vv.exe clean <dataset>`. The exit status is 0 when everything
+passes.
 
 ## 4. Reading the results
 
@@ -129,7 +146,7 @@ campaign-…/
 |---|---|
 | Hardlinks (VV-RED-02) | Include an NTFS drive |
 | Symlinks (VV-SC-03) | NTFS, and either run the terminal as administrator or turn on Developer Mode (Settings → For developers) |
-| Partitions of one disk (R-RED-06, R-EXP-02) | Covered by the simulated drives (`python -m vv campaign --out … --drives 4`); on real drives use whole devices |
+| Partitions of one disk (R-RED-06, R-EXP-02) | Covered by the simulated drives (`drivefusion-vv.exe campaign --out … --drives 4`); on real drives use whole devices |
 | Large clusters | An exFAT drive bigger than 32 GB (128 KiB clusters) |
 
 ## 6. Sending results back
@@ -146,7 +163,7 @@ the bench's generated files are ever listed, and those have been removed from th
 | *can't identify this device* | The enclosure hides the serial. Try another port or enclosure |
 | *would leave less than … free* | Not enough space. Free some, or lower **Files per drive** |
 | *already holds something* | The folder isn't empty. The bench never writes into a used folder |
-| A run is **ERROR** after unplugging | Reconnect the drive. The remaining runs continue; leftover test data can be removed with `python -m vv clean` on that run's dataset (kept only with `--keep`) |
+| A run is **ERROR** after unplugging | Reconnect the drive. The remaining runs continue; leftover test data can be removed with `drivefusion-vv.exe clean` on that run's dataset (kept only with `--keep`) |
 
 <!-- abbreviations: generated by tools/doc_abbreviations.py; edit the definitions there -->
 
@@ -154,7 +171,6 @@ the bench's generated files are ever listed, and those have been removed from th
 
 | Abbreviation | Meaning |
 |---|---|
-| CI | Continuous integration: the automated checks and builds run on GitHub for every push |
 | exFAT | Extended File Allocation Table: a filesystem common on USB sticks and SD cards |
 | FAIR | Findable, Accessible, Interoperable, Reusable: the FAIR Guiding Principles for research data |
 | GB | Gigabyte: 10⁹ bytes |

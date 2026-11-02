@@ -121,6 +121,24 @@ print(f"pinned smartctl.exe: {SMARTCTL_SHA256 or 'not bundled'}")
 # differ by more than case: Windows treats DriveFusion.exe and drivefusion.exe as
 # one file, and the second build would overwrite the first
 # (tools/check_executables.py checks the result).
+# Nothing may pull in a network, GUI-toolkit or packaging module we did not ask
+# for. PySide6 brings Qt's own web and multimedia stacks along unless they are
+# named here, which would roughly double the download for code that never runs:
+# this tool renders tables, not video.
+analysis_excludes = [
+    "tkinter",
+    "test",
+    "unittest",
+    "pydoc_data",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtMultimedia",
+    "PySide6.QtQuick",
+    "PySide6.Qt3DCore",
+    "PySide6.QtCharts",
+    "PySide6.QtDataVisualization",
+]
+
 analysis = Analysis(
     [os.path.join(ROOT, "drivefusion", "__main__.py")],
     pathex=[ROOT, PIN_DIR],
@@ -142,23 +160,7 @@ analysis = Analysis(
     ],
     hookspath=[],
     runtime_hooks=[],
-    # Nothing may pull in a network, GUI-toolkit or packaging module we did not
-    # ask for. PySide6 brings Qt's own web and multimedia stacks along unless they
-    # are named here, which would roughly double the download for code that never
-    # runs: this tool renders tables, not video.
-    excludes=[
-        "tkinter",
-        "test",
-        "unittest",
-        "pydoc_data",
-        "PySide6.QtWebEngineCore",
-        "PySide6.QtWebEngineWidgets",
-        "PySide6.QtMultimedia",
-        "PySide6.QtQuick",
-        "PySide6.Qt3DCore",
-        "PySide6.QtCharts",
-        "PySide6.QtDataVisualization",
-    ],
+    excludes=analysis_excludes,
     noarchive=False,
 )
 
@@ -206,9 +208,78 @@ cli_exe = EXE(
     ),
 )
 
+# The V&V test bench (docs/VV.md), so a release can be tested on real drives
+# without Python. Unlike Drive Fusion it writes, but only test data: each drive
+# gets a new DriveFusion-VV folder the bench creates and removes (vv/fsops.py).
+# It drives the Drive Fusion bundled beside it in-process, importing its modules
+# by name, so the whole of both packages is collected.
+from PyInstaller.utils.hooks import collect_submodules
+
+bench_analysis = Analysis(
+    [os.path.join(SPECPATH, "entry", "testbench_cli.py"),
+     os.path.join(SPECPATH, "entry", "testbench_window.py")],
+    pathex=[ROOT, PIN_DIR],
+    binaries=bundled_binaries,
+    datas=bundled_datas,
+    hiddenimports=["drivefusion_helper_pin"] + collect_submodules("drivefusion")
+    + collect_submodules("vv"),
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=analysis_excludes,
+    noarchive=False,
+)
+bench_pyz = PYZ(bench_analysis.pure)
+bench_cli_script, bench_window_script = (
+    [s for s in bench_analysis.scripts if s[0] != name] for name in
+    ("testbench_window", "testbench_cli"))
+
+bench_cli_exe = EXE(
+    bench_pyz,
+    bench_cli_script,
+    [],
+    exclude_binaries=True,
+    name="drivefusion-vv",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    manifest=(
+        os.path.join(SPECPATH, "drivefusion.manifest") if IS_WINDOWS else None
+    ),
+)
+
+bench_window_exe = EXE(
+    bench_pyz,
+    bench_window_script,
+    [],
+    exclude_binaries=True,
+    name="DriveFusion-TestBench",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    manifest=(
+        os.path.join(SPECPATH, "drivefusion.manifest") if IS_WINDOWS else None
+    ),
+)
+
 collect = COLLECT(
     gui_exe,
     cli_exe,
+    bench_cli_exe,
+    bench_window_exe,
+    bench_analysis.binaries,
+    bench_analysis.datas,
     analysis.binaries,
     analysis.datas,
     helper_exe,

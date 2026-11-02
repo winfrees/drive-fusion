@@ -475,7 +475,10 @@ before anything is written; a run that crashes is ERROR and the campaign carries
 drives (simulated count and size, or a folder per real drive), suites, runs, seed, keep;
 Run and Stop after this run; a live log and a requirement × run grid coloured by verdict;
 Open dashboard, Open folder, Open campaign…. Real-drive testing is described step by step in
-[REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md).
+[REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md). The Windows release bundles the bench as `DriveFusion-TestBench.exe`
+(the window) and `drivefusion-vv.exe` (these commands); frozen, it tests the Drive Fusion in
+the same folder (`observed.json` records its version and location), and every build runs one
+simulated campaign with it before release.
 
 ## 9. Limitations and extending
 

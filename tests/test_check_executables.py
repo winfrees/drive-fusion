@@ -27,7 +27,7 @@ def test_spec_names_differ_by_more_than_case():
     spec = (ROOT / "packaging" / "drivefusion.spec").read_text(encoding="utf-8")
     names = re.findall(r'^\s+name="([^"]+)",', spec, re.M)
     exes = names[:-1]                       # the last is the COLLECT folder
-    assert len(exes) == 3
+    assert len(exes) == len(ce.EXPECTED)
     assert len({n.lower() for n in exes}) == len(exes), exes
     assert {f"{n}.exe" for n in exes} == set(ce.EXPECTED)
 

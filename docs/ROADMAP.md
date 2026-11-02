@@ -77,6 +77,8 @@ works end to end: plan (M7), then manifests, packages, mappings and copy-only co
 * **V&V campaigns.** The bench runs named suites over N simulated or real drives, repeated on
   fresh seeds, with a dashboard, a report folder and a window (`python -m vv gui`; VV.md §8a).
   [REAL-DRIVE-TESTING.md](REAL-DRIVE-TESTING.md) is the procedure for the physical gate (D5).
+  Every release ships the bench as `DriveFusion-TestBench.exe` and `drivefusion-vv.exe`, testing
+  the Drive Fusion beside it with no Python needed, and each build runs it once before release.
 * **Test health.** Two tests that depended on the CI runner's `/tmp` were fixed (#52); a Qt
   crash at interpreter exit from the V&V window was fixed (#57).
 * **Documents.** Every document ends with the abbreviations it uses, generated and checked by a

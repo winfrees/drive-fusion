@@ -182,7 +182,7 @@ IGNORE = {
     # product and format names, not abbreviations
     "BagIt", "DataCite", "DriveFusion", "GitHub", "JUnit", "OneDrive", "PyInstaller", "PySide6",
     "SourceForge", "SQLite", "macOS", "WinError", "Payload-Oxum", "CreateFileW", "JavaScript",
-    "NumPy", "QuickTime", "OR-Tools",
+    "NumPy", "QuickTime", "OR-Tools", "PowerShell", "SmartScreen",
 }
 
 _CODE_FENCE = re.compile(r"^(`{3,}|~{3,}).*?^\1", re.S | re.M)

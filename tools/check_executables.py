@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a Windows build holds each executable, by its exact name and kind.
 
-The build ships three programs in one folder. Two of them once differed only in
+The build ships five programs in one folder. Two of them once differed only in
 case (``DriveFusion.exe`` and ``drivefusion.exe``), which Windows treats as one
 name: the second build overwrote the first, so the windowed program was lost
 and every check that looked for it by name still passed. This reads the folder
@@ -22,6 +22,8 @@ EXPECTED = {
     "DriveFusion.exe": GUI,            # the window
     "drivefusion-cli.exe": CONSOLE,    # the command line
     "dfscan-helper.exe": CONSOLE,      # the elevated helper
+    "DriveFusion-TestBench.exe": GUI,  # the V&V test bench window
+    "drivefusion-vv.exe": CONSOLE,     # the V&V test bench command line
 }
 _NAMES = {GUI: "windowed", CONSOLE: "console"}
 
