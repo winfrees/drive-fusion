@@ -31,12 +31,13 @@ def test_make_show_and_list(tmp_path: Path, capsys) -> None:
 
     assert run("plan", "make", "--greedy", "--name", "First") == 0
     out = capsys.readouterr().out
-    assert "First — plan 1" in out and "[copy]" in out and "ARCHIVE-2" in out
+    assert "First — plan 1" in out and "copy and verify" in out and "ARCHIVE-2" in out
 
     assert run("plan", "make", "--greedy", "--json") == 0
     data = json.loads(capsys.readouterr().out)
     assert data["id"] == 2 and data["solver"] == "greedy"
-    assert [s["kind"] for s in data["steps"]] == ["copy", "verify"]
+    assert [s["kind"] for s in data["steps"]] == ["copy"]
+    assert data["steps"][0]["round"] == 1 and "verify" in data["copy_and_verify"]
 
     assert run("plan", "list") == 0
     listed = capsys.readouterr().out.splitlines()

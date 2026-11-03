@@ -30,18 +30,18 @@ def fleet(tmp_path: Path):
         yield f
 
 
-def test_a_plan_is_copies_then_their_verification(fleet) -> None:
+def test_a_plan_is_copies_each_verified_in_its_own_step(fleet) -> None:
+    """One step per copy, copied then verified: no separate verify step."""
     doc = document.make(fleet.c, today=None, use_cpsat=False)
     kinds = [s.kind for s in doc.steps]
-    assert kinds.count("copy") == 2 and kinds.count("verify") == 2
+    assert kinds.count("copy") == 2 and "verify" not in kinds
+    assert "verify" in document.COPY_AND_VERIFY
     for seq, step in enumerate(doc.steps, start=1):
-        if step.kind == "verify":
-            dep = doc.steps[step.depends_on[0] - 1]
-            assert dep.kind == "copy" and dep.unit == step.unit and dep.dst_path == step.dst_path
         if step.kind == "copy":
             assert step.dst_drive_id == fleet.b and step.src_drive_id == fleet.a
             assert step.dst_path.startswith("Drive Fusion copies/ARCHIVE-1/")
             assert step.risk_delta < 0 and step.rationale
+            assert len(step.rationale) < 140, step.rationale        # said briefly
             assert step.footprint_bytes % 131072 == 0
     assert {"remove", "delete", "move"}.isdisjoint(kinds)
 
@@ -96,12 +96,13 @@ def test_saved_plans_render_as_json_and_text(fleet) -> None:
     data = document.to_json(fleet.c, plan_id)
     assert data["name"] == "First" and data["status"] == "draft"
     assert len(data["steps"]) == len(doc.steps)
-    assert data["steps"][1]["depends_on"] == [1]
+    # Both copies go from ARCHIVE-1 to ARCHIVE-2, so they can't run together.
+    assert [st["round"] for st in data["steps"] if st["kind"] == "copy"] == [1, 2]
     assert data["steps"][0]["src_path"].endswith(("Photos", "Project"))
     json.dumps(data)                                      # serialisable as it stands
     text = document.to_text(fleet.c, plan_id)
     assert "Connect, in order: ARCHIVE-2" in text and "why:" in text
-    assert "nothing; every existing copy stays" in text
+    assert "Round 1" in text and "copy and verify" in text
     assert plans.current(fleet.c)["id"] == plan_id
 
 
@@ -110,4 +111,40 @@ def test_a_copy_sharing_a_zone_says_so(fleet) -> None:
     doc = document.make(fleet.c, use_cpsat=False)
     copies = [s for s in doc.steps if s.kind == "copy"]
     assert copies and all("shares a recorded zone" in s.rationale for s in copies)
-    assert all("keeps the copies apart" not in s.rationale for s in copies)
+    assert all("apart in batch and zone" not in s.rationale for s in copies)
+
+
+def test_rounds_never_use_a_drive_twice() -> None:
+    pairs = [(1, 2), (3, 4), (1, 3), (2, 4), (5, 6), (None, 6)]
+    rounds = document.assign_rounds(pairs)
+    assert rounds == [1, 1, 2, 2, 1, 2]
+    for r in set(rounds):
+        used = [d for pair, n in zip(pairs, rounds) if n == r for d in pair if d is not None]
+        assert len(used) == len(set(used))
+
+
+def test_extra_after_the_plan_is_information_per_drive(fleet) -> None:
+    """Content over its target, and duplicates within a drive, are reported per
+    drive, as information; no step ever removes anything."""
+    f = fleet
+    twice = f.content(4 << 20)                          # two paths on ARCHIVE-1
+    again = f.mkdir("A", "Again")
+    f.file("A", again, 4 << 20, twice)
+    f.file("A", again, 4 << 20, twice)
+    thrice = f.content(2 << 20)                         # one folder, on all three drives
+    for drive in ("A", "B", "C"):
+        f.file(drive, f.mkdir(drive, "Everywhere"), 2 << 20, thrice)
+    doc = document.make(f.c, use_cpsat=False)
+    extra = doc.summary["extra_after"]
+    assert extra["ARCHIVE-1"]["same_drive_duplicate_bytes"] == 4 << 20
+    over = [x for x in extra["ARCHIVE-2"]["beyond_target"] if x["label"].endswith("Everywhere")]
+    assert over and over[0]["copies"] == 3 and over[0]["target"] == 2
+    assert {"remove", "delete", "move"}.isdisjoint(s.kind for s in doc.steps)
+    text = document.to_text(f.c, document.save(f.c, doc))
+    assert "Extra once the copies are verified" in text and "you decide" in text
+
+
+def test_a_drive_name_becomes_a_valid_folder_name() -> None:
+    assert document.folder_name("WD Elements (E:)") == "WD Elements (E)"
+    assert document.folder_name('a<b>c:"d/e\\f|g?h*') == "abcdefgh"
+    assert document.folder_name("::") == "drive"

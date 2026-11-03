@@ -357,11 +357,10 @@ class DrivesScreen(QWidget):
 
     def _known_drives(self) -> dict[str, int]:
         drives: dict[str, int] = {}
-        for row in self.session.catalog().conn.execute(
-            "SELECT id, nickname, model, serial, layout_id FROM drive ORDER BY id"
-        ):
-            name = row["nickname"] or row["model"] or row["serial"] or row["layout_id"] or ""
-            drives[f"drive {row['id']} {name}".strip()] = int(row["id"])
+        from drivefusion.core.analysis.names import drive_names
+
+        for drive_id, name in drive_names(self.session.catalog()).items():
+            drives[f"drive {drive_id} {name}".strip()] = int(drive_id)
         return drives
 
     def _record(self, change) -> None:

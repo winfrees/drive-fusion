@@ -901,7 +901,7 @@ def test_the_duplicates_screen_reports_duplicates_and_version_sets(window) -> No
 
 # -- Plan (ROADMAP M7.7) -------------------------------------------------------------
 
-def test_the_plan_screen_shows_the_plan_by_drive(window) -> None:
+def test_the_plan_screen_shows_rounds_details_and_each_drive(window) -> None:
     from drivefusion.core.planner import document
     from tests.test_planner_units import Fleet
 
@@ -917,15 +917,25 @@ def test_the_plan_screen_shows_the_plan_by_drive(window) -> None:
     document.save(catalog, document.make(catalog, use_cpsat=False))
     screen.refresh()
     assert screen.requires.text().startswith("Requires: connect ARCHIVE-2")
+    assert "verify" in screen.how.text()
     groups = {screen.steps.topLevelItem(i).text(0): screen.steps.topLevelItem(i)
               for i in range(screen.steps.topLevelItemCount())}
-    archive = groups["ARCHIVE-2"]
-    kinds = [archive.child(i).data(0, 0x0100) for i in range(archive.childCount())]
-    assert "copy" in kinds and "verify" in kinds
-    copy = next(archive.child(i) for i in range(archive.childCount())
-                if archive.child(i).data(0, 0x0100) == "copy")
+    [round_one] = [g for name, g in groups.items() if name.startswith("Round 1")]
+    copy = round_one.child(0)
+    assert copy.data(0, 0x0100) == "copy" and "copy and verify" in copy.text(0)
     assert copy.text(2).startswith("−") and copy.text(3)
-    assert "deletes nothing" in screen.findChildren(type(screen.requires))[0].text()
+    assert not any(round_one.child(i).data(0, 0x0100) == "verify"
+                   for i in range(round_one.childCount()))
+    # Every column can be dragged wider; picking a step shows it in full.
+    from PySide6.QtWidgets import QHeaderView
+    assert screen.steps.header().sectionResizeMode(3) == QHeaderView.Interactive
+    screen.steps.setCurrentItem(copy)
+    assert "Why:" in screen.detail.text() and "ARCHIVE-2" in screen.detail.text()
+    # By drive: what each drive receives, and what is copied from it.
+    assert screen.columns["ARCHIVE-2"].receives.topLevelItemCount() >= 1
+    assert screen.columns["ARCHIVE-1"].sends.topLevelItemCount() >= 1
+    screen.refresh()                                    # rebuilding doesn't pile up
+    assert len(screen.columns) == 2
 
 
 # -- Exports (ROADMAP M8.6) -----------------------------------------------------------
