@@ -23,6 +23,7 @@ from __future__ import annotations
 import datetime as dt
 from collections import defaultdict
 
+from drivefusion.core.analysis.names import drive_names
 from drivefusion.core.store import curation
 
 LIVE = "f.vanished_at IS NULL"
@@ -32,10 +33,6 @@ def _when(ns) -> str | None:
     if ns is None:
         return None
     return dt.datetime.fromtimestamp(ns / 1e9, dt.timezone.utc).isoformat(timespec="seconds")
-
-
-def _label(drive) -> str:
-    return drive["nickname"] or drive["model"] or drive["serial"] or f"drive {drive['id']}"
 
 
 def _folder_name(text: str) -> str:
@@ -87,6 +84,7 @@ def build(catalog) -> list[dict]:
     paths = _Paths(catalog)
     in_collection = _collections_by_dir(catalog)
     drives = {r["id"]: r for r in conn.execute("SELECT * FROM drive")}
+    names = drive_names(catalog)
     volumes = {r["id"]: r for r in conn.execute("SELECT * FROM volume")}
     rows = conn.execute(
         "SELECT f.id, f.volume_id, f.dir_id, f.name, f.size_bytes, f.mtime_ns, f.content_id, "
@@ -113,7 +111,7 @@ def build(catalog) -> list[dict]:
 
     def sibling(drive_id, volume_id, path) -> dict:
         if drive_id is not None:
-            return {"drive_id": drive_id, "drive": _label(drives[drive_id]), "path": path}
+            return {"drive_id": drive_id, "drive": names[drive_id], "path": path}
         return {"drive_id": None, "volume_id": volume_id,
                 "volume": volumes[volume_id]["label"] or volumes[volume_id]["volume_guid"],
                 "path": path, "note": "on a volume whose drive is not confirmed"}
@@ -144,7 +142,7 @@ def build(catalog) -> list[dict]:
                 "id", "serial", "layout_id", "identity", "model", "manufacturer", "bus",
                 "media", "capacity_bytes", "nickname", "purchase_date", "batch_key", "role",
                 "location", "disaster_zone", "retired_at")}
-            label = _label(d)
+            label = names[ident]
             vols = [v for v in volumes.values() if v["drive_id"] == ident]
         else:
             v = volumes[ident]

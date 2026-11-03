@@ -38,8 +38,9 @@ def _csv(header, rows) -> str:
 
 
 def _labels(catalog) -> dict[int, str]:
-    return {r["id"]: r["nickname"] or r["model"] or r["serial"] or f"drive {r['id']}"
-            for r in catalog.conn.execute("SELECT id, nickname, model, serial FROM drive")}
+    from drivefusion.core.analysis.names import drive_names
+
+    return drive_names(catalog)
 
 
 def tables(catalog, *, min_copies: int = 2, today: dt.date | None = None) -> dict:

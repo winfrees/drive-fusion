@@ -55,8 +55,9 @@ def members(catalog, collection_id: int) -> list[dict]:
         "JOIN volume v ON v.id = f.volume_id LEFT JOIN content c ON c.id = f.content_id "
         "WHERE f.vanished_at IS NULL AND f.dir_id IN (SELECT id FROM tree) "
         "ORDER BY f.dir_id, f.name", (collection_id,)).fetchall()
-    labels = {r["id"]: r["nickname"] or r["model"] or r["serial"] or f"drive {r['id']}"
-              for r in conn.execute("SELECT id, nickname, model, serial FROM drive")}
+    from drivefusion.core.analysis.names import drive_names
+
+    labels = drive_names(catalog)
     held: dict[int, set] = {}
     contents = sorted({r["content_id"] for r in rows if r["content_id"] is not None})
     for i in range(0, len(contents), 500):

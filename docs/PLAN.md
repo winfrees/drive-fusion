@@ -973,9 +973,16 @@ sharing a batch or zone named as such (D18), then a swap pass moves added copies
 fit. CP-SAT (M7.5) maximises copies placed, then
 bytes × fall in P(loss), then fewer drives connected; its plan replaces greedy's only when it
 leaves fewer copies short, or as few with less expected loss.
-The document (M7.6) puts copies by destination drive, each followed by its verify step,
-then describe and review-candidate steps, then acquire; copies land under
-`Drive Fusion copies/<source drive>/<path>`. The NDSA projection only counts a unit's
+The document (M7.6) puts copies in rounds, then describe and review-candidate steps, then
+acquire; copies land under `Drive Fusion copies/<source drive>/<path>`. **As built
+(2026-11-03):** each copy step is *copy and verify* (copy, then scan the destination and run
+`verify`), not a copy followed by a separate verify step. The copies of one round use no
+drive twice, so a person can run a whole round at once. Each step's reason is a short line.
+Drives are named by nickname, else volume label, else model, and names that would clash are
+told apart by drive letter or serial (`core/analysis/names.py`, used everywhere a drive is
+named). The summary also lists, per drive, what will be extra once the copies are verified:
+content held beyond its target, and duplicates within the drive. That is information for a
+person; no plan has a step that removes anything. The NDSA projection only counts a unit's
 guaranteed holders. The wall-clock estimate waits for measured throughput.
 
 **The plan document** is a dependency-ordered checklist of `copy` / `organize` / `describe` /
@@ -1046,7 +1053,10 @@ because no such capability exists behind them.
    **As built (ROADMAP M6.9):** a Duplicates tab and a Versions tab; members side by side with
    size and date, ★ marking the proposed preferred one, the rationale on hover.
 7. **Plan** — proposed steps grouped by drive with rationale and risk delta; simulation panel;
-   "requires: connect ARCHIVE-3, then ARCHIVE-7."
+   "requires: connect ARCHIVE-3, then ARCHIVE-7." **As built:** a *Steps* tab (copies by
+   round, adjustable columns, the picked step shown in full below a movable split) and a *By
+   drive* tab (a column per drive: what is copied to it, what is copied from it, and what will
+   be extra on it once the copies are verified, as information).
 8. **Exports** — RO-Crate/BagIt bundles, DataCite metadata, per-drive manifests, CSV/HTML
    reports, each timestamped into its own folder recording the standards versions used.
    **As built (ROADMAP M8.5):** `core/export/reports.py` writes `summary.csv`,

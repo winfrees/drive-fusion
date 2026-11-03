@@ -42,14 +42,16 @@ def reserve_for(capacity: int | None) -> int:
 
 def destinations(catalog) -> list[Destination]:
     """Every identified drive, with its room or the reason it has none."""
+    from drivefusion.core.analysis.names import drive_names
     from drivefusion.core.health import metadata
 
+    names = drive_names(catalog)
     out = []
     for drive in catalog.conn.execute("SELECT * FROM drive ORDER BY id"):
         volume = catalog.conn.execute(
             "SELECT * FROM volume WHERE drive_id = ? ORDER BY COALESCE(free_bytes, -1) DESC, id "
             "LIMIT 1", (drive["id"],)).fetchone()
-        label = drive["nickname"] or drive["model"] or f"drive {drive['id']}"
+        label = names[drive["id"]]
         capacity = volume["capacity_bytes"] if volume else None
         free = volume["free_bytes"] if volume else None
         reason = ""
