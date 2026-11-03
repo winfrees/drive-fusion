@@ -83,6 +83,12 @@ works end to end: plan (M7), then manifests, packages, mappings and copy-only co
   crash at interpreter exit from the V&V window was fixed (#57).
 * **Documents.** Every document ends with the abbreviations it uses, generated and checked by a
   test (`tools/doc_abbreviations.py`).
+* **R-PLAN-02 failed on every real-drive run (2026-11-02).** Two causes. The bench's oracle
+  knew no size for a real drive, so any copy planned onto one failed "no known size"; it now
+  measures each real drive's size, free space and cluster size through the operating system
+  just before the plan. And Drive Fusion recorded a volume's free space only when a root was
+  added: binding a root before each scan, hash or verify now refreshes it, so plans use
+  today's room. Found by the first physical campaign (three drives).
 * **The windowed program was missing from every build until 2026-11-01.** The console program
   was named `drivefusion.exe` beside the windowed `DriveFusion.exe`; Windows treats the two
   names as one, so the console build overwrote the window, and the build's checks, which

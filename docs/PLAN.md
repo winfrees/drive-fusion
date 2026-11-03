@@ -965,7 +965,10 @@ at max(total / 2000, 1 MiB); a unit's holders are the proven drives holding ever
 its footprint is kept per cluster size. Its copies are counted per item, the fewest any item
 has, so a copy onto a drive that already holds some of its items is not counted for them (M7.8). Room at a destination is free space less a reserve of
 max(10 % of capacity, 1 GiB); retired drives, working drives and drives of unknown size take
-nothing. The greedy pass adds each copy where it leaves the unit's P(loss) lowest, a copy
+nothing. Free space is the volume's as last seen: recorded when a root is added, and refreshed
+by every scan, hash or verify that binds a root to its volume (until 2026-11-02 it was never
+refreshed, so a drive that had filled since being added was planned onto room it no longer
+had). The greedy pass adds each copy where it leaves the unit's P(loss) lowest, a copy
 sharing a batch or zone named as such (D18), then a swap pass moves added copies to a safer
 fit. CP-SAT (M7.5) maximises copies placed, then
 bytes × fall in P(loss), then fewer drives connected; its plan replaces greedy's only when it
